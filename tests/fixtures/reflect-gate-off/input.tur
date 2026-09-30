@@ -1,0 +1,20 @@
+;; reflected-measures RF0 acceptance: without `--enable=reflected-measures`
+;; a `^reflect` defn parses and compiles exactly as today -- the measure stays
+;; opaque and the crossing keeps its runtime check -- and the attribute SAYS
+;; it is being ignored rather than quietly doing nothing.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn head-of [xs : #refine{ v : Lst | (> (len v) 0) }] : int
+  (match xs
+    (Nil) -1
+    (Cons h _) h))
+
+(defn main [] : int
+  (println (head-of (Cons 1 (Nil))))
+  (println "reflect-gate-off")
+  0)

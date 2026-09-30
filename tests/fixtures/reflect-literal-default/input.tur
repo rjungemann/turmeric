@@ -1,0 +1,17 @@
+;; reflected-measures RF2/RF3: a match over LITERALS is admitted only with a
+;; trailing `_` (or variable) arm -- the S4-lit path has no coverage check to
+;; lean on, so the walk demands the default itself (the sibling negative
+;; errors/reflect-literal-no-default drops it).  Unfolding then selects the
+;; arm by literal equality: code(1) = 10.
+(defn ^reflect code [n : int] : int
+  (match n
+    1 10
+    2 20
+    _ 0))
+
+(defn needs-ten [x : #refine{ v : int | (= (code v) 10) }] : int 10)
+
+(defn main [] : int
+  (println (needs-ten 1))
+  (println "reflect-literal-default")
+  0)

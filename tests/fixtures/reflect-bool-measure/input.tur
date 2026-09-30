@@ -1,0 +1,19 @@
+;; reflected-measures RF3: a BOOL-returning reflected measure is a predicate
+;; atom (RM-B) whose equation is an `iff`.  It is asserted as two implications
+;; -- `all-pos?(Cons(1,Cons(2,Nil))) => (1 > 0 and all-pos?(Cons(2,Nil)))` and
+;; back -- because the cube expansion splits an implication natively while an
+;; equality between propositions is an opaque atom (this fixture stayed
+;; Unknown under `=`).
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect all-pos? [xs : Lst] : bool
+  (match xs
+    (Nil) true
+    (Cons h t) (and (> h 0) (all-pos? t))))
+
+(defn positives [xs : #refine{ v : Lst | (all-pos? v) }] : int 1)
+
+(defn main [] : int
+  (println (positives (Cons 1 (Cons 2 (Nil)))))
+  (println "reflect-bool-measure")
+  0)

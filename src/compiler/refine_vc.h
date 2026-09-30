@@ -113,6 +113,16 @@ typedef struct RefineVC {
      * axiom (refine_collect.c, enc_divmod_axioms); past its budget the
      * weaker conjunctive bound is used so cube expansion stays bounded. */
     uint32_t   n_divmod_splits;
+    /* reflected-measures RF3: bounded ground unfolding bookkeeping.
+     * reflect_unfolds -- definitional equations asserted in this VC;
+     * reflect_fuel_exhausted -- an application was NOT unfolded because the
+     *   per-obligation budget ran out (TUR-W0385 if the obligation then stays
+     *   unknown); reflect_done -- ids of application terms already unfolded,
+     *   so a term reached twice (hash-consing makes it the same VCTerm) costs
+     *   one equation and one unit of fuel, not two. */
+    uint32_t   reflect_unfolds;
+    bool       reflect_fuel_exhausted;
+    uint32_t  *reflect_done; uint32_t n_reflect_done, cap_reflect_done;
 } RefineVC;
 
 RefineVC *vc_new(Arena *a);

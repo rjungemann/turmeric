@@ -417,6 +417,23 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.57.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_BETA,
       &g_opt_r7rs },
+    /* reflected-measures -- `^reflect` on a defn opts a pure, structurally
+     * recursive, exhaustively matching function INTO the refinement logic: its
+     * defining equation is admitted by bounded ground unfolding, so
+     * `(> (len (Cons 1 (Nil))) 0)` proves instead of falling to TUR-W0372.
+     * The gate exists because the totality check (TUR-E0384) is the first
+     * checker of its kind in the language and the unfolding lives in the
+     * encoder, where both historical refinement soundness bugs were.  The
+     * decision the plan's RF0 required is recorded in its header: a
+     * REFLECTED function must be shown total; program termination in general
+     * stays out of scope.  See docs/upcoming/reflected-measures-plan.md. */
+    { "reflected-measures",
+      "`^reflect` admits a total measure's defining equation to the refinement solver (bounded unfolding)",
+      "docs/upcoming/reflected-measures-plan.md",
+      "0.57.0",                  /* introduced */
+      "0.61.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_reflected_measures },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

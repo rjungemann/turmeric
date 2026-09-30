@@ -623,6 +623,77 @@ the obligation falls back to its runtime check.
 We do not climb the nonlinear wall. A genuinely nonlinear obligation gets a
 runtime check, and that is the intended outcome.
 
+### Reflected measures (`^reflect`, experimental)
+
+Everything above treats a named measure as an **uninterpreted function**:
+`len` is a symbol congruence closure can compare to itself and nothing more.
+`(= (len xs) 3)` as a hypothesis does discharge `(> (len xs) 0)`, but
+`(> (len (Cons 1 (Nil))) 0)` does not prove -- nothing relates `len` to the
+*structure* of its argument, so it falls to `TUR-W0372` and keeps its check.
+
+Behind `--enable=reflected-measures`, `^reflect` on the `defn` lets the
+solver use the definition:
+
+```turmeric
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn head-of [xs : #refine{ v : Lst | (> (len v) 0) }] : int ...)
+
+(head-of (Cons 1 (Nil)))     ; proves: len(Cons(1,Nil)) = 1 + len(Nil), len(Nil) = 0
+```
+
+**How it is admitted.** The fragment is quantifier-free, so the equation is
+never asserted as `forall x. len(x) = ...`. Instead, at each application whose
+argument is a constructor term or a literal, the encoder *reduces* the body --
+substitutes the argument, selects the `match` arm syntactically, encodes what
+survives -- and asserts that one ground equation. New applications the
+reduction introduces (`len(Nil)`) unfold in turn, up to a **fuel** of 8 per
+obligation (`TUR_REFLECT_FUEL=<n>` overrides it). Running out costs
+completeness only: the obligation stays Unknown, reports `TUR-W0385` beside
+the usual `TUR-W0372`, and keeps its runtime check. A `match` on a
+*variable* does not unfold at all in this cut (the arm cannot be selected),
+so `(len xs)` for a parameter `xs` is exactly as opaque as before.
+
+`if`, `let`, `do` and guarded arms are supported; an `if` has no term in the
+logic, so a body under one is admitted as a proposition,
+`(c => f(t) = a) and (not c => f(t) = b)`. A `bool`-returning reflected
+measure is a predicate atom whose equation is an `iff`.
+
+**The totality gate.** An unfolded equation is only a fact when the function
+is total: `f(x) = 1 + f(x)` asserts `0 = 1`, and one inconsistent hypothesis
+silently discharges *every* obligation in the unit. So `^reflect` is admitted
+only after the compiler shows the function
+
+- **pure** -- the same default-deny walk that grants congruence (an inline-C
+  body, or a call to anything not known pure, rejects);
+- **terminating** -- every self-call passes, in **one fixed argument
+  position**, a strict structural subterm of that parameter: a variable
+  bound by a constructor pattern in a `match` on it (the `t` above), or a
+  subterm of such. `(f (- n 1))` rejects by design, as does mutual recursion
+  and a call through a variable;
+- **covered** -- every `match` is proven exhaustive. ADT and union
+  scrutinees already are (compiling implies it); a `#{NonExhaustive}`
+  opt-out or a literal-scrutinee `match` with no `_`/variable arm rejects,
+  and so does any form the walk does not positively recognise (macros,
+  lambdas, `panic`, loops, `set!`).
+
+A `^reflect` that fails is a hard **`TUR-E0384`** on the definition naming
+the gate, never a silent downgrade. This is *not* a termination checker for
+programs: a function that is never `^reflect`ed is untouched, and the
+language's non-goal on total correctness stands.
+
+`--dump-reflect` prints one line per site (`reflect len: TOTAL dec=0`, or
+`REJECTED gate=... reason=...`). Without the flag, `^reflect` warns that it
+is ignored and the measure stays opaque. The plan, with what the first cut
+settled and what is still open (non-ground unfolding, counterexamples
+through a reflected measure), is
+[reflected-measures-plan.md](../upcoming/reflected-measures-plan.md).
+
 ---
 
 ## Named refinements: `stdlib/refine.tur`

@@ -1,0 +1,19 @@
+;; reflected-measures RF3 negative control: the same three-cell literal as
+;; reflect-len-depth against `(> (len v) 3)`, which is FALSE.  Unfolding
+;; establishes len(...) = 3 exactly, so this must not prove; it reports
+;; TUR-W0372 (Unknown, runtime check kept) rather than TUR-E0371, because the
+;; model search still declines any VC that mentions an uninterpreted function
+;; (refine_solver.c) -- lifting that for reflected measures is RF6, not done.
+;; Under --strict-refine the warning is an error, which is what pins it.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn at-least-4 [xs : #refine{ v : Lst | (> (len v) 3) }] : int 4)
+
+(defn main [] : int
+  (println (at-least-4 (Cons 1 (Cons 2 (Cons 3 (Nil))))))
+  0)

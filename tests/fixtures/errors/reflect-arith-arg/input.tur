@@ -1,0 +1,8 @@
+;; reflected-measures RF1: `(f (- n 1))` is rejected BY DESIGN.  The first cut
+;; is structural only -- a decreasing argument is a variable bound by a
+;; constructor pattern on the parameter, never arithmetic on it -- and a
+;; user-supplied ranking function is out of scope.
+(defn ^reflect count-down [n : int] : int
+  (if (= n 0) 0 (+ 1 (count-down (- n 1)))))
+
+(defn main [] : int (println (count-down 3)) 0)

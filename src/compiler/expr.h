@@ -640,6 +640,20 @@ struct Binding {
      * a default-deny walk of the body; see the comment there for why the
      * declared effect row is not sufficient evidence on its own. */
     uint8_t             refine_purity;
+    /* reflected-measures (docs/upcoming/reflected-measures-plan.md):
+     * is_reflected -- the defn carried `^reflect` (gate on).
+     * reflect_total -- the totality verdict, zero-means-uncomputed like
+     *   refine_purity: 0 = not yet classified, 1 = TOTAL (the defining
+     *   equation may be admitted), 2 = REJECTED.  Stamped by elab_reflect.c;
+     *   the encoder unfolds ONLY at 1.
+     * reflect_body / reflect_param_names / reflect_n_params -- the body as a
+     *   single Form (a `do` over a multi-form body) and the parameter names
+     *   it is written in, published to the encoder through rt_resolve_fn. */
+    bool                is_reflected;
+    uint8_t             reflect_total;
+    const struct Form  *reflect_body;
+    const char        **reflect_param_names;
+    uint32_t            reflect_n_params;
     /* MB1 (constrained-hkt-forall-mode-b-plan): for a top-level `defn` binding,
      * the FnDef it defines -- lets make_dict_clone reach the original body/params
      * from the binding without scanning file-scope defs (user defns are not yet

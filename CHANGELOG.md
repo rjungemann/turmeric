@@ -2,6 +2,36 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Reflected measures, behind `--enable=reflected-measures`.** `^reflect` on
+  a `defn` lets the refinement solver *use* the function's definition: at a
+  call whose argument is a constructor term or a literal, the body is
+  unfolded and `f(t) = <body at t>` is asserted, so
+  `(head-of (Cons 1 (Nil)))` against `(> (len v) 0)` proves instead of
+  keeping its runtime check. The equation is admitted only for a function
+  shown **total** -- pure, structurally recursive in one fixed argument
+  position, exhaustively matching -- and a `^reflect` that fails that gate is
+  a hard `TUR-E0384` naming the gate (an unfolded non-total function is an
+  inconsistent hypothesis, which would discharge every obligation in the
+  unit). Unfolding is fuel-bounded per obligation (default 8,
+  `TUR_REFLECT_FUEL` overrides); running out is `TUR-W0385` beside the
+  ordinary `TUR-W0372`, promoted by `--strict-refine`. `--dump-reflect`
+  prints each site's verdict. Nothing changes for a program that does not
+  write `^reflect`; without the flag the attribute warns and is inert. See
+  `docs/upcoming/reflected-measures-plan.md` and the refinement guide's
+  "Reflected measures" section.
+
+### Fixed
+
+- The refinement purity walk memoized a caller's UNKNOWN verdict when its
+  callee had no body yet (a forward reference), so a function asked about
+  early stayed non-congruent for the whole unit even once the callee was
+  defined. Every frame open at such a miss is now provisional, as it already
+  was across a recursion edge.
+
 ## [0.56.3] -- 2026-09-28
 
 ### Added

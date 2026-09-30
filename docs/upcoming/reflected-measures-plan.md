@@ -1,14 +1,68 @@
 # Plan: Reflected Measures (`^reflect`)
 
-> **Status:** Elaborated 2026-08-17 -- phased and sized against the real
-> elaborator, still **on hold** pending the trigger below. Not started.
-> **Last Updated:** 2026-08-17
+> **Status:** **In progress** since 2026-09-29, behind
+> `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
+> `expires_at` 0.61.0, prototype). RF0, RF1, RF2, RF3 and RF5 landed in the
+> first cut; RF4 and RF6 are open (see "Landed" below). Taken off hold by
+> direct request ("execute the plan"), not by one of the triggers below.
+> **Last Updated:** 2026-09-29
+>
+> **RF0 decision (recorded 2026-09-29):** a `^reflect`ed function -- and only
+> such a function -- must be shown total (pure, structurally recursive in one
+> fixed argument position, exhaustively matching) before its defining
+> equation is admitted as an axiom. Program termination and total
+> correctness in general remain **out of scope, permanently**, exactly as
+> [refinement-types-plan.md](../archive/refinement-types-plan.md) and
+> [loop-invariants-plan.md](hold/loop-invariants-plan.md) state; nothing here
+> makes an un-annotated non-terminating program fail to compile. The gate is
+> a hard error (`TUR-E0384`) on the definition, never a silent downgrade.
 > **Type:** Compiler / Refinement types
-> **Depends on:** [refinement-types-plan.md](../../archive/refinement-types-plan.md)
+> **Depends on:** [refinement-types-plan.md](../archive/refinement-types-plan.md)
 > (RT0--RT7 + S0--S4, all landed), the `refined` graduation (**happened
 > 2026-08-01**, shipped v0.33.0), and
-> [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
+> [refine-predicate-measures-plan.md](../archive/refine-predicate-measures-plan.md)
 > (RM-B, landed).
+
+## Landed (2026-09-29, first cut)
+
+| Phase | State | Where |
+|---|---|---|
+| RF0 gate, syntax, site table | landed | `src/runtime/experiments.c` (`reflected-measures`), `g_opt_reflected_measures`, `^reflect` in `elab_defn` (either order with `^deprecated`; pass-1 scan in `elab_toplevel.c` skips it), `ReflectSite` on `Elab`, `Binding::{is_reflected, reflect_total, reflect_body, reflect_param_names}` |
+| RF1 purity + termination | landed | `src/compiler/elab_reflect.c`: `rf_resolve_reflect_sites` (deferred, before crossings resolve) plus an eager TOTAL-only stamp at the end of `elab_defn` so in-place return obligations can unfold |
+| RF2 coverage | landed | same walk: `#{NonExhaustive}`, literal match without `_`/variable arm, and every unrecognised form reject |
+| RF3 bounded ground unfolding | landed | `refine_collect.c`: `rf_unfold` / `rf_def` / `rf_reduce`; fuel 8 per obligation, `TUR_REFLECT_FUEL` override; `RefineFnInfo::{is_ctor, reflect_*}`; `RefineVC::reflect_*`; `RefineStats::{reflect_unfolds, reflect_fuel_out}` |
+| RF4 non-ground unfolding | **open** | not started; a variable scrutinee declines in `rf_def` |
+| RF5 diagnostics, strict, dump | landed | `TUR-E0384` / `TUR-W0385` (the plan's E0383/W0384 were taken by `#reads` by land time), `tur explain` entries, `--strict-refine` promotes W0385 at the W0372 site, `--dump-reflect` |
+| RF6 follow-ons | **open** | counterexamples with measures (`refine_model_search` still declines any ufunc, so a false ground obligation reports `TUR-W0372`, not `TUR-E0371` -- pinned by `errors/reflect-len-depth-false`) |
+
+Three things the first cut settled that the phases below did not predict:
+
+- **`if` needs no term.** The logic has no if-then-else, so a body under an
+  `if` (or a guarded arm) is admitted as a *proposition*,
+  `(c => f(t) = a) and (not c => f(t) = b)`, not an equation. Same for
+  `let` (environment extension) and `do` (last form). A Bool measure's
+  equation is an `iff`, asserted as two implications: the cube expansion
+  splits an implication natively, while `(= p q)` over propositions is an
+  atom it cannot see inside (`reflect-bool-measure` stayed Unknown under
+  `=`).
+- **The argument must be resolved through the obligation's substitutions.**
+  In a parameter predicate the argument is the bound variable (`(len v)`);
+  the form to select an arm against is the *subject* `(Cons 1 (Nil))`, which
+  the goal encoder now carries beside its term (`Enc::rf_subject_form`).
+- **The purity memo needed one fix.** A caller walked before its callee's
+  body existed memoized UNKNOWN for good; with the eager stamp walking every
+  `^reflect` body at its own definition, that made any reflected function
+  calling a later-defined one permanently impure. The walk now keeps every
+  open frame provisional after a body-less callee (`RtPureCtx::leaned_missing`),
+  the way a recursion edge already did. `reflect-mutual` is the fixture that
+  found it (its pair was rejected at the purity gate instead of the
+  termination gate).
+
+Sabotage run (RF1/RF3 acceptance): with `rf_classify` stubbed to return
+TOTAL, `errors/reflect-nontotal-self` compiles under `--strict-refine` and
+reports its false crossing `(= (spin 3) 7)` as **1 proven** -- the
+inconsistent equation `spin(3) = 1 + spin(3)` discharges it. In the shipped
+build the same program is `TUR-E0384`. The stub was removed before commit.
 
 ## Goal
 

@@ -380,6 +380,21 @@ typedef enum DiagCode {
      * because it reports a live trust-boundary fact and changes no behavior;
      * escalating warn -> refuse-the-override is a later, gated step. */
     TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+    /* reflected-measures (docs/upcoming/reflected-measures-plan.md), behind
+     * `--enable=reflected-measures`.  The plan reserved E0383/W0384; W0383
+     * had been taken by `#reads` by land time, so the pair sits one up.
+     * E0384 -- a `^reflect` function failed the TOTALITY gate: it is not
+     *          proven pure, a self-call does not pass a strict structural
+     *          subterm of the corresponding parameter, it is mutually
+     *          recursive, or a `match` in it is not proven exhaustive.  A
+     *          hard error on the definition, never a silent downgrade: an
+     *          unfolded equation of a non-total function is an inconsistent
+     *          hypothesis, which discharges EVERY obligation in the unit.
+     * W0385 -- the unfolding fuel ran out while encoding an obligation that
+     *          then stayed Unknown; the runtime check is kept (the W0372
+     *          principle).  --strict-refine promotes it. */
+    TUR_E0384_REFLECT_NOT_TOTAL,
+    TUR_W0385_REFLECT_FUEL_EXHAUSTED,
     /* class-superclasses (docs/archive/typeclass-superclasses-plan.md), the
      * `defclass` constraint preamble `[(Super var)...]`:
      * E0390 -- the preamble itself: empty, malformed (an element that is not

@@ -500,6 +500,19 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
     const char *reason = NULL;
     RefineVC *vc = refine_vc_build(ob, a, &reason);
     ob->vc = vc;
+    /* reflected-measures RF3: account for the unfolding this VC did.  The
+     * fuel note rides the stats switch like RM-B3's encoding reasons -- it is
+     * a note about a budget, not a defect in the program -- and becomes a
+     * diagnostic (TUR-W0385) only if the obligation then stays unknown. */
+    if (vc) {
+        g_stats.reflect_unfolds += vc->reflect_unfolds;
+        if (vc->reflect_fuel_exhausted) {
+            g_stats.reflect_fuel_out++;
+            if (stats_enabled())
+                fprintf(stderr, "refine: reflect fuel exhausted (%u unfolding(s) "
+                                "asserted): %s\n", vc->reflect_unfolds, what);
+        }
+    }
 
     /* RT7: has this exact question already been decided in this unit?  Only
      * the VERDICT is reused -- diagnostics still run below, so a repeated
@@ -670,6 +683,17 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         default:
             g_stats.unknown++;
             if (g_strict_refine || !ob->runtime_guarded) {
+                /* reflected-measures RF3/RF5: the budget is the likeliest
+                 * reason a reflected obligation stays unknown, so say so
+                 * beside the generic W0372.  Strict mode promotes it exactly
+                 * as it promotes W0372: severity only, never a new report. */
+                if (vc->reflect_fuel_exhausted)
+                    diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
+                                        TUR_W0385_REFLECT_FUEL_EXHAUSTED,
+                                        "unfolding fuel exhausted while encoding the "
+                                        "refinement on %s (%u equation(s) asserted); the "
+                                        "obligation stays unknown -- raise TUR_REFLECT_FUEL "
+                                        "or shorten the argument", what, vc->reflect_unfolds);
                 diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
                                     TUR_W0372_REFINE_UNKNOWN,
                                     "solver returned unknown for the refinement on %s; "
@@ -779,6 +803,11 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
                     "refine: %u result refinement(s) inferred from %u template "
                     "probe(s)\n",
                     g_stats.inferred, g_stats.templates_tried);
+        if (g_stats.reflect_unfolds || g_stats.reflect_fuel_out)
+            fprintf(stderr,
+                    "refine: %u reflected unfolding(s) asserted, %u obligation(s) "
+                    "ran out of fuel\n",
+                    g_stats.reflect_unfolds, g_stats.reflect_fuel_out);
         refine_report_caps();
     }
 }

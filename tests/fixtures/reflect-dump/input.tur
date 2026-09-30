@@ -1,0 +1,23 @@
+;; reflected-measures RF5: --dump-reflect prints one line per `^reflect` site
+;; -- the verdict, the decreasing argument position (or `none` for a body with
+;; no self-call), and the gate and reason on a rejection.  Same footing as
+;; --dump-write-frames: a diagnostic knob that changes nothing.  (A REJECTED
+;; line is TUR-E0384 as well, so the compile fails; the errors/reflect-*
+;; fixtures cover that side and this one stays a happy path.)
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn ^reflect zip-len [n : int xs : Lst] : int
+  (match xs
+    (Nil) n
+    (Cons _ t) (zip-len (+ n 1) t)))
+
+(defn ^reflect dbl [n : int] : int (* 2 n))
+
+(defn main [] : int
+  (println (len (Cons 1 (Nil))))
+  0)
