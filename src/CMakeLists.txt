@@ -107,6 +107,9 @@ set(TURI_EVAL_SOURCES
     # block relocated from main.c so `tur repl` and the WASM REPL register the
     # same interpreter natives as --interpret (web-repl-repl-inline-c-native-gap).
     turi/interpreter_natives.c
+    # native_caps.c -- the capability each builtin native requires, checked at
+    # the one native dispatch in eval.c (security-audit-plan WP3, S-1).
+    turi/native_caps.c
     # macro_env.c -- the per-compile macro-time interpreter env
     # (macro-system-direction-plan Stage 1): elab_macro_env_get/_dispose,
     # declared in compiler/elab.h, implemented turi-side to keep the include

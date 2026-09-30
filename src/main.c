@@ -9193,6 +9193,7 @@ static void wk_apply_flags(const char *flags_str) {
              * parent's parser). */
             g_macro_caps_io = true;
         }
+        else if (strcmp(tok, "--no-proc-macros") == 0) g_no_proc_macros = true;
         tok = strtok(NULL, " \t");
     }
 }
@@ -10013,6 +10014,7 @@ static int usage(void) {
         "global flags:\n"
         "  --enable=<name>[,<name>...]      turn on an experimental feature; see 'tur experiments'\n"
         "  --macro-caps=io                  grant macro-time (defmacro*) code I/O; default deny\n"
+        "  --no-proc-macros                 refuse defmacro* instead of running it (untrusted trees)\n"
         "  --no-color                       disable colored diagnostics\n"
         "  --json                           structured JSON output (tur doc, tur test, tur check)\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
@@ -12012,6 +12014,14 @@ static int tur_main_inner(int argc, char **argv) {
                 return 2;
             }
             g_macro_caps_io = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--no-proc-macros") == 0) {
+            /* security-audit-plan WP3: no defmacro* body runs. */
+            g_no_proc_macros = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

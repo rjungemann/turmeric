@@ -1127,6 +1127,38 @@ static void load_dedup_register(Elab *e, const Symbol *key) {
     e->load_expanded_paths[e->n_load_expanded_paths++] = key;
 }
 
+/* security-audit-plan WP3: a capability-restricted interpreter env (no
+ * TURI_CAP_IMPORT -- Env/new-sandboxed, the macro env) refuses `(load "path")`
+ * in the forms it is handed, exactly as elab_load_module refuses `import`.
+ * Before WP3 a sandboxed `(load "/etc/hostname")` read the file and echoed its
+ * first token back in the unbound-symbol diagnostic.  Returns `f` with every
+ * such load removed (top level and inside a defmodule body), NULL when `f` is
+ * itself one, and sets *found.  Only the NEW forms of a turn go through this:
+ * the accumulated prefix -- the host's own preload, loaded before the caps
+ * were dropped -- is replayed untouched. */
+static Form *sandbox_strip_loads(Elab *e, Arena *arena, Form *f, bool *found) {
+    if (!f || f->tag != F_LIST || f->as.list.len < 1 ||
+        f->as.list.items[0]->tag != F_SYM)
+        return f;
+    const Symbol *head = f->as.list.items[0]->as.sym;
+    if (head == e->sym_load) {
+        diag_emit(DIAG_ERROR, f->span, "load not allowed in sandboxed environment");
+        *found = true;
+        return NULL;
+    }
+    if (head != e->sym_defmodule) return f;
+    uint32_t n = f->as.list.len, kept = 0;
+    Form **items = (Form **)arena_alloc(arena, n * sizeof(Form *));
+    bool changed = false;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *it = (i == 0) ? f->as.list.items[0]
+                            : sandbox_strip_loads(e, arena, f->as.list.items[i], found);
+        if (it != f->as.list.items[i]) changed = true;
+        if (it) items[kept++] = it;
+    }
+    return changed ? form_list(arena, f->span, items, kept) : f;
+}
+
 static void load_expand_emit(LoadExpandCtx *lx, Arena *arena, Form *f) {
     if (lx->out_n >= lx->out_cap) {
         lx->out_cap = lx->out_cap ? lx->out_cap * 2 : 16;
@@ -2298,6 +2330,22 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         lx.track_boundary = (stdlib_prefix > 0);
         lx.boundary_in    = stdlib_prefix;
         lx.boundary_out   = stdlib_prefix; /* default if the loop never crosses it */
+        if (e.sandboxed) {
+            bool found = false;
+            uint32_t first_new = stdlib_prefix < nforms ? stdlib_prefix : nforms;
+            Form **kept = (Form **)arena_alloc(arena, (nforms + 1) * sizeof(Form *));
+            uint32_t nk = 0;
+            for (uint32_t i = 0; i < nforms; i++) {
+                Form *f = (i < first_new) ? forms[i]
+                                          : sandbox_strip_loads(&e, arena, forms[i], &found);
+                if (f) kept[nk++] = f;
+            }
+            if (found) {
+                rc = -1;
+                forms  = (Form *const *)kept;
+                nforms = nk;
+            }
+        }
         load_expand_forms(&lx, &e, arena, st, forms, nforms);
         if (lx.rc != 0) rc = lx.rc;
         /* If the boundary sat at the very end (no user forms), the loop never

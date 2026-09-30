@@ -1093,6 +1093,7 @@ static TuriValue native_json_get(TuriEnv *e, TuriValue *a, uint32_t n, void *ud)
 static TuriValue native_json_get_bang(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 2 || a[0].as_int == 0) {
+        turi_host_exit_guard(e, "json/get!: null node");
         fprintf(stderr, "json/get!: null node\n");
         abort();
     }
@@ -1105,6 +1106,7 @@ static TuriValue native_json_get_bang(TuriEnv *e, TuriValue *a, uint32_t n, void
             return turi_int(ent[1]);
         cur = ent[2];
     }
+    turi_host_exit_guard(e, "json/get!: key not found");
     fprintf(stderr, "json/get!: key not found: %s\n", key);
     abort();
 }
@@ -2111,6 +2113,7 @@ static TuriValue native_slice_get(TuriEnv *env, TuriValue *a, uint32_t n, void *
     int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
     int64_t  i = a[1].as_int;
     if (!s || i < 0 || i >= s[1]) {
+        turi_host_exit_guard(env, "slice index out of bounds");
         fprintf(stderr, "slice index out of bounds\n"); fflush(stderr); _exit(1);
     }
     int64_t *data = (int64_t *)(intptr_t)s[0];
@@ -2319,6 +2322,7 @@ static TuriValue native_sbuf_get_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     if (n < 2) return turi_int(0);
     TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int;
     if (b && i >= 0 && i < b->len) return turi_int(b->data[i]);
+    turi_host_exit_guard(env, "sized-buf-get: index out of bounds");
     fprintf(stderr, "sized-buf-get: index out of bounds\n"); _exit(1);
     return turi_int(0);
 }
@@ -2327,6 +2331,7 @@ static TuriValue native_sbuf_set_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     if (n < 3) return turi_int(0);
     TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int, v = a[2].as_int;
     if (b && i >= 0 && i < b->len) { b->data[i] = v; return a[0]; }
+    turi_host_exit_guard(env, "sized-buf-set!: index out of bounds");
     fprintf(stderr, "sized-buf-set!: index out of bounds\n"); _exit(1);
     return a[0];
 }
@@ -2343,6 +2348,7 @@ static TuriValue native_sbuf_copy_raw(TuriEnv *env, TuriValue *a, uint32_t n, vo
     TuriSizedBufRep *d = sbuf_of(a[0]), *s = sbuf_of(a[1]);
     if (!d || !s) return a[0];
     if (d->len != s->len) {
+        turi_host_exit_guard(env, "sized-buf-copy!: length mismatch");
         fprintf(stderr, "sized-buf-copy!: length mismatch (%lld vs %lld)\n",
                 (long long)d->len, (long long)s->len); _exit(1);
     }
@@ -2360,7 +2366,7 @@ static TuriValue native_sbuf_min_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
     TuriSizedBufRep *b = sbuf_of(a[0]);
-    if (!b || b->len == 0) { fprintf(stderr, "sized-buf-min: empty buffer\n"); _exit(1); return turi_int(0); }
+    if (!b || b->len == 0) { turi_host_exit_guard(env, "sized-buf-min: empty buffer"); fprintf(stderr, "sized-buf-min: empty buffer\n"); _exit(1); return turi_int(0); }
     int64_t m = b->data[0];
     for (int64_t i = 1; i < b->len; i++) if (b->data[i] < m) m = b->data[i];
     return turi_int(m);
@@ -2369,7 +2375,7 @@ static TuriValue native_sbuf_max_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
     TuriSizedBufRep *b = sbuf_of(a[0]);
-    if (!b || b->len == 0) { fprintf(stderr, "sized-buf-max: empty buffer\n"); _exit(1); return turi_int(0); }
+    if (!b || b->len == 0) { turi_host_exit_guard(env, "sized-buf-max: empty buffer"); fprintf(stderr, "sized-buf-max: empty buffer\n"); _exit(1); return turi_int(0); }
     int64_t m = b->data[0];
     for (int64_t i = 1; i < b->len; i++) if (b->data[i] > m) m = b->data[i];
     return turi_int(m);
@@ -5621,6 +5627,7 @@ TuriValue native_contract_check(TuriEnv *env, TuriValue *args,
     if (!cond) {
         const char *msg = (n >= 2 && args[1].tag == TURI_CSTR && args[1].as_cstr)
                           ? args[1].as_cstr : "Assertion failed";
+        turi_host_exit_guard(env, msg);
         fprintf(stderr, "panic at\n%s\n", msg);
         fflush(stderr);
         exit(1);
@@ -5639,6 +5646,7 @@ TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
     const char *msg = (args[2].tag == TURI_CSTR && args[2].as_cstr)
                       ? args[2].as_cstr : "Invariant failed";
     if (pred.tag != TURI_CLOSURE || !pred.as_closure) {
+        turi_host_exit_guard(env, msg);
         fprintf(stderr, "panic at\n%s (bad predicate)\n", msg);
         fflush(stderr);
         exit(1);
@@ -5650,6 +5658,7 @@ TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
     else if (result.tag == TURI_INT) ok = (result.as_int != 0);
     else if (result.tag == TURI_NIL) ok = false;
     if (!ok) {
+        turi_host_exit_guard(env, msg);
         fprintf(stderr, "panic at\n%s\n", msg);
         fflush(stderr);
         exit(1);

@@ -10,10 +10,13 @@
 *                                   @rjungemann
 
 # T3 -- the sandboxed interpreter. env.c decides what every environment can
-# reach; a native registered here lands in the sandboxed and macro envs too.
+# reach; a native registered here lands in the sandboxed and macro envs too,
+# and native_caps.c decides which of them a sandboxed env may call.
 /src/turi/env.c                     @rjungemann
 /src/turi/macro_env.c               @rjungemann
 /src/turi/interpreter_natives.c     @rjungemann
+/src/turi/native_caps.c             @rjungemann
+/tests/turi/sandbox-eval.c          @rjungemann
 
 # T4 -- the supply chain. Manifest parsing, fetch, and tur.lock verification.
 /src/compiler/pkg.c                 @rjungemann

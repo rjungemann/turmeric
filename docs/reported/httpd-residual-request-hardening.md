@@ -7,7 +7,7 @@ denial of service, a policy gap or a misleading surface).
 
 WP4 closed M-4's memory-safety and request-smuggling items in
 `stdlib/httpd.tur`. It also rewrote the static handler's containment and
-fixed the `httpd-set-cookie!` stack overrun (see the plan, section 2b). The
+fixed the `httpd-set-cookie!` stack overrun (see the plan, section 2c). The
 research pass (a full read of all 4300 lines) turned up the items below, which
 were left alone because each one needs a design decision or is out of scope
 for the parser work. Line numbers are against the WP4 branch.
