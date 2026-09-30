@@ -1,6 +1,6 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
-> **Status: WP1 DONE (2026-09-29); WP3 and WP4 DONE (2026-09-30); WP2,
+> **Status: WP1 and WP2 DONE (2026-09-29); WP3 and WP4 DONE (2026-09-30);
 > WP5-WP8 PROPOSED.** Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
@@ -15,8 +15,15 @@
 > re-grades and three findings the survey did not have are recorded in
 > section 2a; section 7 Q1 is answered.
 >
+> **WP2 landed 2026-09-29** on top of it. All nine D rows reproduced, but three
+> had the wrong mechanism written down and one of the plan's own prescribed
+> fixes turned out not to exist -- corrected in **section 2b** before the work
+> started. D-1 through D-9 are closed, pinned by `tests/run-security-driver.sh`
+> (27 assertions, ctest `tur_security_driver`). One finding of WP2's own is
+> filed: `docs/reported/buf-puts-breaks-the-incidental-nul-invariant.md`.
+>
 > **WP3 landed 2026-09-30**, branched from WP1's PR (`1d5f533e`). Its research
-> pass is section 2b: S-1 reproduced from an embedder AND from `tur check`
+> pass is section 2c: S-1 reproduced from an embedder AND from `tur check`
 > (the survey's macro-time attempts failed only because they went through
 > `:for-macros`), two findings the survey did not have (`load` in a sandbox,
 > and the R7RS `eval` bridge as a full escape), and a new high, S-5, that the
@@ -118,7 +125,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | S-2 | medium -- **FIXED in WP3** | `extern-c` "known overrides" (`printf`, `printf_s`, `getenv`) skip the FFI cap check the thunk path enforces, and `printf`'s format string is program-controlled (`src/turi/eval.c:360-421`). | |
 | S-3 | low (re-graded by WP3: needs `TURI_CAP_INLINE_C`) -- **FIXED in WP3** | The inline-C emulator's snprintf pattern hands the program's format string to `snprintf` with every argument coerced to `long long` -- a `%s` in the body dereferences an integer (`src/turi/eval.c:5532-5535`). | |
 | S-4 | info -- **documented in WP1/WP3** | Try Turmeric's wasm env is `CAP_ALL` by design (`src/web/wasm_glue.c:159-162`); `tests/turi/sandbox-eval.c:37-88` covers only println/async/inline-C. | The security guide records the posture as intentional; the sandbox test now covers every classified native. Section 7 Q4 stays the author's. |
-| S-5 | high (under T3; under T1 for `tur check`) -- **OPEN** (host-exit half **FIXED** 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` is a wild read and the setters a wild write. At least 204 of the 656 natives do the cast in their own body. **verified** under ASan. Not a capability; see section 2b. The second half as filed -- `panic` and native error paths ending the host -- is fixed: a restricted env's `turi_eval`/`turi_call` return `TURI_ERROR "panic: <msg>"` instead. | [`docs/reported/turi-sandbox-handles-are-forgeable-integers.md`](../reported/turi-sandbox-handles-are-forgeable-integers.md) |
+| S-5 | high (under T3; under T1 for `tur check`) -- **OPEN** (host-exit half **FIXED** 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` is a wild read and the setters a wild write. At least 204 of the 656 natives do the cast in their own body. **verified** under ASan. Not a capability; see section 2c. The second half as filed -- `panic` and native error paths ending the host -- is fixed: a restricted env's `turi_eval`/`turi_call` return `TURI_ERROR "panic: <msg>"` instead. | [`docs/reported/turi-sandbox-handles-are-forgeable-integers.md`](../reported/turi-sandbox-handles-are-forgeable-integers.md) |
 | S-6 | medium -- **FIXED in WP3**, found by WP3 | `(load "path")` in a sandboxed env read the file and echoed its first token in the unbound-symbol diagnostic: `load` expansion (`src/compiler/elab_toplevel.c`, `load_expand_forms`) had no gate while `import` did. | |
 | S-7 | high -- **FIXED in WP3**, found by WP3 | `r7rs-eval-c-eval__`/`-load__` evaluate text in the process-global embedded R7RS env (`src/turi/r7rs_embed.c`), which is an ordinary `CAP_ALL` env, so any sandbox reached every capability through it. | |
 
@@ -274,11 +281,154 @@ survey cited moved between 81e12de4 and dc95b2fdc.
 ### Not reproduced
 
 The survey's four failed attempts to reach a native from macro time were not
-retried here -- WP3 owns the PoC. **WP3 reproduced it** (section 2b): the
+retried here -- WP3 owns the PoC. **WP3 reproduced it** (section 2c): the
 route that works is the native's bare name in a `defmacro*` body, not a
 `:for-macros` module; the attempts failed on the import, not on any check.
 
-## 2b. WP3's verification pass (2026-09-30)
+## 2b. WP2's verification pass (2026-09-29)
+
+Every D row was re-read against `main` @ dc95b2fdc (the WP1 base). All nine
+reproduce, but three had the wrong mechanism written down and one of the
+prescribed fixes does not exist, so they are corrected here before the work
+starts rather than after.
+
+### Rows confirmed as written
+
+- **D-1.** `link_command_run` (`main.c:2866-2897`) is one `buf_printf` chain
+  into `system()`: `cc`, `cc_flags`, `out_path`, `inputs`, `aux_includes`,
+  `aux_sources`, `autolink`, `cmake_flags` and every `-I` dir, none quoted.
+  The same shape repeats at `:2961-2977` (the split prelude compile, which also
+  builds a `&`-backgrounded shell pipeline), `:3087` (prelude whole-unit),
+  `:6982` (multi-module link) and `:7608` (`tur compile`'s `cc -c`).
+  `scan_autolink_markers` (`:2284-2295`) takes the marker text with `strstr`
+  and `buf_write`s it through unexamined.
+  `append_manifest_link_flags` (`:2380-2394`) `buf_printf`s `:link-flags`
+  verbatim; `collect_spice_aux_c` (`:4372-4385`) does the same for a transitive
+  spice's `:c-includes`/`:c-sources`; `pkg_cmake_manifest_append_cc_flags`
+  (`pkg.c:4118-4137`) for the cmake manifest's dirs and flags.
+- **D-2.** `eval_rhs` runs inside the line-by-line parse loop
+  (`justrun.c:1437-1440`); `re_primary` (`:951-969`) `popen`s on sight of a
+  backtick; `parse_justfile` (`:2990`) strictly precedes the `--list` branch
+  (`:3017`). Recipe `{{ }}` args land unquoted in `system()` (`:2460`), and a
+  shebang recipe writes to a hardcoded `/tmp/tur-run-XXXXXX` (`:2406`) while
+  every other temp path in the tree goes through `tur_temp_dir()`.
+- **D-3.** `needs_rebuild` (`spice_loader.c:210-216`) is a bare mtime
+  comparison; the `.so` is `dlopen`ed at `:717-720` with nothing else checked.
+- **D-4.** `stable_c_prefix` (`main.c:2242-2253`) is `mkdir(dir, 0700)` with the
+  result discarded and no owner check; `stable_c_path` maps an input to a
+  predictable name and the `.c` is written with `fopen(..., "wb")`
+  (`:3184`); the prelude cache reuses `<tur-build>/prelude/<hash>.o` on
+  `st_size > 0` alone (`:3040`).
+- **D-5.** `snprintf(dest, ..., "%s/%s-%s", spices_dir, it->name, it->ref)`
+  (`pkg.c:2531-2536`) with neither validated; `parse_spices` (`:243-248`) takes
+  `name`, `:url`, `:ref`, `:path`, `:subdir` straight out of the form with no
+  grammar, and `:build-dir` (`:810`) is `form_str_dup` under a comment that
+  says "relative path" and enforces nothing.
+- **D-7.** `TUR_SHQ` is a bare quote character (`platform_fs.h:387-396`) used at
+  `main.c:5507, 5510, 5573, 5576, 6096`; the two `tur fmt --diff` commands
+  hardcode `'%s'` four times each (`:7833-7835, :8129-8131`); `open_in_browser`
+  is `"%s \"%s\""` (`:10506-10507`).
+- **D-9.** `pkg_write_cmake_lists` interpolates `:url`, `:ref` and every
+  `:options` key and value into `GIT_REPOSITORY`/`GIT_TAG`/`set(...)` lines
+  with no quoting or escaping (`pkg.c:3543-3570`).
+
+### Rows whose mechanism was wrong
+
+- **D-6 is option injection only -- the shell half was already fixed.** The
+  survey read `pkg.c:2046-2050` as unquoted. It is not: `pkg_cmd_arg`
+  (`:2005-2013`) is a thin wrapper over `tur_shell_quote`, and *both* the url
+  and the ref go through it on every branch of `pkg_git_fetch`, as does
+  `upgrade_ls_remote` (`install.c:1370-1372`). So a ref of `a; id` is inert.
+  What is missing is the **`--` end-of-options separator**: git still reads a
+  ref of `--upload-pack=<cmd>` as an option, quoted or not. Verified that both
+  commands accept the separator -- `git fetch --depth 1 origin -- HEAD` and
+  `git ls-remote <url> -- HEAD` both succeed -- so the fix is two tokens, and
+  the severity stays medium for the reason the survey gave even though the
+  quoting claim was wrong. The clone path already had `--`.
+- **D-8 cannot be fixed with `--`.** `tur format -- <path>` and `tur build --`
+  both print usage and exit 0: neither subcommand's argument parser knows the
+  separator, so adding `"--"` to the MCP argv would break the tool rather than
+  harden it. The faithful minimal fix is to make the path non-optional-looking
+  at the call site -- a leading `-` becomes `./-`, which names the same file --
+  and to reject an empty path. Teaching every subcommand `--` is a CLI change
+  and belongs with a CLI plan, not here.
+- **D-1's prescribed fix (b) -- "build an argv, never a string" -- is the wrong
+  call for the cc invocation, and the plan's own preference is withdrawn.**
+  Three reasons, all verified in the tree:
+  1. `TUR_CC_FLAGS` is **documented shell syntax**. A user who sets
+     `-I"/My Projects/inc"` is relying on `/bin/sh` to split it. Tokenizing it
+     into an argv ourselves changes a published interface, and getting the
+     quoting rules subtly wrong there is a worse failure than the one being
+     fixed.
+  2. The autolink string has a **space-joined contract** that three separate
+     passes depend on: `append_include_tokens` (`main.c:2439-2453`) re-splits
+     it to pull `-I` tokens for the `cc -c` line, `autolink_has_bare_c_source`
+     (`:2456+`) and `autolink_drop_bare_sources` re-split it to drop bare `.c`
+     args superseded by `-lturi`, and the ASan probe (`:2745-2760`) scans it for
+     `-L`. Shell-quoting the string wholesale breaks all three.
+  3. `TUR_SHOW_CC` prints the assembled command for a human to paste into a
+     shell. That is the mechanism that found the doubled `-L` behind
+     `release-archive-cannot-compile`, and an argv dump is not pasteable.
+
+  So D-1 splits into two fixes at two different boundaries, which is a better
+  fit for the threat model anyway (section 7 Q1: `tur build` keeps no promise;
+  what must not happen is a *fetched spice* smuggling shell text into the
+  toolchain of a project that merely depends on it):
+  - **a grammar at the untrusted boundary** -- the autolink marker text and the
+    manifest's `:link-libs`/`:link-flags`/`:c-includes`/`:c-sources` -- which
+    rejects anything outside the documented link vocabulary with a diagnostic;
+  - **quoting for the paths the driver itself owns** -- `-o`, the inputs, the
+    `-I` dirs, the aux sources -- which is a correctness fix as much as a
+    security one, since a checkout under a directory with a space in its name
+    cannot link today.
+- **The autolink diagnostic cannot name the module.**
+  `scan_autolink_markers` runs over the *assembled* generated C, where nothing
+  records which module emitted which inline-C block, so the plan's "naming the
+  module" is not available at that point. The diagnostic names the rejected
+  token and quotes the marker it came from, which is what locates the source in
+  practice (the marker text is distinctive).
+
+### What the survey did not have
+
+- **`export NAME := `...`` evaluates its backtick at parse time too**, not just
+  on use: `justrun.c:1451` calls `setenv(var->name, var->value, 0)` the moment
+  the assignment line is read. So D-2's fix has to defer the `setenv` as well,
+  and a lazily-evaluated `JVar` must therefore know whether it was exported and
+  publish itself when it is finally forced.
+- **`--set` pays for a backtick it then discards.** The override loop
+  (`:2996-3011`) runs after `parse_justfile`, so `tur run --set x=1` on a
+  Justfile whose `x :=` is a backtick has already run the command. Deferring
+  makes the override free, which is the second argument for the same change.
+- **`:link-flags` "verbatim, no prefix is added" is load-bearing.** The comment
+  at `main.c:2375-2378` says it is the only way to spell `-framework Cocoa`,
+  and `pkg.c:4104-4110` respelling a `.framework` path proves the case is live.
+  Any grammar must admit `-framework <name>`, `-L<dir>`, `-l<name>`,
+  `-Wl,<...>`, `-pthread` and a bare object/source path, or it breaks macOS
+  spices.
+- **`buf_puts` and `buf_printf` differ in whether the Buf is incidentally a C
+  string, and the driver depends on the difference.** `buf_vprintf`
+  (`src/runtime/buf.c:46-59`) reserves `n + 1` bytes and lets `vsnprintf` write
+  its NUL at `data[len]`, so a Buf built entirely out of `buf_printf` can be
+  read as a C string *before* anyone appends an explicit terminator --
+  and `link_command_run` does exactly that with the `aux_includes` and
+  `aux_sources` buffers (`buf_puts(&cmd, aux_sources->data)`). `buf_puts`
+  reserves only `n`. Replacing one `buf_printf` with a `buf_puts` in
+  `collect_spice_aux_c` therefore read past the allocation; ASan caught it in
+  `tests/spice-c-sources-tests.sh` (heap-buffer-overflow, `strlen` from
+  `buf_puts`) while the 3405-fixture suite stayed green, because no fixture
+  builds a spice with vendored `:c-sources`. Worth a report of its own: the
+  invariant is real, undocumented, and one character away from being violated
+  again.
+- **`/tmp/tur-build` is not the only unowned shared path, but it is the only
+  one that is *reused*.** The three `mkstemp` sites (`justrun.c:2406`,
+  `main.c:7824, 8115`) are individually safe -- `mkstemp` is `O_EXCL` -- and
+  differ only in that the Justfile one ignores `TMPDIR` while the other two
+  already call `tur_temp_dir()`. The reuse is what makes D-4 the live one: the
+  prelude object is keyed by a content hash and then trusted on `st_size > 0`,
+  so a planted file with the right name is linked into the user's binary
+  without a single check.
+
+## 2c. WP3's verification pass (2026-09-30)
 
 Read and run against WP1's head (`1d5f533e`, on `main` @ dc95b2fdc). No file
 section 2's S-rows cite moved.
@@ -560,41 +710,105 @@ flipped here, and the four T1 code fixes the promise depends on (defer Justfile
 backticks, a `--no-macros` equivalent, the direnv-style repl trust prompt, the
 `:link-flags`/`:build-dir` grammar) stay with WP2 and WP3.
 
-### WP2 -- Compiler driver: command construction and filesystem (4-5 days)
+### WP2 -- Compiler driver: command construction and filesystem (4-5 days) -- DONE 2026-09-29
 
-- **Method:** enumerate every `system(`/`popen(`/`execvp(`/`fork(` in
-  `src/` (the survey's list is the starting inventory) and, per site, either
-  (a) switch to `tur_shell_command`/`tur_shell_quote` for every interpolated
-  piece, or (b) replace `system()` with `posix_spawn`/`execvp` on an argv.
-  Prefer (b) for the compiler invocation: build an argv, never a string.
-- Define what the autolink marker may carry (`-l<name>`, `-L<dir>`,
-  `-framework X`, nothing else), parse it with that grammar instead of
-  `strstr`, and reject the rest with a diagnostic naming the module (D-1).
-- Validate spice `name`/`ref`, `:path`, `:members`, `:subdir` against a
-  grammar (`[A-Za-z0-9._-]+`, no leading `-`, no `..`) at manifest-parse
-  time, and add `--` before every positional git argument (D-5, D-6).
-- Justfile: defer backtick evaluation until a recipe that uses the variable
-  actually runs; `--list` must be pure (D-2). Honour `TMPDIR`. Quote `{{ }}`
-  args or document that they are raw shell.
-- `/tmp/tur-build`: create with `mkdir` + `lstat` owner/mode check (refuse a
-  dir we do not own), `O_EXCL|O_NOFOLLOW` for the `.c` files, and either
-  key the prelude cache by content hash *and* verify it, or move it under
-  the project's `build/` (D-4).
-- `tur repl` auto-discovery: require the `.tur-repl-cache` `.so` to be
-  newer than *and* built by this `tur` (stamp it), or rebuild (D-3).
-- Replace `TUR_SHQ` with `tur_shell_quote` everywhere (D-7); add `--` to
-  the MCP argv (D-8); escape cmake interpolation (D-9).
-- **Tests:** a fixture directory `tests/fixtures/security-driver/` with a
-  manifest whose name is `a;id;`, a ref of `--upload-pack=touch x`, a
-  `:c-sources` entry with a space and a quote, and an inline-C autolink of
-  `-lfoo; touch pwned`; each must produce a diagnostic, never a file.
-- **Exit:** `grep -n 'system(' src/` shows only argv-built or fully quoted
-  sites, each with a one-line comment naming its quoting; the fixture is
-  green.
+Re-scoped before execution against the verification in section 2b. The method
+changed in one place: **(b) "build an argv, never a string" was withdrawn for
+the cc invocation** (2b gives the three reasons), and D-1 became a grammar at
+the untrusted boundary plus quoting for the driver's own paths.
+
+- [x] **`src/tur_argcheck.h`** -- one header holding the grammars: what a
+  contributed link token may look like, what a path a manifest supplies may
+  look like, and whether a string is free of shell syntax. `main.c`, `pkg.c`
+  and `mcp.c` all call into it, so the rules cannot drift between them the way
+  the two link-flag readers once did.
+- [x] **D-1a, the grammar (the untrusted half).** `scan_autolink_markers` now
+  checks every token of a marker body and **fails the build** on anything
+  outside the vocabulary; `pkg_manifest_read` checks `:link-libs`,
+  `:link-flags` and `:c-flags`; `pkg_cmake_manifest_append_cc_flags` drops a
+  cmake-manifest token carrying shell syntax with a diagnostic. The diagnostic
+  names the token and quotes its marker -- not the module, which is not
+  recoverable at that point (2b).
+- [x] **D-1b, the quoting (the driver's own half).** `buf_put_quoted` wraps
+  `tur_shell_quote`; `-o`, the inputs, the `-I` dirs, the aux paths and the
+  `cc -c` input/output are quoted at all five `system()` sites that assemble a
+  cc command, and a path too long to quote refuses the command rather than
+  running a truncated one. `TUR_CC_FLAGS` stays shell syntax by contract. This
+  is also a correctness fix: `tur build "My Dir/ok.tur" -o "My Dir/my out"`
+  failed before it (`clang: no such file or directory: 'Dir/old'`) and works
+  now.
+- [x] **D-2, the Justfile.** `JVar` keeps the unevaluated RHS and
+  `jvar_force` evaluates it on first use, with a cycle guard. `--list` forces
+  nothing; `--set` drops the `expr` so an override no longer pays for a command
+  it discards; the recipe environment binds lazily, so a recipe that never
+  mentions a variable never runs its backtick; `export` publishes at force time
+  (2b). A failed force is fatal at interpolation rather than silently empty.
+  The shebang script honours `TMPDIR`. `{{ }}` args stay raw shell **by
+  decision, with the reasoning in the code**: `just` splices them as shell text,
+  so quoting would make `ls {{ flags }}` one argument and break every Justfile
+  that passes flags through a variable -- the boundary that matters is that
+  reaching a recipe body now requires naming a recipe.
+  - *Behaviour change, deliberate:* a forward reference to a variable defined
+    later in the file now resolves, where it used to be "unknown variable".
+    `just` resolves forward references too, so this is convergence;
+    `tests/run-tur-run-rhs-eval.sh` case 7 was updated and a cycle case added.
+- [x] **D-3, the repl cache.** A `.built-by` sidecar records the compiler's
+  version, path, size and mtime, and `needs_rebuild` rebuilds when it does not
+  match -- so a committed `.tur-repl-cache/lib-N.so` with a convenient mtime is
+  not `dlopen`ed. The check is "did I build this", not "is this file
+  trustworthy": an attacker can write the stamp, but not one matching the `tur`
+  binary on the machine they are attacking.
+- [x] **D-4, the shared temp dir.** `<tmpdir>/tur-build` is `lstat`ed for a
+  real directory we own that is not group/world-writable; one that fails is not
+  repaired (we do not own it) but replaced by a private `tur-build-<uid>`, with
+  a diagnostic. The generated `.c` and the prelude sources open `O_NOFOLLOW`,
+  and the prelude object must be a regular file we own rather than merely
+  non-empty.
+- [x] **D-5/D-6, the package paths.** Spice `name`, `:ref`, `:url`, `:subdir`,
+  `:path`, `:members` and `:build-dir` are validated at manifest-parse time.
+  `:path` is the deliberate exception to containment -- it is documented as a
+  sibling/monorepo pointer (`../leaf`) and is a place we READ, never one we
+  create, so it gets shell-safety only. `--` was added before the positional
+  ref in `pkg_git_fetch`'s update path and in `upgrade_ls_remote`.
+- [x] **D-7, `TUR_SHQ`.** Deleted. Its five uses, the four hand-written `'%s'`
+  interpolations in the two `tur fmt --diff` commands and the URL in
+  `open_in_browser` all go through `tur_shell_quote` now. The macro's comment
+  is replaced by a note saying why a quote *character* is not quoting.
+- [x] **D-8, MCP.** `--` is unavailable (2b): a leading `-` in the path becomes
+  `./-`, which names the same file, and an empty path is refused.
+- [x] **D-9, cmake.** A `:cmake-deps` entry's `name` and `:cmake-name` must be
+  cmake identifiers (they land in bare positions no quoting would save), its
+  `:url`/`:ref`/`:cmake-version` are validated and now written quoted, and an
+  `:options` pair carrying cmake syntax is skipped with a diagnostic.
+- [x] **Tests:** `tests/run-security-driver.sh` (ctest `tur_security_driver`),
+  27 assertions over `tests/fixtures/security-driver/`. Every rejection fixture
+  asserts **both** a diagnostic **and** the absence of the file its payload
+  creates -- "failed to build" and "ran, then failed to build" are otherwise
+  indistinguishable, which is the trap a fixture like this usually falls into.
+  `good-framework-flag` is the counterweight: `-framework Foundation` and
+  `-L<dir>` must still build, since a grammar that rejected them would break
+  every macOS spice.
+- **Exit met.** Every `system()` that assembles a cc command quotes its paths
+  and admits only grammar-checked contributed tokens; `tur run --list` runs no
+  shell; a manifest cannot write outside `spices/`; the fixture is green, as
+  are `tests/run.sh` (3405/0), `regen-snapshots --check` (156 up to date),
+  `run-fmt.sh` (34/0), the reported-index lint, and the 28 driver-related ctest
+  targets.
+
+**Filed rather than fixed:** `buf-puts-breaks-the-incidental-nul-invariant`
+(section 2b). It is a `src/runtime/buf.c` API defect, not a driver one, and the
+preferred fix touches every `Buf` in the tree -- out of WP2's scope, and it
+wants its own change.
+
+**Left for others, unchanged:** the `--no-macros` equivalent and the
+direnv-style repl trust prompt stay with WP3 and the author's decision on
+section 7 Q1 respectively. D-3's stamp converts the *accidental* load into a
+rebuild; it does not make auto-discovery opt-in, which is the separate design
+question that answer raised.
 
 ### WP3 -- Interpreter sandbox capability audit (3 days) -- DONE 2026-09-30
 
-Research first; section 2b has the PoCs and the inventory. What landed:
+Research first; section 2c has the PoCs and the inventory. What landed:
 
 - [x] **The classification.** Every builtin native has one row in
   `src/turi/native_caps.c` naming the capabilities a caller must hold. Three
@@ -619,10 +833,10 @@ Research first; section 2b has the PoCs and the inventory. What landed:
 - [x] **S-3.** The inline-C `snprintf` emulator uses the same checker: one
   conversion per argument, an integer conversion for an int and `%s` only for
   a string parameter. The over-read found alongside is clamped.
-- [x] **S-6, S-7** (section 2b): sandboxed `load` is refused in the
+- [x] **S-6, S-7** (section 2c): sandboxed `load` is refused in the
   elaborator; the R7RS `eval` bridge requires every capability.
 - [x] **The PoC the survey could not build**, both routes, recorded in
-  section 2b; each is now a fixture (below).
+  section 2c; each is now a fixture (below).
 - [x] **`--no-proc-macros`**, the opt-out section 7 Q1 said WP2/WP3 owed:
   refuses every `defmacro*` definition, call and `:for-macros` import with a
   diagnostic, so no macro-time code runs. Template `defmacro` still expands.
@@ -875,7 +1089,7 @@ leaves behind run nightly under ASan and UBSan. Its research pass is section
 | Week | Packages | Why this order |
 | --- | --- | --- |
 | 1 | WP1, WP7 (installer, tvm, workflow pins, permissions), WP4 (M-3 LSP framing; M-1 bounds checks) | The cheapest changes with the largest blast radius: what a user installs, what CI can do with its token, and the two overflows a reporter would demo first. |
-| 2 | WP2 (D-1, D-2, D-5, D-6), WP3 (S-1 choke point) | The compiler-driver injection class and the sandbox bypass. Both are one design change each plus a sweep. |
+| 2 | ~~WP2 (D-1, D-2, D-5, D-6)~~ **done 2026-09-29, all nine D rows**, WP3 (S-1 choke point) | The compiler-driver injection class and the sandbox bypass. Both are one design change each plus a sweep. WP2 came in as one header plus a sweep, as predicted; the sweep was the larger half. |
 | 3 | WP4 (harnesses, JSON, httpd), WP5 | The fuzz targets need WP4's fixes landed to seed sensibly; region hooks and integer checks are independent. |
 | 4 | WP6, WP8, WP2/WP3 remainder, re-grade section 2 | Web hardening, the effects decision, and closing the long tail. |
 

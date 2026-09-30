@@ -1,0 +1,6 @@
+;;; D-5: `:build-dir` was documented "relative path" in a comment and enforced
+;;; nowhere, so a manifest could choose where the build wrote.
+(defpackage sec-bad-build-dir
+  :name "sec-bad-build-dir"
+  :modules [main]
+  :build-dir "/tmp/tur-sec-escape")

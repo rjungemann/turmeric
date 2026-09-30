@@ -1,0 +1,8 @@
+tests/run-security-driver.sh owns this tree (ctest: tur_security_driver).
+
+These fixtures are deliberately MALFORMED -- a spice name that is shell text, a
+git ref that is an option, a link flag that ends the argument and starts a
+command -- so every one of them must be REJECTED, which is the opposite of what
+tests/run.sh asserts about a fixture directory.  The marker keeps run.sh out.
+
+docs/upcoming/security-audit-plan.md, WP2.

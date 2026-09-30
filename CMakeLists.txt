@@ -963,6 +963,19 @@ add_test(
   COMMAND bash tests/run-build-project.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# WP2 of docs/upcoming/security-audit-plan.md: the compiler driver used to
+# splice repo-supplied text -- a manifest's :link-flags, a spice's :c-sources,
+# an __tur_autolink__ marker, a Justfile backtick -- into the shell command
+# string it hands to system(), and into directories it then wrote to.  Each
+# fixture under tests/fixtures/security-driver/ carries one such payload; the
+# assertion is a diagnostic AND the absence of the file the payload creates,
+# because "failed to build" and "ran, then failed to build" look identical
+# otherwise.
+add_test(
+  NAME tur_security_driver
+  COMMAND bash tests/run-security-driver.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # result-typedef-duplicated-across-modules regression: two modules export
 # functions returning the same (Result cstr cstr) instantiation; a third
 # module imports both.  Without a per-instantiation include guard around

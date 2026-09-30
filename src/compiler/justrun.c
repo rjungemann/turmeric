@@ -191,7 +191,25 @@ typedef struct {
 
 typedef struct {
     char *name;
+    /* The assignment's evaluated value, or NULL until it is first needed.
+     *
+     * WP2 (D-2): this used to be filled during the PARSE, which meant
+     * `x := `curl ...`` ran curl before `tur run --list` had printed a single
+     * recipe -- so an inventory command executed shell out of a repository the
+     * user had only opened.  The RHS text is kept in `expr` instead and forced
+     * on first use by a recipe; `--list` forces nothing, and `--set` (which
+     * overrides the value outright) no longer pays for a command whose result
+     * it throws away.
+     *
+     * `forcing` is the cycle guard: `a := b` / `b := a` used to be impossible
+     * because evaluation was strictly in file order, and deferring makes it
+     * reachable. */
     char *value;
+    char *expr;
+    char *src_path;
+    int   src_line;
+    int   forcing;
+    int   failed;
     int   exported;
     /* Owning module id.  `just` scopes modules strictly: a module cannot see
      * its parent's variables and vice versa, so a recipe's environment is
@@ -890,6 +908,16 @@ static void re_error(REval *r, const char *msg) {
 
 static char *re_expr(REval *r);  /* forward */
 
+/* WP2 (D-2): force a deferred assignment, evaluating its RHS the first time
+ * something actually reads it.  Returns the value (owned by the JVar) or NULL
+ * when the RHS failed -- a failed backtick, an unknown variable, a cycle.
+ *
+ * An `export`ed variable publishes itself into the environment at force time,
+ * which is where the parse-time `setenv` moved to: a variable nobody reads is
+ * a variable that never runs its command, and one nobody runs cannot export
+ * anything either. */
+static const char *jvar_force(JFile *jf, int idx);
+
 static char *re_string_literal(REval *r) {
     char q = *r->p++;
     size_t cap = 32;
@@ -1081,10 +1109,22 @@ static char *re_primary(REval *r) {
             free(name);
             return result;
         }
-        /* Variable lookup in already-parsed assignments. */
+        /* Variable lookup in the parsed assignments.  Forced here rather
+         * than at parse time (D-2), which also means a variable may now refer
+         * to one defined LATER in the file -- `just` allows that and the
+         * strict file-order evaluation did not. */
         for (int i = 0; i < r->jf->n_vars; i++) {
-            if (strcmp(r->jf->vars[i].name, name) == 0) {
-                char *v = jr_strdup(r->jf->vars[i].value);
+            if (r->jf->vars[i].name && strcmp(r->jf->vars[i].name, name) == 0) {
+                const char *fv = jvar_force(r->jf, i);
+                if (!fv) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "variable '%s' could not be evaluated", name);
+                    re_error(r, msg);
+                    free(name);
+                    return jr_strdup("");
+                }
+                char *v = jr_strdup(fv);
                 free(name);
                 return v;
             }
@@ -1179,6 +1219,29 @@ static char *eval_rhs(const char *text, JFile *jf, const char *path,
     }
     if (r.error) { free(v); return NULL; }
     return v;
+}
+
+static const char *jvar_force(JFile *jf, int idx) {
+    if (idx < 0 || idx >= jf->n_vars) return NULL;
+    JVar *v = &jf->vars[idx];
+    if (v->value) return v->value;
+    if (v->failed) return NULL;
+    if (!v->expr) { v->failed = 1; return NULL; }
+    if (v->forcing) {
+        fprintf(stderr, "tur run: %s:%d: variable '%s' is defined in terms of "
+                        "itself\n",
+                v->src_path ? v->src_path : "<justfile>", v->src_line,
+                v->name ? v->name : "?");
+        v->failed = 1;
+        return NULL;
+    }
+    v->forcing = 1;
+    char *val = eval_rhs(v->expr, jf, v->src_path, v->src_line);
+    v->forcing = 0;
+    if (!val) { v->failed = 1; return NULL; }
+    v->value = val;
+    if (v->exported && v->name) setenv(v->name, v->value, 0);
+    return v->value;
 }
 
 /* ================================================================== */
@@ -1472,19 +1535,21 @@ static int parse_justfile_in(const char *text, const char *path, JFile *jf,
                     const char *val_start = assign_pos + 2;
                     const char *end;
                     char *raw = parse_rhs_expr_text(val_start, &end);
-                    char *val = eval_rhs(raw, jf, path, lineno);
-                    free(raw);
-                    if (!val) {
-                        free(pending_doc);
-                        free(line);
-                        return 2;
-                    }
+                    /* WP2 (D-2): keep the RHS, do not run it.  Evaluating here
+                     * is what made `tur run --list` execute a backtick in a
+                     * repository the user had only opened; jvar_force does it
+                     * on first use instead.  A syntax error in the RHS now
+                     * surfaces when something reads the variable rather than
+                     * during the parse -- which is the same place `just`
+                     * reports it, and the price of `--list` being pure. */
                     JVar *var = &jf->vars[jf->n_vars++];
+                    memset(var, 0, sizeof(*var));
                     var->name     = jr_strndup(vp, name_len);
-                    var->value    = val;
+                    var->expr     = raw;
+                    var->src_path = path ? jr_strdup(path) : NULL;
+                    var->src_line = lineno;
                     var->exported = exported;
                     var->module   = module;
-                    if (exported) setenv(var->name, var->value, 0);
                     free(pending_doc);
                     pending_doc = NULL;
                     free(line);
@@ -1667,6 +1732,12 @@ static char *find_justfile(void) {
 typedef struct {
     const char **names;
     const char **values;
+    /* WP2 (D-2): the JFile variable index this slot stands for, or -1 for an
+     * ordinary eager binding (a recipe parameter).  A lazy slot holds a NULL
+     * value until jenv_lookup forces it, so running one recipe no longer runs
+     * every OTHER variable's backtick -- only the ones the recipe reads. */
+    int         *lazy;
+    JFile       *jf;
     int          n;
     int          cap;
     /* Heap-allocated values owned by this env (freed by jenv_free). */
@@ -1679,31 +1750,59 @@ static void jenv_init(JEnv *e) {
     e->cap       = 16;
     e->names     = (const char **)malloc((size_t)e->cap * sizeof(char *));
     e->values    = (const char **)malloc((size_t)e->cap * sizeof(char *));
+    e->lazy      = (int *)malloc((size_t)e->cap * sizeof(int));
+    e->jf        = NULL;
     e->n         = 0;
     e->owned_cap = 4;
     e->owned     = (char **)malloc((size_t)e->owned_cap * sizeof(char *));
     e->n_owned   = 0;
 }
 
-static void jenv_set(JEnv *e, const char *name, const char *value) {
-    for (int i = 0; i < e->n; i++) {
-        if (strcmp(e->names[i], name) == 0) { e->values[i] = value; return; }
-    }
+static int jenv_slot(JEnv *e, const char *name) {
+    for (int i = 0; i < e->n; i++)
+        if (strcmp(e->names[i], name) == 0) return i;
     if (e->n >= e->cap) {
         e->cap *= 2;
         e->names  = (const char **)realloc(e->names,  (size_t)e->cap * sizeof(char *));
         e->values = (const char **)realloc(e->values, (size_t)e->cap * sizeof(char *));
+        e->lazy   = (int *)realloc(e->lazy, (size_t)e->cap * sizeof(int));
     }
     e->names[e->n]  = name;
-    e->values[e->n] = value;
-    e->n++;
+    e->values[e->n] = NULL;
+    e->lazy[e->n]   = -1;
+    return e->n++;
 }
 
-static const char *jenv_get(const JEnv *e, const char *name) {
-    for (int i = 0; i < e->n; i++)
-        if (strcmp(e->names[i], name) == 0) return e->values[i];
+static void jenv_set(JEnv *e, const char *name, const char *value) {
+    int i = jenv_slot(e, name);
+    e->values[i] = value;
+    e->lazy[i]   = -1;           /* a parameter shadows the variable outright */
+}
+
+/* Bind `name` to JFile variable `idx`, to be evaluated only if read. */
+static void jenv_set_lazy(JEnv *e, const char *name, int idx) {
+    int i = jenv_slot(e, name);
+    e->values[i] = NULL;
+    e->lazy[i]   = idx;
+}
+
+/* `*found` distinguishes "no such binding" (fall through to the process
+ * environment) from "the binding is there and evaluating it FAILED" (a cycle,
+ * a backtick that exited non-zero).  Deferred evaluation is what makes the
+ * second case possible at read time, and swallowing it would run the recipe
+ * with an empty string where a command's output belongs. */
+static const char *jenv_lookup(const JEnv *e, const char *name, int *found) {
+    for (int i = 0; i < e->n; i++) {
+        if (strcmp(e->names[i], name) != 0) continue;
+        if (found) *found = 1;
+        if (!e->values[i] && e->lazy[i] >= 0 && e->jf)
+            e->values[i] = jvar_force(e->jf, e->lazy[i]);
+        return e->values[i];
+    }
+    if (found) *found = 0;
     return NULL;
 }
+
 
 static void jenv_own(JEnv *e, char *val) {
     if (e->n_owned >= e->owned_cap) {
@@ -1718,6 +1817,7 @@ static void jenv_free(JEnv *e) {
     free(e->owned);
     free(e->names);
     free(e->values);
+    free(e->lazy);
     e->n = 0;
 }
 
@@ -1748,6 +1848,8 @@ static void jfile_free(JFile *jf) {
     for (int i = 0; i < jf->n_vars; i++) {
         free(jf->vars[i].name);
         free(jf->vars[i].value);
+        free(jf->vars[i].expr);
+        free(jf->vars[i].src_path);
     }
     for (int i = 0; i < jf->n_aliases; i++) {
         free(jf->aliases[i].name);
@@ -1999,7 +2101,14 @@ static char *eval_expr(const char *expr, const JEnv *env, const JFile *jf) {
     }
 
     /* Variable lookup */
-    const char *val = jenv_get(env, trimmed);
+    int bound = 0;
+    const char *val = jenv_lookup(env, trimmed, &bound);
+    if (bound && !val) {
+        /* jvar_force already said why on stderr. */
+        fprintf(stderr, "tur run: cannot interpolate '{{ %s }}'\n", trimmed);
+        free(trimmed);
+        return NULL;
+    }
     if (!val) val = getenv(trimmed);
     char *result = val ? jr_strdup(val) : jr_strdup("");
     free(trimmed);
@@ -2344,9 +2453,22 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
     /* Only this recipe's own module contributes variables: `just` scopes
      * modules strictly, so a module recipe sees neither the root Justfile's
      * variables nor a sibling module's. */
-    for (int i = 0; i < jf->n_vars; i++)
-        if (jf->vars[i].module == r->module)
-            jenv_set(&env, jf->vars[i].name, jf->vars[i].value);
+    env.jf = jf;
+    for (int i = 0; i < jf->n_vars; i++) {
+        if (jf->vars[i].module != r->module) continue;
+        /* D-2: bound, not evaluated.  A recipe that never mentions a variable
+         * never runs its backtick, which is what `just` does and what the old
+         * parse-time evaluation could not. */
+        jenv_set_lazy(&env, jf->vars[i].name, i);
+    }
+    /* An `export`ed variable's whole purpose is to be in the recipe shell's
+     * environment whether or not the body interpolates it, so it is forced
+     * here rather than on read -- this is the `setenv` that used to happen at
+     * parse time, moved to the first point a recipe is actually running. */
+    for (int i = 0; i < jf->n_vars; i++) {
+        if (jf->vars[i].module != r->module || !jf->vars[i].exported) continue;
+        if (!jvar_force(jf, i)) { jenv_free(&env); return 2; }
+    }
 
     /* Bind parameters */
     int rc = bind_params(r, args, n_args, &env, r->name);
@@ -2439,7 +2561,12 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
      * shebang. */
     if (r->n_lines > 0 && r->lines[0].text &&
         r->lines[0].text[0] == '#' && r->lines[0].text[1] == '!') {
-        char tmpl[] = "/tmp/tur-run-XXXXXX";
+        /* WP2 (D-2): `/tmp` was hardcoded here while every other temp path in
+         * the tree goes through tur_temp_dir() -- so TMPDIR was ignored, and
+         * on Windows the path named the current drive's root.  mkstemp itself
+         * is O_EXCL and needs no other guard. */
+        char tmpl[1024];
+        snprintf(tmpl, sizeof(tmpl), "%s/tur-run-XXXXXX", tur_temp_dir());
         int fd = mkstemp(tmpl);
         if (fd < 0) {
             fprintf(stderr, "tur run: failed to create temp script for recipe '%s'\n",
@@ -2480,7 +2607,16 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
         return exit_code;
     }
 
-    /* Execute body lines */
+    /* Execute body lines.
+     *
+     * WP2 (D-2) considered quoting the `{{ }}` substitutions before they reach
+     * system().  They stay RAW on purpose: `just` splices them as shell text,
+     * so `ls {{ flags }}` with `flags := "-la"` is two arguments there and
+     * quoting would make it one, breaking every Justfile that passes flags
+     * through a variable.  A recipe body is shell you wrote, running because
+     * you asked for it by name -- which is the same promise `make` keeps.  The
+     * boundary that matters is the one above: getting here at all now requires
+     * naming a recipe, so `--list` no longer runs any of it. */
     for (int i = 0; i < r->n_lines; i++) {
         const JLine *jl = &r->lines[i];
 
@@ -3034,13 +3170,22 @@ int cmd_justrun(int argc, char **argv) {
         int found = 0;
         for (int i = 0; i < jf.n_vars; i++) {
             if (jf.vars[i].name && strcmp(jf.vars[i].name, set_names[s]) == 0) {
+                /* D-2: dropping `expr` is what makes the override free.  The
+                 * assignment's own RHS is never evaluated, so `--set x=1` on a
+                 * Justfile whose `x :=` is a backtick no longer runs it. */
                 free(jf.vars[i].value);
-                jf.vars[i].value = jr_strdup(set_values[s]);
+                free(jf.vars[i].expr);
+                jf.vars[i].expr   = NULL;
+                jf.vars[i].failed = 0;
+                jf.vars[i].value  = jr_strdup(set_values[s]);
+                if (jf.vars[i].exported && jf.vars[i].name)
+                    setenv(jf.vars[i].name, jf.vars[i].value, 0);
                 found = 1;
                 break;
             }
         }
         if (!found && jf.n_vars < JR_MAX_VARS) {
+            memset(&jf.vars[jf.n_vars], 0, sizeof(jf.vars[0]));
             jf.vars[jf.n_vars].name     = jr_strdup(set_names[s]);
             jf.vars[jf.n_vars].value    = jr_strdup(set_values[s]);
             jf.vars[jf.n_vars].exported = 0;

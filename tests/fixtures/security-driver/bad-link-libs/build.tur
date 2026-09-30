@@ -1,0 +1,7 @@
+;;; D-1: `:link-libs` entries become `-l<name>` with no check on <name>.
+(defpackage sec-bad-link-libs
+  :name "sec-bad-link-libs"
+  :modules [main]
+  :build-opts #map{
+    :link-libs ["m `touch PWNED`"]
+  })

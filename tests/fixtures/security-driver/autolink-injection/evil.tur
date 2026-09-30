@@ -1,0 +1,14 @@
+;;; D-1: an `__tur_autolink__` marker is text an inline-C block in ANY module
+;;; emits -- a fetched spice's included -- and it was scraped out of the
+;;; generated C with strstr and spliced into the string handed to system().
+(defn hint []
+  #fx{Unsafe}
+  : int
+  ```c
+  /* __tur_autolink__: -lfoo; touch PWNED */
+  return 0;
+  ```)
+
+(defn main [] : int
+  (println "built")
+  0)
