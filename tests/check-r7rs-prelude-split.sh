@@ -111,8 +111,13 @@ for f in $FIXTURES; do
         fail "$f: the split was not used"; grep "split" "$log" | sed 's/^/    /'; continue
     fi
     link=$(grep '^CC: ' "$log" | grep -v ' -c -o ' | tail -1)
-    lib=$(printf '%s\n' "$link" | grep -o '[^ ]*/prelude/[0-9a-f]*\.o' | head -1)
-    cli=$(printf '%s\n' "$link" | sed 's/.* -o [^ ]* \([^ ]*\.c\) .*/\1/')
+    # The driver shell-quotes every path it splices into the cc command (WP2 of
+    # the security audit, D-1b), so the TUR_SHOW_CC line carries quoted tokens
+    # -- '/tmp/tur-build/prelude/<hash>.o' -- where it used to carry bare ones.
+    # Excluding the quote characters from these character classes is what makes
+    # both extractors quote-agnostic: POSIX sh gets ' and cmd.exe gets ".
+    lib=$(printf '%s\n' "$link" | grep -o "[^ '\"]*/prelude/[0-9a-f]*\.o" | head -1)
+    cli=$(printf '%s\n' "$link" | sed "s/.* -o [^ ]* ['\"]\{0,1\}\([^ '\"]*\.c\)['\"]\{0,1\} .*/\1/")
     if [ -z "$lib" ] || [ ! -f "$lib" ] || [ ! -f "$cli" ]; then
         fail "$f: could not find the two units in the link line"
         printf '    %s\n' "$link"; continue

@@ -2,10 +2,18 @@
 ;;; documented (pkg.h) as the verbatim sibling of `:link-libs` because
 ;;; `-framework Cocoa` is one entry and two arguments; a check that rejected it
 ;;; would break every macOS spice.  This fixture is the one here that must BUILD.
+;;;
+;;; Every flag below has to be accepted by BOTH ld64 and GNU ld, since this
+;;; fixture asserts a successful link on every platform CI runs.  That rules
+;;; out the interesting platform-specific spellings -- `-framework X` and
+;;; `-Wl,-dead_strip` are ld64-only, `-Wl,--build-id` is GNU-only -- so the
+;;; runner asserts those at the GRAMMAR level instead (`good-flags-admitted`,
+;;; which checks the token was not refused) and keeps the link assertion to
+;;; flags both linkers take.
 (defpackage sec-good-framework-flag
   :name "sec-good-framework-flag"
   :modules [main]
   :build-opts #map{
     :link-libs  ["m"]
-    :link-flags ["-L/tur-sec-marker" "-Wl,-dead_strip"]
+    :link-flags ["-L/tur-sec-marker" "-Wl,-rpath,/tmp"]
   })

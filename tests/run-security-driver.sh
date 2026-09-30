@@ -65,8 +65,14 @@ reject() {
         pass "$name-rejected"
     fi
 
-    # The payload's side effect, wherever it would have landed.
-    if find "$dir" "$WORK" -maxdepth 3 -name PWNED 2>/dev/null | grep -q .; then
+    # The payload's side effect, wherever it would have landed.  Captured into
+    # a variable rather than piped into `grep -q`: under `pipefail` a writer
+    # that is still producing when grep exits takes SIGPIPE, and the pipeline
+    # then reports failure precisely BECAUSE the pattern matched
+    # (tests/check-pipefail-grep-q.sh lints for exactly this).
+    local hits
+    hits="$(find "$dir" "$WORK" -maxdepth 3 -name PWNED 2>/dev/null)"
+    if [ -n "$hits" ]; then
         fail "$name-inert" "the payload ran (PWNED exists)"
         find "$WORK" -name PWNED -delete 2>/dev/null
     else
@@ -174,6 +180,25 @@ reject bad-cmake-ref     "cmake-dep 'evil'"
         fail "good-flags-builds" "tur build exit=$rc: $out"
     else
         pass "good-flags-builds"
+    fi
+}
+
+# --------------------------------------------------------------------------
+# 11b. ... including the spellings the HOST linker will not take.
+#
+#     A manifest written for macOS is still parsed on Linux, so the grammar's
+#     vocabulary has to be cross-platform even though no single linker accepts
+#     all of it.  This asserts the grammar alone -- whether the link succeeds
+#     is the linker's business, and on the wrong platform it will not.
+# --------------------------------------------------------------------------
+{
+    dir="$WORK/good-platform-flags"
+    rm -rf "$dir"; cp -R "$FIX/good-platform-flags" "$dir"
+    out="$(cd "$dir" && "$TUR" build . -o "$dir/out" 2>&1)"
+    if grep -qF "is not a link token" <<< "$out"; then
+        fail "platform-flags-admitted" "the grammar rejected a documented flag: $out"
+    else
+        pass "platform-flags-admitted"
     fi
 }
 
