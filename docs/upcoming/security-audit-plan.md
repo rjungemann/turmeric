@@ -1,6 +1,7 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
-> **Status: WP1 DONE (2026-09-29); WP2-WP8 PROPOSED.** Written 2026-09-30
+> **Status: WP1 DONE (2026-09-29); WP3 DONE (2026-09-30); WP2, WP4-WP8
+> PROPOSED.** Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
 > every row there is a *candidate* until the work package that owns it
@@ -13,6 +14,13 @@
 > the section 2 rows hold as written. WP1's own verification results, three
 > re-grades and three findings the survey did not have are recorded in
 > section 2a; section 7 Q1 is answered.
+>
+> **WP3 landed 2026-09-30**, branched from WP1's PR (`1d5f533e`). Its research
+> pass is section 2b: S-1 reproduced from an embedder AND from `tur check`
+> (the survey's macro-time attempts failed only because they went through
+> `:for-macros`), two findings the survey did not have (`load` in a sandbox,
+> and the R7RS `eval` bridge as a full escape), and a new high, S-5, that the
+> capability check cannot close.
 > **Type:** Security / process / tooling
 > **Depends on:** nothing that is not already in the tree. The Debug build's
 > ASan+UBSan (`CMakeLists.txt:33`), the four differential fuzzers
@@ -42,6 +50,8 @@ did find that three documents promise more than the code delivers:
   untrusted code, but the natives table registered into *every* env
   (`src/turi/env.c:224-251`) includes `process/spawn`, file open/write,
   unlink and raw-fd read/write with no capability check (section 2, S-1).
+  **Fixed in WP3**: every native is classified and the dispatch checks it;
+  the guide now names the remaining gap (S-5) instead.
 - `docs/guides/consuming-spices-guide.md:405` says every fetched spice is
   verified and builds fail on mismatch; the lock hash is trust-on-first-use
   and rewritten on every fetch (`src/compiler/pkg.c:2572-2582`), and only
@@ -96,10 +106,13 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 
 | Id | Sev | Finding | Where |
 | --- | --- | --- | --- |
-| S-1 | high | Natives that reach the OS are registered into every env, including sandboxed and macro envs, with **no capability check**: `process/spawn` (fork+execvp), `fs/tmpfile`, `io-fopen-read/write`, `write-temp-file`, `r7rs-io-open__`, `r7rs-unlink__`, r7rs `getenv`/environ, `json/decode-file!`, `read-async`/`write-async` on raw fds. **verified** in source (`src/turi/interpreter_natives.c:4851-4877, 5199, 4403-4412, 2615, 2892, 2858-2880, 1349`; `src/turi/fiber.c:754-830, 954-955`; registration `src/turi/env.c:224-251`; the sandbox constructor `env.c:277-286`; the macro env `src/turi/macro_env.c:212, 229`). The only cap checks are in `is_blocked_builtin` (`src/turi/eval.c:4070-4104`, println/dlopen/raw-memory only), the FFI thunk paths, inline-C, async and import. **Not yet reproduced from macro time**: four attempts via `defmacro` + `(import process :for-macros)` expanded correctly but never ran the native -- something in name resolution or the inline-C cap intercedes. The `Env/new-sandboxed` embedder API (`stdlib/turi/eval.tur:49`) and `tests/turi/sandbox-eval.c` are the right place for the PoC. |
-| S-2 | medium | `extern-c` "known overrides" (`printf`, `printf_s`, `getenv`) skip the FFI cap check the thunk path enforces, and `printf`'s format string is program-controlled (`src/turi/eval.c:360-421`). | |
-| S-3 | medium | The inline-C emulator's snprintf pattern hands the program's format string to `snprintf` with every argument coerced to `long long` -- a `%s` in the body dereferences an integer (`src/turi/eval.c:5532-5535`). | |
-| S-4 | info | Try Turmeric's wasm env is `CAP_ALL` by design (`src/web/wasm_glue.c:159-162`); `tests/turi/sandbox-eval.c:37-88` covers only println/async/inline-C. | |
+| S-1 | high -- **FIXED in WP3** | Natives that reach the OS are registered into every env, including sandboxed and macro envs, with **no capability check**: `process/spawn` (fork+execvp), `fs/tmpfile`, `io-fopen-read/write`, `write-temp-file`, `r7rs-io-open__`, `r7rs-unlink__`, r7rs `getenv`/environ, `json/decode-file!`, `read-async`/`write-async` on raw fds. **verified** in source (`src/turi/interpreter_natives.c:4851-4877, 5199, 4403-4412, 2615, 2892, 2858-2880, 1349`; `src/turi/fiber.c:754-830, 954-955`; registration `src/turi/env.c:224-251`; the sandbox constructor `env.c:277-286`; the macro env `src/turi/macro_env.c:212, 229`). The only cap checks are in `is_blocked_builtin` (`src/turi/eval.c:4070-4104`, println/dlopen/raw-memory only), the FFI thunk paths, inline-C, async and import. **Not yet reproduced from macro time**: four attempts via `defmacro` + `(import process :for-macros)` expanded correctly but never ran the native -- something in name resolution or the inline-C cap intercedes. The `Env/new-sandboxed` embedder API (`stdlib/turi/eval.tur:49`) and `tests/turi/sandbox-eval.c` are the right place for the PoC. |
+| S-2 | medium -- **FIXED in WP3** | `extern-c` "known overrides" (`printf`, `printf_s`, `getenv`) skip the FFI cap check the thunk path enforces, and `printf`'s format string is program-controlled (`src/turi/eval.c:360-421`). | |
+| S-3 | low (re-graded by WP3: needs `TURI_CAP_INLINE_C`) -- **FIXED in WP3** | The inline-C emulator's snprintf pattern hands the program's format string to `snprintf` with every argument coerced to `long long` -- a `%s` in the body dereferences an integer (`src/turi/eval.c:5532-5535`). | |
+| S-4 | info -- **documented in WP1/WP3** | Try Turmeric's wasm env is `CAP_ALL` by design (`src/web/wasm_glue.c:159-162`); `tests/turi/sandbox-eval.c:37-88` covers only println/async/inline-C. | The security guide records the posture as intentional; the sandbox test now covers every classified native. Section 7 Q4 stays the author's. |
+| S-5 | high (under T3; under T1 for `tur check`) -- **OPEN** (host-exit half **FIXED** 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` is a wild read and the setters a wild write. At least 204 of the 656 natives do the cast in their own body. **verified** under ASan. Not a capability; see section 2b. The second half as filed -- `panic` and native error paths ending the host -- is fixed: a restricted env's `turi_eval`/`turi_call` return `TURI_ERROR "panic: <msg>"` instead. | [`docs/reported/turi-sandbox-handles-are-forgeable-integers.md`](../reported/turi-sandbox-handles-are-forgeable-integers.md) |
+| S-6 | medium -- **FIXED in WP3**, found by WP3 | `(load "path")` in a sandboxed env read the file and echoed its first token in the unbound-symbol diagnostic: `load` expansion (`src/compiler/elab_toplevel.c`, `load_expand_forms`) had no gate while `import` did. | |
+| S-7 | high -- **FIXED in WP3**, found by WP3 | `r7rs-eval-c-eval__`/`-load__` evaluate text in the process-global embedded R7RS env (`src/turi/r7rs_embed.c`), which is an ordinary `CAP_ALL` env, so any sandbox reached every capability through it. | |
 
 ### Compiler driver and filesystem (WP2)
 
@@ -253,10 +266,88 @@ survey cited moved between 81e12de4 and dc95b2fdc.
 ### Not reproduced
 
 The survey's four failed attempts to reach a native from macro time were not
-retried here -- WP3 owns the PoC. The likeliest reason remains that
-`TURI_CAP_IMPORT` is granted only transiently around a `:for-macros` load
-(`macro_env.c:504-506`), so the module's natives are not resolvable by the time
-the macro body runs. WP3 should write down whichever it turns out to be.
+retried here -- WP3 owns the PoC. **WP3 reproduced it** (section 2b): the
+route that works is the native's bare name in a `defmacro*` body, not a
+`:for-macros` module; the attempts failed on the import, not on any check.
+
+## 2b. WP3's verification pass (2026-09-30)
+
+Read and run against WP1's head (`1d5f533e`, on `main` @ dc95b2fdc). No file
+section 2's S-rows cite moved.
+
+### PoCs, before the fix
+
+From an embedder (`turi_env_new_sandboxed()` + `turi_eval`), every one of
+these ran:
+
+| Text | Result before WP3 |
+| --- | --- |
+| `(io-fopen-write "/tmp/...")` | created the file |
+| `(process/spawn "touch" 0)` | forked; returned the child's pid |
+| `(r7rs-unlink__ "...")` | deleted the file |
+| `(r7rs-getenv__ "HOME")` | returned it |
+| `(r7rs-exit__ 3)` | the **host** exited with status 3 |
+| `(read-async 0 -1)` | the host aborted (`*** buffer overflow detected ***`) -- M-5's negative `malloc` and S-1 in one call |
+| `(println-float 7.1)` | printed, although `println` itself was refused |
+| `(load "/etc/hostname")` | read the file; its first token came back as an unbound symbol |
+
+And from `tur check` -- no embedder, no flags -- a `defmacro*` body calling
+`(r7rs-unlink__ "...")` and `(process/spawn ...)` by bare name deleted the file
+and spawned the process at expansion time, with only a TUR-W0040 "will
+runtime-dispatch" warning. The survey's four attempts went through
+`(import m :for-macros)` and failed on the import; the bare name needs none.
+So **S-1 was exploitable under T1**: `tur check` on an untrusted tree ran
+shell. Plain `defmacro` is template substitution and never reaches the macro
+env.
+
+The existing sandbox test passed two of its cases for the wrong reason:
+`sb-println` and the mixed-caps I/O check on "unknown function
+'println-int'" (the name no longer exists), and `sb-import` on "import is only
+allowed inside defmodule".
+
+### The inventory
+
+A static extraction of every `turi_env_register_native*` call (656 names
+across `interpreter_natives.c`, `collections_native.c`, `string_native.c`,
+`fiber.c`, `eval.c`, `macro_env.c`, `ffi_thunk.c`, `main.c`) matched a runtime
+enumeration of a fresh `turi_env_new()` exactly, plus the three registered
+conditionally (`break`, `reload`, `syntax-struct-fields`). Each body was
+scanned for OS calls, transitively through its static callees, and every hit
+read by hand. 63 are not pure; the rest are. The table is
+`src/turi/native_caps.c`; the classes and the reasoning are in the sandboxing
+guide.
+
+The two native dispatch sites are both in `eval_apply_driven` -- the direct
+native call and the inline-C override -- and `turi_call`, the fiber thunk and
+every higher-order native reach natives only through it. One check there
+covers them all, which is what made the choke point cheap.
+
+### Findings the survey did not have
+
+- **S-5 (high, open)** -- handles are forgeable integers; see the row. The
+  capability check is sound and this is underneath it. Its host-exit half was
+  fixed in a follow-up the same day. Gating the collection
+  natives behind `TURI_CAP_UNSAFE` would make a sandbox without vectors, which
+  is not a sandbox anyone can use, so WP3 filed it rather than paper over it.
+- **S-6** -- sandboxed `load`. Fixed.
+- **S-7** -- the R7RS `eval` bridge. Fixed by classifying it as requiring
+  every capability; making the embedded env inherit its caller's capabilities
+  is the better fix and is not needed while nothing sandboxed wants R7RS
+  `eval`.
+- **S-3's snprintf also over-read.** `snprintf` returns the length it would
+  have written, and the emulator copied that many bytes out of its 1024-byte
+  buffer. Fixed alongside.
+
+### Re-grades
+
+- **S-3 -> low.** It needs `TURI_CAP_INLINE_C`, and a program with inline C
+  was already trusted with its own format strings; it stays worth fixing
+  because the emulator is the only thing between inline-C text and libc.
+- **The `--macro-caps=io` direction (2a) is resolved by addition, not
+  reversal.** WP3 adds `--no-proc-macros`; `--macro-caps=io` still grants, and
+  now grants I/O plus path-based file access, because WP3 split
+  `TURI_CAP_FS` out of `TURI_CAP_IO` and the flag is documented for
+  embed-file macros.
 
 ## 3. Work packages
 
@@ -337,36 +428,68 @@ backticks, a `--no-macros` equivalent, the direnv-style repl trust prompt, the
   sites, each with a one-line comment naming its quoting; the fixture is
   green.
 
-### WP3 -- Interpreter sandbox capability audit (3 days)
+### WP3 -- Interpreter sandbox capability audit (3 days) -- DONE 2026-09-30
 
-- **Method:** dump the natives table (`turi_env_register_interpreter_natives`
-  plus `collections_native.c`, `string_native.c`, `fiber.c`, the r7rs set,
-  and `register_extern_c_known`) and classify every entry: pure / IO / FS /
-  PROC / FFI / ENV / UNSAFE. The classification is the deliverable's core
-  and lives in a table in the security guide.
-- Enforce it at one choke point: give `turi_env_register_native` a required
-  capability argument (or a parallel `native_caps[]` table) and have
-  `eval_apply`'s native dispatch check `env->caps` against it. One check,
-  not two hundred. `is_blocked_builtin` becomes the builtin half of the same
-  table (S-1).
-- Route `extern-c` known overrides through the same FFI check; make the
-  interpreted `printf` a fixed-format that prints its arguments, never the
-  program's format (S-2). Reject `%s`/`%n` in the inline-C snprintf emulator
-  or run it only for `%d`/`%lld`/`%x` shapes (S-3).
-- Build the PoC the survey could not: an `Env/new-sandboxed` embedder
-  program (`stdlib/turi/eval.tur`) that evaluates `(process/spawn ...)`,
-  `(io-fopen-write ...)`, `(read-async 0 -1)`; then the macro-time route
-  (`:for-macros` on a module whose function calls a native by its bare
-  name) -- if it is genuinely unreachable, write down *why* so the
-  reasoning survives the next refactor.
-- Extend `tests/turi/sandbox-eval.c` to assert every non-pure native is
-  denied under `CAP_NONE`, generated from the classification table so a
-  new native cannot be added unclassified.
-- Decide and document the Try Turmeric posture (S-4): `CAP_ALL` behind the
-  browser sandbox is fine; say so in the security guide, and note that the
-  wasm build has no filesystem or process anyway.
-- **Exit:** the generated sandbox test is green; the sandboxing guide's
-  claims match the table.
+Research first; section 2b has the PoCs and the inventory. What landed:
+
+- [x] **The classification.** Every builtin native has one row in
+  `src/turi/native_caps.c` naming the capabilities a caller must hold. Three
+  classes were added to `TuriCaps` because the builtin set never needed them:
+  `TURI_CAP_FS` (by-path file access), `TURI_CAP_PROC` (spawn, wait, exit the
+  host) and `TURI_CAP_ENV` (getenv/environ), plus `TURI_CAP_EVERY` for a
+  native that evaluates with every capability. The non-pure rows are tabled
+  in the sandboxing guide's "Capability classification" section.
+- [x] **One choke point (S-1).** `turi_env_register_native` stamps the row's
+  bits on the closure; `eval_apply_driven` refuses a native call whose env
+  lacks any of them, at both native dispatch sites, before the native runs.
+  Unclassified names -- an embedder's own natives -- carry no requirement, and
+  `turi_env_register_native_caps` states one explicitly either way.
+  `is_blocked_builtin` stays as it was: the builtins are a closed enum checked
+  where they are evaluated, and folding them into the name table would add a
+  lookup without closing anything.
+- [x] **S-2.** The seven `extern-c` overrides need `TURI_CAP_FFI` like every
+  other `extern-c`, plus the class of what they do (`exit` proc, `getenv` env,
+  `printf`/`printf_s`/`puts` io). The interpreted `printf` re-emits the
+  program's format through a checker: one conversion, of the kind matching its
+  argument, length modifiers normalised, `%n`/`%p`/`*`/`$` refused.
+- [x] **S-3.** The inline-C `snprintf` emulator uses the same checker: one
+  conversion per argument, an integer conversion for an int and `%s` only for
+  a string parameter. The over-read found alongside is clamped.
+- [x] **S-6, S-7** (section 2b): sandboxed `load` is refused in the
+  elaborator; the R7RS `eval` bridge requires every capability.
+- [x] **The PoC the survey could not build**, both routes, recorded in
+  section 2b; each is now a fixture (below).
+- [x] **`--no-proc-macros`**, the opt-out section 7 Q1 said WP2/WP3 owed:
+  refuses every `defmacro*` definition, call and `:for-macros` import with a
+  diagnostic, so no macro-time code runs. Template `defmacro` still expands.
+- [x] **The generated test.** `tests/turi/sandbox-eval.c` now (a) requires
+  each fixture to fail for its stated reason, via a captured diagnostic sink;
+  (b) walks the table: strictly sorted, every native a fresh env holds has a
+  row, and every non-zero row is refused in a sandboxed env -- a
+  conditionally registered one through a trap native, which also proves the
+  stamping; (c) checks a grant admits exactly its class, the explicit
+  registration overrides the table, and pure natives still run. Ten new
+  sandbox fixtures, `errors/macro-native-denied`, `errors/no-proc-macros`,
+  and `no-proc-macros-template-still-expands`.
+- [x] **Try Turmeric (S-4)** -- the security guide already records `CAP_ALL`
+  behind the browser sandbox as intentional; nothing in WP3 changes it.
+  Section 7 Q4 remains the author's call.
+- [x] Guides: the sandboxing guide's warning, capability list, reference table
+  and native-registration section; the security guide's T3 status and T1
+  macro subsection; the macros guide.
+- **Exit met, with one open row.** The generated sandbox test is green and
+  the sandboxing guide's claims match the table. The T3 promise is still not
+  made, because of S-5, which is filed in `docs/reported/` and indexed.
+
+**Left for others deliberately:** S-5's forged-handle half (a per-native
+handle-kind column plus a provenance set per restricted env, or tagged handles;
+the report has the measured scope and the design). Its host-exit half landed
+in the same PR as a follow-up. Also left: making the embedded R7RS env inherit
+its caller's capabilities instead of requiring all of them.
+
+**Decided by the author 2026-09-30:** the language server does **not** pass
+`--no-proc-macros` by default for now; the question stays open for
+reconsideration.
 
 ### WP4 -- Deserializers, parsers, and the fuzz harnesses (5-6 days)
 
@@ -542,7 +665,8 @@ checklist, not a gate.
      capability-denied macro env would be a better story than Rust's and is
      worth promising *then*. Until then the guide says `tur check` expands
      macros, and WP2/WP3 owe the `--no-macros` equivalent that rust-analyzer
-     ships as `procMacro.enable`.
+     ships as `procMacro.enable`. **Delivered by WP3 as `--no-proc-macros`;**
+     S-1 landed too, so what now defers the promise is S-5.
    - **`tur repl` auto-discovery gets no promise** -- it compiles and
      `dlopen`s, which is Gradle-tier. But `TUR_NO_AUTO_SPICE=1` is
      default-allow, which points against where pnpm, Bun, Deno and Neovim have

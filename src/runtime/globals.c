@@ -201,6 +201,8 @@ bool g_dump_expansion = false;
 
 /* Stage 3: --macro-caps=io -- grant the macro-time env I/O. */
 bool g_macro_caps_io = false;
+/* security-audit-plan WP3: --no-proc-macros -- refuse every defmacro*. */
+bool g_no_proc_macros = false;
 bool g_turi_stdlib_preload = false;
 
 /* F4 (cross-plan-followups): --Werror=deprecated promotes deprecation

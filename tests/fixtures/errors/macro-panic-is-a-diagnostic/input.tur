@@ -1,0 +1,8 @@
+;; security-audit-plan S-5: the macro env may not end the host process, and
+;; the host is the compiler.  A panicking defmacro* body is an expansion-time
+;; diagnostic; before, it printed "panic at" and exited `tur check` itself.
+(defmodule prog
+  (defmacro* boom []
+    (do (panic "macro went boom")
+        (int->syntax 1)))
+  (defn main [] : int (println (boom)) 0))
