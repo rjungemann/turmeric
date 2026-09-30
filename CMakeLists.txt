@@ -1366,6 +1366,18 @@ add_test(
 # a missing one is a failure with an actionable message.
 set_tests_properties(tur_spice_fetch_tests PROPERTIES
   ENVIRONMENT "TUR_REQUIRE_GIT=1")
+# tools/ci/sentry-report.py, against a stub Sentry on a loopback port.
+#
+# This carries more weight than a CI helper usually would: the fuzz and TSan
+# workflows send findings to Sentry and NOTHING else -- no public artifact, no
+# target names in the log -- so a bug here loses a memory-safety finding
+# silently, which is worse than the public issue it replaced.  Needs no tur and
+# no network.
+add_test(
+  NAME tur_sentry_report_tests
+  COMMAND bash tests/run-sentry-report.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME turi_fixture_tests
   COMMAND bash tests/run-turi.sh

@@ -2837,9 +2837,32 @@ bool pkg_fetch_all(const char *project_dir,
         ce->url  = it->url ? tur_strdup(it->url) : NULL;
         ce->ref  = it->ref ? tur_strdup(it->ref) : NULL;
 
-        /* Check if already in lock (skip if not --update) */
+        /* Build dest path: spices/<name>-<ref> or spices/<name>.  Computed
+         * BEFORE the lock check, which has to know whether it is on disk. */
+        char dest[4096];
+        if (it->ref)
+            snprintf(dest, sizeof(dest), "%s/%s-%s",
+                     spices_dir, it->name, it->ref);
+        else
+            snprintf(dest, sizeof(dest), "%s/%s", spices_dir, it->name);
+
+        /* In the lock AND actually present?  Then there is nothing to do.
+         *
+         * C-3: the stat() is the load-bearing half, and it was missing.  A
+         * lock row on its own used to satisfy this, so on the shape that
+         * matters most -- a fresh clone, tur.lock committed, spices/
+         * gitignored and therefore absent -- `tur fetch` printed
+         * "spice: using cached '<name>' @ <sha>" and downloaded NOTHING,
+         * leaving the build to fail afterwards with "module not found".
+         * Measured against 82ccdc555 before the fix.
+         *
+         * It also meant the recorded :sha256 and :resolved were never
+         * consulted on the one path where a comparison is possible. They were
+         * printed, never checked. */
+        struct stat dest_st;
         PkgLockEntry *le = pkg_lock_find(lock, it->name, false);
-        if (le && !update) {
+        bool dest_present = (stat(dest, &dest_st) == 0 && S_ISDIR(dest_st.st_mode));
+        if (le && !update && dest_present) {
             fprintf(stderr, "spice: using cached '%s' @ %s\n",
                     it->name, le->resolved ? le->resolved : le->ref);
             free(it->name); free(it->url); free(it->ref);
@@ -2847,13 +2870,14 @@ bool pkg_fetch_all(const char *project_dir,
             continue;
         }
 
-        /* Build dest path: spices/<name>-<ref> or spices/<name> */
-        char dest[4096];
-        if (it->ref)
-            snprintf(dest, sizeof(dest), "%s/%s-%s",
-                     spices_dir, it->name, it->ref);
-        else
-            snprintf(dest, sizeof(dest), "%s/%s", spices_dir, it->name);
+        /* C-3: what the lock says this tree hashed to last time, captured
+         * before the fetch below overwrites it.  Only a hash THIS algorithm
+         * produced can be compared -- an older tur wrote a `tar -c | sha256sum`
+         * digest or the git-SHA fallback, and pkg_hash_comparable rejects
+         * those rather than reporting a format change as tampering.  NULL
+         * under --update: re-pinning is the user asking for the new content. */
+        char *prev_sha = (le && !update && pkg_hash_comparable(le->sha256))
+                       ? tur_strdup(le->sha256) : NULL;
 
         fprintf(stderr, "spice: fetching '%s' from %s (ref: %s) ...\n",
                 it->name, it->url, it->ref ? it->ref : "(default)");
@@ -2876,6 +2900,7 @@ bool pkg_fetch_all(const char *project_dir,
                 fprintf(stderr, "spice: failed to fetch '%s'\n", it->name);
                 ok = false;
             }
+            free(prev_sha);
             free(it->name); free(it->url); free(it->ref);
             free(it->path); free(it->subdir); free(it->from);
             continue;
@@ -2894,12 +2919,47 @@ bool pkg_fetch_all(const char *project_dir,
              * the check is skipped rather than failing against a value this
              * algorithm never produced. */
             char dir_sha[PKG_HASH_MAX];
-            free(le->sha256);
-            if (pkg_hash_dir(dest, dir_sha))
-                le->sha256 = tur_strdup(dir_sha);
-            else
-                le->sha256 = tur_strdup(resolved); /* fallback: git SHA */
+            bool hashed = pkg_hash_dir(dest, dir_sha);
+
+            /* C-3: COMPARE, do not merely record.
+             *
+             * This is the one moment upstream drift is detectable: the lock
+             * says what this tree hashed to when it was pinned, and a
+             * freshly-fetched tree is right here to check it against.  The
+             * old code overwrote the recorded hash unconditionally with
+             * whatever had just been downloaded, so it could only ever catch
+             * a LOCAL edit made after a fetch -- never the upstream moving
+             * under a branch-shaped :ref, which is the case the consuming
+             * guide warns about.
+             *
+             * `tur fetch --update` is the escape hatch and the diagnostic says
+             * so: taking new content is a decision the consumer makes on
+             * purpose, not a default. */
+            if (prev_sha && hashed && strcmp(dir_sha, prev_sha) != 0) {
+                fprintf(stderr,
+                    "spice: integrity check FAILED for '%s'\n"
+                    "  tur.lock pinned: %s\n"
+                    "  just fetched:    %s\n"
+                    "  The content at %s (ref: %s) is not what this lockfile\n"
+                    "  recorded. A branch-shaped :ref moves under you; a tag or\n"
+                    "  a commit does not. If the change is expected, take it\n"
+                    "  deliberately:\n"
+                    "      tur fetch --update\n",
+                    it->name, prev_sha, dir_sha,
+                    it->url, it->ref ? it->ref : "(default)");
+                ok = false;
+                /* The lock row is left alone on purpose.  Rewriting the hash
+                 * here would make the very next command agree with the drift
+                 * and report nothing -- the failure would last exactly one
+                 * run, which is the same as not having it. */
+            } else {
+                free(le->sha256);
+                if (hashed) le->sha256 = tur_strdup(dir_sha);
+                else        le->sha256 = tur_strdup(resolved); /* git SHA */
+            }
+            free(prev_sha);
         } else {
+            free(prev_sha);
             free(resolved);
         }
 
@@ -4396,6 +4456,60 @@ bool pkg_cmake_build(const char *project_dir,
 
     pkg_cmake_manifest_free(&cmkman);
     return true;
+}
+
+/* C-3: verify every PRESENT, lock-pinned spice tree against its recorded hash.
+ *
+ * Absent directories are deliberately not an error here -- the caller decides
+ * whether a missing dep means "fetch it" (tur run) or "you have not fetched
+ * yet" (tur build) -- and a hash an older tur wrote is skipped rather than
+ * reported as tampering, which is what pkg_hash_comparable is for.
+ *
+ * This used to be open-coded inside `tur run` and existed NOWHERE else, so
+ * `tur build` -- the command that actually compiles the dependency's code --
+ * never checked anything. One copy, three callers (run, build, audit). */
+bool pkg_verify_locked_spices(const char *project_dir,
+                              const PkgManifest *manifest,
+                              const PkgLockFile *lock,
+                              const char *cmd) {
+    if (!manifest || !lock) return true;
+
+    char spices_dir[4096];
+    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", project_dir);
+
+    bool ok = true;
+    for (int i = 0; i < manifest->n_spices; i++) {
+        const PkgSpice *s = &manifest->spices[i];
+        if (s->path) continue;                                  /* local source */
+        if (pkg_is_workspace_member(project_dir, s->name)) continue;
+
+        char dep_dir[4096];
+        if (s->ref)
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s", spices_dir, s->name, s->ref);
+        else
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
+
+        struct stat st;
+        if (stat(dep_dir, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        PkgLockEntry *le = pkg_lock_find((PkgLockFile *)lock, s->name, false);
+        if (!le || !pkg_hash_comparable(le->sha256)) continue;
+
+        char actual[PKG_HASH_MAX];
+        if (!pkg_hash_dir(dep_dir, actual)) continue;
+        if (strcmp(actual, le->sha256) == 0) continue;
+
+        fprintf(stderr,
+            "%s: integrity check FAILED for spice '%s'\n"
+            "  tur.lock pinned: %s\n"
+            "  on disk:         %s\n"
+            "  %s has changed since it was fetched. If you edited it, that is\n"
+            "  why; otherwise re-download it:\n"
+            "      tur fetch --update\n",
+            cmd, s->name, le->sha256, actual, dep_dir);
+        ok = false;
+    }
+    return ok;
 }
 
 bool pkg_cmake_verify_lock(const char *project_dir,
@@ -6565,8 +6679,29 @@ int cmd_pkg_audit(int argc, char **argv) {
         printf("\nSome origins are not pinned in tur.lock. Run `tur fetch` so "
                "each resolves to a recorded commit and hash.\n");
 
-    printf("\nThis lists origins; it verifies nothing. No signature or key "
-           "checking exists yet.\n");
+    /* C-3: audit VERIFIES now.  It used to close with "this lists origins; it
+     * verifies nothing", which the consuming guide reproduced -- so the one
+     * command named "audit" was the one that checked least.  It re-hashes
+     * every spice tree that is present and pinned, and compares. */
+    printf("\nIntegrity:\n");
+    bool spices_ok = have_lock
+                   ? pkg_verify_locked_spices(".", &m, &lock, "tur audit")
+                   : true;
+    bool cmake_ok  = have_lock ? pkg_cmake_verify_lock(".", &lock) : true;
+    if (!have_lock) {
+        printf("  (no tur.lock -- nothing to verify against)\n");
+    } else if (spices_ok && cmake_ok) {
+        printf("  every present, pinned dependency matches tur.lock.\n");
+    } else {
+        printf("  MISMATCH -- see above.\n");
+    }
+
+    printf("\nWhat this does and does not prove: the hashes above say the trees\n"
+           "on disk are the ones tur.lock recorded when they were fetched. They\n"
+           "are trust-on-first-use, not a signature -- nothing here authenticates\n"
+           "an origin, and `tur.lock` pins content rather than checking out a\n"
+           "recorded commit (:ref is what a clone tracks). Prefer a tag over a\n"
+           "branch for :ref, and read a new spice before adding it.\n");
 
     pkg_lock_free(&lock);
     pkg_manifest_free(&m);

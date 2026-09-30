@@ -315,9 +315,9 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
       <div class="step-title">Pick your install</div>
 
       <div class="install-tabs" role="tablist" aria-label="Install method">
-        <button class="install-tab active" id="tab-homebrew" role="tab"
-                aria-selected="true" aria-controls="panel-homebrew"
-                data-method="homebrew">Homebrew</button>
+        <button class="install-tab active" id="tab-installer" role="tab"
+                aria-selected="true" aria-controls="panel-installer"
+                data-method="installer">Installer</button>
         <button class="install-tab" id="tab-docker" role="tab"
                 aria-selected="false" aria-controls="panel-docker"
                 data-method="docker">Docker</button>
@@ -326,10 +326,11 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
                 data-method="codespaces">Codespaces</button>
       </div>
 
-      <div class="install-panel" id="panel-homebrew" role="tabpanel"
-           aria-labelledby="tab-homebrew" data-method="homebrew">
+      <div class="install-panel" id="panel-installer" role="tabpanel"
+           aria-labelledby="tab-installer" data-method="installer">
         <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
-        <p class="step-desc">Installs <code>tur</code> via <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a> on macOS. The formula is <code>--HEAD</code>-only, so this builds the current <code>main</code> and verifies no checksum &mdash; for a pinned, checksum-verified install use the version manager below or a release tarball. On Linux, grab a prebuilt binary from the <a href="https://github.com/rjungemann/turmeric/releases" style="color:var(--gold);">releases page</a> or <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">build from source</a>. To install and switch between multiple releases per-shell, use the <a href="https://github.com/rjungemann/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>).</p>
+        <p class="step-desc">macOS and Linux. Installs the <a href="https://github.com/rjungemann/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>) and then the latest <strong>release</strong>, whose tarball is checked against that release&rsquo;s <code>sha256sums.txt</code> before it is unpacked &mdash; and the install <strong>stops</strong> rather than continuing if that check cannot be made. Release assets also carry <a href="https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations" style="color:var(--gold);">build provenance</a>, so you can confirm which workflow run produced the bytes you have. On a platform with no prebuilt binary it builds the same release tag from source instead. Afterwards, <code>tvm install</code> and <code>tvm use</code> switch between releases per-shell.</p>
+        <p class="step-desc">Want to track <code>main</code> instead? <code>brew install --HEAD rjungemann/turmeric/turmeric</code> builds the current <code>main</code> and verifies no checksum &mdash; useful for following development, not for an ordinary install.</p>
       </div>
 
       <div class="install-panel" id="panel-docker" role="tabpanel"

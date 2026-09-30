@@ -14,20 +14,40 @@ Turmeric exists to explore the intersection of Lisp expressiveness and systems-l
 
 ## Install
 
-**macOS (via Homebrew):**
+**macOS and Linux:**
 
 ```sh
 curl -sSf https://turmeric-lang.com/install | sh
 ```
 
-This installs the `tur` compiler via the Homebrew formula in this repo. The
-formula is **`--HEAD`-only**, so this builds whatever is on `main` at that
-moment and verifies no checksum. For a pinned, checksum-verified install use
-the version manager (`tvm`) below or a release tarball -- see the
+This installs the version manager (`tvm`) and then the latest **release**,
+whose tarball is verified against that release's `sha256sums.txt` before it is
+unpacked -- and the install **fails** rather than continuing if that check
+cannot be made. Release assets also carry
+[build provenance](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations),
+so you can confirm which workflow run built the bytes you have:
+
+```sh
+gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+```
+
+On a platform with no prebuilt binary, the installer builds that same release
+tag from source instead (needs `cmake` and a C compiler).
+
+**Building `main` instead (unverified, opt-in):**
+
+```sh
+brew tap rjungemann/turmeric https://github.com/rjungemann/turmeric
+brew install --HEAD rjungemann/turmeric/turmeric
+```
+
+The Homebrew formula is **`--HEAD`-only**: it builds whatever is on `main` at
+that moment and verifies no checksum. That is useful for tracking development
+and is not what you want for an ordinary install. See the
 [installation guide](docs/guides/releases-and-installation-guide.md) and
 [`SECURITY.md`](SECURITY.md).
 
-**Linux / Docker:**
+**Docker:**
 
 ```sh
 docker build -t turmeric .

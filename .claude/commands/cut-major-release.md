@@ -195,6 +195,36 @@ Then create the annotated tag pointing at this new commit:
 git tag -a "v<NEW>" -m "Release v<NEW>"
 ```
 
+The tag is **annotated, not signed** (`-a`, not `-s`). That is a recorded
+decision, not an oversight -- C-4 in
+[docs/upcoming/security-audit-plan.md](../../docs/upcoming/security-audit-plan.md):
+
+- What a consumer downloads is a **release asset**, and those carry
+  [build provenance](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
+  as of WP7 -- signed through Sigstore with a short-lived certificate minted
+  from the release job's OIDC token, binding each asset to the workflow, repo,
+  commit and run that built it. `gh attestation verify <asset> --repo
+  rjungemann/turmeric` checks it. That is the signature that protects users,
+  and it needs no key anyone has to hold or rotate.
+- A signed **tag** protects something narrower: it proves who cut the release,
+  to someone reading the git history. It needs a long-lived GPG or SSH key on
+  the release machine, and a key that is lost, leaked, or simply not present
+  turns every future `cut-*-release` into a hard failure at this step.
+
+If you do want signed tags, set up a signing key first and verify it works
+*before* changing anything here:
+
+```sh
+git config --global user.signingkey <key-id>   # or a path, for SSH signing
+git config --global gpg.format ssh             # SSH signing only
+echo test | git tag -s -m test tur-signing-probe && git tag -v tur-signing-probe
+git tag -d tur-signing-probe
+```
+
+Only once that probe passes, change the `-a` above to `-s`. Do not switch it
+speculatively: an unsigned release is recoverable, a cut that dies partway
+through is the awkward state this file's step ordering exists to avoid.
+
 The tag exists locally only; nothing is pushed yet. If the web deploy
 in step 7 fails, you can delete the local tag and try again without
 having published a broken release.

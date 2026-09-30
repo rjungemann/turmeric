@@ -24,9 +24,10 @@ concurrency:
   group: tsan
   cancel-in-progress: false
 
+# `issues: write` is gone with the `gh issue create` step it existed for:
+# findings go to Sentry now (section 7 question 8 of the security audit plan).
 permissions:
   contents: read
-  issues: write
 
 jobs:
   tsan:
@@ -34,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install dependencies
         run: |
@@ -69,9 +70,47 @@ jobs:
           grep -E '^FAIL ' tsan.log | sort -u > tsan-failures.txt || true
           exit 0
 
-      - name: Upload the log
+      # A race report goes to Sentry, not to a public issue.
+      #
+      # A TSan finding is a concurrency defect in the runtime with a stack
+      # trace attached, which is a thing to triage before it is a thing to
+      # publish. It also repeats: the same race surfaces night after night
+      # until it is fixed, and `gh issue create` opened a fresh issue each
+      # time. Sentry groups on the failing fixtures instead, so a standing race
+      # is one issue with a count. Section 7 question 8 of
+      # docs/upcoming/security-audit-plan.md.
+      - name: Report the findings to Sentry
+        id: report
         if: steps.run.outputs.rc != '0'
-        uses: actions/upload-artifact@v4
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          RC: ${{ steps.run.outputs.rc }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Group on the SET of failing fixtures, not on the run or the date --
+          # the same standing race must land in the same Sentry issue every
+          # night. Sorted and hashed so the order the harness happened to emit
+          # them in cannot fork the group.
+          sig="$(sort -u tsan-failures.txt 2>/dev/null | sha256sum | cut -c1-16)"
+          rc=0
+          python3 tools/ci/sentry-report.py \
+            --kind tsan \
+            --target tsan \
+            --title "TSan: nightly run failed (exit $RC)" \
+            --fingerprint tsan "$sig" \
+            --tag exit_code="$RC" \
+            --run-url "$RUN_URL" \
+            --note "An exit 66 is a TSan report; the race is in the fixture's stderr in the attached log. Reproduce locally with a non-ASan tur: TUR=<it> timeout 720 bash tests/run-tsan.sh (that script's header has the commands). A fixture TSan itself cannot run goes in its EXCLUDE list with the reason beside it." \
+            --log tsan-failures.txt \
+            --attach tsan.log || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Never lose a finding: an unconfigured or unreachable Sentry falls back
+      # to the artifact, loudly.
+      - name: Fallback -- upload the log because Sentry did not take it
+        if: steps.run.outputs.rc != '0' && steps.report.outputs.rc != '0'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tsan-${{ github.run_id }}
           path: |
@@ -79,34 +118,26 @@ jobs:
             tsan-failures.txt
           retention-days: 30
 
-      # The `tsan` label is created rather than assumed, and a failed label
-      # never loses the issue -- fuzz.yml learned both the hard way.
-      - name: Open an issue for the findings
+      - name: Fail on findings
         if: steps.run.outputs.rc != '0'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT_RC: ${{ steps.report.outputs.rc }}
           RC: ${{ steps.run.outputs.rc }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh label create tsan --force --color 5319E7 \
-            --description "Nightly ThreadSanitizer finding" || true
-          FAILS="$(head -40 tsan-failures.txt)"
-          BODY="$(cat <<EOF
-          The nightly ThreadSanitizer run failed (exit $RC).
-
-          - **Run:** $RUN_URL (log attached as the \`tsan-${{ github.run_id }}\` artifact)
-
-          \`\`\`
-          $FAILS
-          \`\`\`
-
-          An \`exit 66\` is a TSan report: the race is in the fixture's stderr in
-          the log.  To reproduce locally, build a non-ASan \`tur\` and run
-          \`TUR=<it> timeout 720 bash tests/run-tsan.sh\` (the header of that
-          script has the commands).  A fixture TSan itself cannot run goes in
-          its \`EXCLUDE\` list with the reason beside it.
-          EOF
-          )"
-          TITLE="TSan: nightly run failed ($(date -u +%Y-%m-%d))"
-          gh issue create --title "$TITLE" --label tsan --body "$BODY" ||
-            gh issue create --title "$TITLE" --body "$BODY"
+          {
+            echo "## ThreadSanitizer run failed (exit \`$RC\`)"
+            echo
+            if [ "$REPORT_RC" = "0" ]; then
+              echo "The failing fixtures and the full log were sent to Sentry."
+            else
+              echo "**The findings could not be sent to Sentry!** The log is attached"
+              echo "to this run instead, which is PUBLIC. Set the \`SENTRY_DSN\`"
+              echo "secret, or triage and delete that artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$REPORT_RC" != "0" ]; then
+            echo "::error::TSan found something, and Sentry did not take it (rc=$REPORT_RC) -- see the PUBLIC fallback artifact"
+          else
+            echo "::error::TSan found something -- details are in Sentry"
+          fi
+          exit 1
