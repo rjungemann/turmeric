@@ -20,11 +20,19 @@ REPL="${1:-./build/tur}"
 PASS=0
 FAIL=0
 
-# Pipe stdin to the REPL; stdout+stderr, ANSI stripped.  No auto-spice: the
-# repo root is not a spice, but keep the session hermetic anyway.
+# The interpreter keeps its closures for the process lifetime by design, so a
+# sanitized (Debug) `tur repl` can exit non-zero on a LeakSanitizer report --
+# `(display #\()` under #lang r7rs does -- and pipefail would then abort this
+# script on a finding that is not what it tests.  Same default as
+# repl-lang-r7rs.sh and the other turi harnesses (CLAUDE.md, leak policy).
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+
+# Pipe stdin to the REPL; stdout+stderr, ANSI stripped (the same sed as
+# repl-smoke.sh; no OSC 133 markers are written over a pipe --
+# repl-host-integration.sh asserts that).  No auto-spice: the repo root is not
+# a spice, but keep the session hermetic anyway.
 repl_out() {
-    TUR_NO_AUTO_SPICE=1 "$REPL" repl 2>&1 | sed 's/\x1b\[[0-9;]*m//g' \
-        | sed 's/\x1b\]133;[A-Z0-9;]*\x07//g'
+    TUR_NO_AUTO_SPICE=1 "$REPL" repl 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
 }
 
 has() {

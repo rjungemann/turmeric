@@ -573,6 +573,10 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
     }
 
 cleanup:
+    /* symtab_init callocs the bucket array; it was never freed here, and
+     * LeakSanitizer reported it whenever no stale stack word happened to
+     * still point at it (tur_repl_smoke's `:type` checks, Debug build). */
+    symtab_free(&st);
     arena_free(&arena);
     buf_free(&combined);
 }
@@ -676,6 +680,7 @@ static void cmd_expand(TuriEnv *env, const char *expr_src) {
     }
 
 cleanup_noses:
+    symtab_free(&st);   /* same missing free as cmd_type's */
     arena_free(&arena);
     buf_free(&combined);
 }
