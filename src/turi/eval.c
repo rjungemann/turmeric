@@ -13111,9 +13111,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 return r;
             }
             case TY_FLOAT32: {
-                float f; uint32_t u = (uint32_t)bits;
-                memcpy(&f, &u, sizeof f);
-                return turi_float((double)f);
+                /* The interpreter holds EVERY float kind as a double
+                 * (turi_float), so `yield` boxed the double's bits.  Reading
+                 * the low 32 as a float32 bit pattern printed 0 for 2.5. */
+                double d;
+                memcpy(&d, &bits, sizeof d);
+                return turi_float((double)(float)d);
             }
             case TY_BOOL:
                 return turi_bool(bits != 0);

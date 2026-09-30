@@ -121,6 +121,14 @@ or int/float divergence, so starting with `7` produces a misleading "looks
 fine" result and forces a second round with `7.1` to actually see the bug.
 Skip the double-take: lead with `7.1`.
 
+A float probe only shows the shapes someone thought to write. The mechanism
+check does not depend on that: `python3 tests/check-emitted-float-conversions.py
+FILE.tur` (ctest `tur_emitted_float_conversions`, and inside both source
+fuzzers) reports every float<->int VALUE conversion in emitted C. The corpus
+is at zero, so any finding is new. If you make the emitter convert on
+purpose, spell it `TUR_AS(T, x)`; everything else it reports is a bug. See
+[value-representations-guide](docs/guides/value-representations-guide.md#detecting-the-mechanism-not-the-shape).
+
 ## Locating Referenced Files -- STRICT RULE
 
 When asked to act on a doc, plan, or file by path, **look before concluding it

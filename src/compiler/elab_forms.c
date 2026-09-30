@@ -690,6 +690,7 @@ static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b) {
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 if ((r = any_find_sole_drop_use(e->as.let_.bindings[i].init, b))) return r;
             return any_find_sole_drop_use(e->as.let_.body, b);
+        case EX_REINTERPRET: return any_find_sole_drop_use(e->as.reinterpret_.expr, b);
         case EX_ASCRIBE: return any_find_sole_drop_use(e->as.ascribe_.inner, b);
         case EX_RETURN:  return any_find_sole_drop_use(e->as.return_.value, b);
         default: return NULL;

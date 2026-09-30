@@ -319,10 +319,15 @@ static bool inline_c_emit_block_deduped(Buf *buf, InlineCDedup *d,
     bool any_emitted = false;
     for (uint32_t i = 0; i < n; i++) {
         if (inline_c_dedup_seen(d, p + starts[i], lens[i])) continue;
+        /* Hand-written file-scope C: bracketed (once per block) for the
+         * emitted-C checks (tests/check-emitted-float-conversions.py), which
+         * police emitter decisions, not code an author wrote on purpose. */
+        if (!any_emitted) buf_puts(buf, "/* tur:inline-c-begin */\n");
         buf_write(buf, p + starts[i], lens[i]);
         buf_putc(buf, '\n');
         any_emitted = true;
     }
+    if (any_emitted) buf_puts(buf, "/* tur:inline-c-end */\n");
     free(starts);
     free(lens);
     return any_emitted;
@@ -824,6 +829,14 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * understands; the reserved tag makes TUR_TAG trap instead (see the
      * TUR_ANY_UNRESOLVED_TAG note in emit_closure_fat_runtime). */
     if (r.kind == TY_TYVAR) return -1;   /* TUR_ANY_UNRESOLVED_TAG */
+    /* A float32 rides an `any` as a FLOAT: its value promoted to double
+     * (exact), under the float tag -- which is how the interpreter holds it
+     * (one float kind), so `type-of`, `is?`, `cast` and the dynamic operators
+     * agree on both back ends.  The bare TY_FLOAT32 tag was stored as
+     * `(int64_t)(intptr_t)f` -- a VALUE conversion, 2.5 -> 2 -- and named
+     * nothing `type-of` knew ("unknown").  Found by
+     * tests/check-emitted-float-conversions.py on its first corpus run. */
+    if (r.kind == TY_FLOAT32 || r.kind == TY_FLOAT64) return (int64_t)TY_FLOAT;
     AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
     bool named = (r.kind == TY_ADT && r.as.adt_.def) || app_def != NULL;
     /* any-fn-tag-does-not-discriminate-signatures: a FUNCTION type is interned
@@ -3180,6 +3193,7 @@ static const Binding *cm_find_g_binding(const Expr *e, const Binding *lensb) {
             return NULL;
         }
         case EX_RETURN:  return cm_find_g_binding(e->as.return_.value, lensb);
+        case EX_REINTERPRET: return cm_find_g_binding(e->as.reinterpret_.expr, lensb);
         case EX_ASCRIBE: return cm_find_g_binding(e->as.ascribe_.inner, lensb);
         case EX_MATCH: {
             const Binding *r = cm_find_g_binding(e->as.match_.scrutinee, lensb);
@@ -3229,6 +3243,8 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
         }
         case EX_ASCRIBE:
             return emit_find_passed_spec_closure(e->as.ascribe_.inner, bindings, n_bindings, arena);
+        case EX_REINTERPRET:
+            return emit_find_passed_spec_closure(e->as.reinterpret_.expr, bindings, n_bindings, arena);
         case EX_POLY_WRAP:
             return emit_find_passed_spec_closure(e->as.poly_wrap_.inner, bindings, n_bindings, arena);
         case EX_FN_TO_FAT:
@@ -5757,10 +5773,22 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * `(P G)` binding a `tur_adt_P__int *`
                  * (phantom-parametric-ctor-inferred-from-sibling). */
                 const Expr *ae = call->as.call_.args[i];
-                while (ae && ae->kind == EX_REINTERPRET && ae->as.reinterpret_.expr)
+                /* ...and never a reinterpret typed as the enclosing generic's
+                 * own tyvar: that value IS an `A`, and the carrier `int` under
+                 * it is the wrapped call's ABI, not its type.  Pinning from it
+                 * minted a by-value `(Option int)` spec in a carrier base
+                 * whose sibling calls stay on the carrier. */
+                while (ae && ae->kind == EX_REINTERPRET && ae->as.reinterpret_.expr &&
+                       ae->as.reinterpret_.target_kind != TY_TYVAR)
                     ae = ae->as.reinterpret_.expr;
                 if (!ae) continue;
                 Type at = ae->type;
+                /* The tyvar reinterpret pins what `A` IS in the clone being
+                 * scanned: concrete inside a spec (`int` in `over`'s), still a
+                 * tyvar in a carrier base -- which the checks below skip. */
+                if (ae->kind == EX_REINTERPRET &&
+                    ae->as.reinterpret_.target_kind == TY_TYVAR)
+                    at = emit_resolve_type(ctx, ae->type);
                 if (at.kind == TY_UNKNOWN || at.kind == TY_TYVAR ||
                     at.kind == TY_NIL || at.kind == TY_NEVER) continue;
                 if (emit_abi_type_has_any_tyvar(&at)) continue;
@@ -5892,6 +5920,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     break;
                 }
             }
+            /* generic-call-result-in-generic-collapses-to-int: a bare-tyvar
+             * parameter bound to a type variable the CURRENT clone cannot
+             * resolve -- the enclosing generic's own `T` while its carrier base
+             * is scanned (`(pair (schan-recv-value c) ...)` in `schan-recv`) --
+             * is the carrier word there.  Spell it as the carrier; a spec
+             * minted for another parameter (`B -> (SChan R)`) must not carry
+             * an unresolved tyvar into its signature (the R3 routing gate). */
+            if (arg_types[i].kind == TY_TYVAR &&
+                emit_resolve_type(ctx, arg_types[i]).kind == TY_TYVAR)
+                arg_types[i] = emit_type_from_kind(TY_INT);
             if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
                 abi_changes = true;
             } else if (!type_eq(generic_arg, arg_types[i]) &&
@@ -7699,6 +7737,16 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         }
         case EX_REINTERPRET:
+            /* A reinterpret typed as the enclosing generic's own tyvar
+             * (elab_call.c, generic-call-result-in-generic-collapses-to-int)
+             * says nothing about the call's instantiation -- it is resolved
+             * per clone at emit.  Scan the call exactly as the bare call it
+             * wraps; passing `A` as a result override below would register
+             * the call against an unresolved tyvar. */
+            if (e->as.reinterpret_.target_kind == TY_TYVAR) {
+                emit_abi_scan_expr(ctx, e->as.reinterpret_.expr, items, n_items);
+                break;
+            }
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
                 const Expr *rc = e->as.reinterpret_.expr;
                 uint32_t before = ctx->n_specialized_calls;
@@ -10386,6 +10434,11 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * answer somewhere downstream.  Every other tag is a constant, so the
      * test folds away (and C allows the call in the unevaluated arm of a
      * constant initializer). */
+    /* A float<->integer conversion the program asked for (`as`).  One
+     * spelling, defined here, so the emitted-conversion check can separate it
+     * from an accidental value conversion (tests/check-emitted-float-
+     * conversions.py). */
+    buf_puts(out, "#define TUR_AS(T, x)    ((T)(x))\n");
     buf_puts(out, "#define TUR_ANY_UNRESOLVED_TAG (-1)\n");
     buf_puts(out, "static inline int64_t tur_any_unresolved_tag(void) {\n"
                   "    fprintf(stderr, \"tur: internal error: a value was widened to `any` "
@@ -11844,7 +11897,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "static inline double __tur_dyn_f(tur_tagged_t __v) {\n"
         "    if (TUR_GETTAG(__v) == TUR_DYNTAG_FLOAT)\n"
         "        return ((union { int64_t i; double d; }){.i = TUR_UNTAG(__v)}).d;\n"
-        "    return (double)TUR_UNTAG(__v);\n"
+        "    return TUR_AS(double, TUR_UNTAG(__v));   /* int payload widened on purpose */\n"
         "}\n");
     buf_puts(out,
         "static inline tur_tagged_t __tur_dyn_mkf(double __d) {\n"
@@ -16504,9 +16557,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        pthread_mutex_destroy(&ch->rc_mu); free(ch);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
+    /* emitted-c-indirect-calls-are-not-type-exact: session-spawn takes
+     * `^fat f : (fn [] nil)`, so slot 0 is a `void (*)(void *)` -- a nil
+     * thunk's typed fatshim or a lifted closure body.  Calling it as
+     * `int64_t (*)(void *)` read a return register nothing wrote. */
     buf_puts(out, "static void *tur_session_thread_wrapper(void *arg) {\n");
     buf_puts(out, "    int64_t *fat = (int64_t *)arg;\n");
-    buf_puts(out, "    int64_t (*thunk)(void *) = (int64_t (*)(void *))(intptr_t)fat[0];\n");
+    buf_puts(out, "    void (*thunk)(void *) = (void (*)(void *))(intptr_t)fat[0];\n");
     buf_puts(out, "    thunk(arg);\n");
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n");
@@ -16854,6 +16911,7 @@ static const Binding *vl_composed_adapter_binding(const Expr *body) {
     for (;;) {
         if (!e) return NULL;
         switch (e->kind) {
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr; continue;
             case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
             case EX_RETURN:  e = e->as.return_.value;  continue;
             case EX_LET:
@@ -16954,6 +17012,9 @@ static void emit_mark_byval_fn_field_closures(const Expr *e) {
         case EX_RETURN:
             emit_mark_byval_fn_field_closures(e->as.return_.value);
             return;
+        case EX_REINTERPRET:
+            emit_mark_byval_fn_field_closures(e->as.reinterpret_.expr);
+            break;
         case EX_ASCRIBE:
             emit_mark_byval_fn_field_closures(e->as.ascribe_.inner);
             return;
@@ -20731,6 +20792,7 @@ static int emit_program_job(void *p) {
     EmitProgArgs *a = (EmitProgArgs *)p;
     emission_enter();
     int rc = emit_program_inner(a->out, a->program);
+    emit_write_inline_c_fns(a->out);
     emission_leave();
     return rc;
 }

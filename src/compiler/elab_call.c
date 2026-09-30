@@ -548,6 +548,7 @@ static bool saffron_operand_has_call(const Expr *op) {
                 return false;
             }
             return true;
+        case EX_REINTERPRET:      return saffron_operand_has_call(op->as.reinterpret_.expr);
         case EX_ASCRIBE:      return saffron_operand_has_call(op->as.ascribe_.inner);
         case EX_UNION_INJECT: return saffron_operand_has_call(op->as.union_inject_.value);
         case EX_ANY_CAST:     return saffron_operand_has_call(op->as.any_cast_.value);
@@ -5431,6 +5432,28 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                      * nullary constructors already are.  Only when a field
                      * fixed a parameter to a concrete type: with nothing
                      * concrete there is nothing to say, and the bare ADT stays. */
+                    /* generic-ctor-over-sig-tyvar-erased: every parameter
+                     * bound, some to the ENCLOSING signature's own type
+                     * variable -- `(Box x)` with `x : A` inside
+                     * `(defn f [A] ...)`.  That is as determined as a concrete
+                     * argument: the value is `(Box A)`, and each clone knows
+                     * what `A` is.  The bare-ADT fallback erased it, so in the
+                     * float spec `(.val (Box x))` read the erased layout's
+                     * int64 field and returned it by VALUE conversion (7.1's
+                     * bits printed as 4.61968e+18).  An unbound or foreign
+                     * tyvar still falls back, as before. */
+                    if (!all_bound && !e->in_construct_template) {
+                        bool sig_bound = true;
+                        for (uint8_t pi = 0; pi < ntp && sig_bound; pi++) {
+                            if (!have[pi] || targs[pi].kind == TY_UNKNOWN)
+                                sig_bound = false;
+                            else if (targs[pi].kind == TY_TYVAR &&
+                                     !(targs[pi].as.tyvar_.name &&
+                                       ng_tyvar_in_sig(e, targs[pi].as.tyvar_.name)))
+                                sig_bound = false;
+                        }
+                        if (sig_bound) all_bound = true;
+                    }
                     bool any_concrete = false;
                     for (uint8_t pi = 0; pi < ntp; pi++)
                         if (have[pi] && targs[pi].kind != TY_TYVAR &&
@@ -10332,6 +10355,34 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         Expr *asc = expr_new(e->arena, EX_ASCRIBE, call_result_type, call->span);
         asc->as.ascribe_.inner = out;
         return asc;
+    }
+    if (wrap_generic_result && result_type.kind == TY_TYVAR &&
+        result_type.as.tyvar_.name &&
+        ng_tyvar_in_sig(e, result_type.as.tyvar_.name)) {
+        /* generic-call-result-in-generic-collapses-to-int: the result is the
+         * ENCLOSING signature's own type variable -- `(vec-get v 0)` inside
+         * `(defn first-of [A] [v : (Vec A)] : A ...)`.  The size-keyed wrap
+         * below cannot size a tyvar and silently dropped itself, so the call
+         * stayed typed `int` in EVERY position, and everything downstream
+         * inferred from that `int`: `(Box (vec-get v 0))` minted `Box__int`
+         * in the float spec (7.1's bits printed as 4.61968e+18), `(some ...)`
+         * matched as `Option__int` (invalid C), and a bare tail returned the
+         * carrier word into a `double` return by VALUE conversion.
+         *
+         * Wrap it in the reinterpret typed `A` that the `let` position has
+         * used since let-bound-generic-call-result-in-generic-truncates
+         * (`let_bridge_sig_tyvar_result`): the call node keeps its carrier
+         * `int`, the value it hands every consumer is typed `A`, and emit
+         * lowers that per clone (the EX_REINTERPRET tyvar arm: identity in
+         * the base, carrier->concrete in a spec when the call returned the
+         * carrier word).  One decision at the producer instead of one per
+         * consumer. */
+        Expr *r = expr_new(e->arena, EX_REINTERPRET, result_type, call->span);
+        r->as.reinterpret_.expr = out;
+        r->as.reinterpret_.source_kind = TY_INT;
+        r->as.reinterpret_.target_kind = TY_TYVAR;
+        r->as.reinterpret_.retain = false;
+        return r;
     }
     if (wrap_generic_result) {
         return call_wrap_reinterpret_owning(

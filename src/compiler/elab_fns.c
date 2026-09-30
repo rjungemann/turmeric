@@ -6866,6 +6866,8 @@ static unsigned fn_tail_fn_leaf_kinds(const Expr *x, const FnTailAlias *env) {
             FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
             return fn_tail_fn_leaf_kinds(x->as.let_.body, env_new);
         }
+        case EX_REINTERPRET:
+            return fn_tail_fn_leaf_kinds(x->as.reinterpret_.expr, env);
         case EX_ASCRIBE:
             return fn_tail_fn_leaf_kinds(x->as.ascribe_.inner, env);
         case EX_MATCH: {
@@ -9811,6 +9813,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * so a GADT match arm can distinguish a quantified-`a` result from a skolem
      * that escapes.  Accumulated on top of any enclosing function's set. */
     uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
+    bool saved_in_construct_template = e->in_construct_template;
+    e->in_construct_template = defn_has_construct_attr;
     for (uint32_t i = 0; i < n_params; i++) {
         if (param_poly_types[i]) fn_collect_sig_tyvars(e, param_poly_types[i]);
         else                     fn_collect_sig_tyvars(e, &params[i]->type);
@@ -10008,6 +10012,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->in_construct_template = saved_in_construct_template;
                 e->expected_type = prev_body_expected;
                 e->current_fn_name = NULL;
                 e->cur_hkt_constraint_class = saved_cur_hkt_class;
@@ -10030,6 +10035,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->in_construct_template = saved_in_construct_template;
                 e->expected_type = prev_body_expected;
                 /* Phase R6: Reset current function name */
                 e->current_fn_name = NULL;
@@ -10054,6 +10060,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
+                    e->in_construct_template = saved_in_construct_template;
                     e->expected_type = prev_body_expected;
                     /* Phase R6: Reset current function name */
                     e->current_fn_name = NULL;
@@ -10159,6 +10166,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
     e->n_sig_tyvars = saved_n_sig_tyvars;
+    e->in_construct_template = saved_in_construct_template;
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
     e->cur_hkt_constraint_class = saved_cur_hkt_class;

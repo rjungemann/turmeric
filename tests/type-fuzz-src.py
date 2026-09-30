@@ -161,6 +161,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fuzz_arm  # noqa: E402  (tests/fuzz_arm.py)
+import fconv_lint  # noqa: E402  (tests/fconv_lint.py)
 
 TIMEOUT = 90
 
@@ -1243,6 +1244,33 @@ def assemble(legs):
 # Running one case
 # ---------------------------------------------------------------------------
 
+# The shape-independent value-conversion check (tests/fconv_lint.py): a clean,
+# correct run whose emitted C still converts a float<->int VALUE where no `as`
+# asked for it is a finding the output oracle cannot see -- the value may
+# happen to round-trip (7.0) or the conversion may sit on a path this program
+# does not print.  The corpus is at zero, so this class fails the run.
+_FCONV_CLANG = fconv_lint.find_clang()
+
+
+def value_conversions(tur, path, env):
+    if not _FCONV_CLANG or os.environ.get("TUR_FUZZ_FCONV", "1") == "0":
+        return []
+    r = subprocess.run([tur, "emit-c", path], capture_output=True, text=True,
+                       timeout=TIMEOUT, cwd=REPO, env=env)
+    if r.returncode != 0 or fconv_lint.MARK not in r.stdout:
+        return []
+    cpath = path + ".fconv.c"
+    with open(cpath, "w") as f:
+        f.write(r.stdout)
+    try:
+        return fconv_lint.lint_c(cpath, _FCONV_CLANG)
+    finally:
+        try:
+            os.unlink(cpath)
+        except OSError:
+            pass
+
+
 class Outcome:
     def __init__(self, kind, stdout="", stderr=""):
         self.kind = kind        # clean/crash/invalid_c/link/reject/timeout/other
@@ -1292,6 +1320,12 @@ def run_case(tur, path, src):
     except subprocess.TimeoutExpired:
         return Outcome("timeout")
     if p.returncode == 0:
+        conv = value_conversions(tur, path, env)
+        if conv:
+            ln, kind, how, text = conv[0]
+            return Outcome("value_conv", p.stdout,
+                           "emitted C line %d: %s %s value conversion: %s"
+                           % (ln, how, kind, text))
         return Outcome("clean", p.stdout, p.stderr)
     if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
         return Outcome("fnptr_trap", p.stdout, p.stderr)
@@ -1307,11 +1341,13 @@ def run_case(tur, path, src):
 
 BUG_OF = {"crash": "BUG_crash", "invalid_c": "BUG_invalid_c",
           "link": "BUG_link", "other": "BUG_toolchain_other",
-          "fnptr_trap": fuzz_arm.TRAP_CLASS}
+          "fnptr_trap": fuzz_arm.TRAP_CLASS,
+          "value_conv": "BUG_value_conversion"}
 
 SEAM_BUG_OF = {"crash": "BUG_seam_crash", "invalid_c": "BUG_seam_invalid_c",
                "link": "BUG_seam_link", "other": "BUG_toolchain_other",
-               "fnptr_trap": fuzz_arm.TRAP_CLASS}
+               "fnptr_trap": fuzz_arm.TRAP_CLASS,
+               "value_conv": "BUG_value_conversion"}
 
 
 def classify(out, expected, is_seam=False):

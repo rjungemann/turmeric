@@ -1790,6 +1790,7 @@ void elab_set_rc_release(Arena *arena, Expr *body, Binding *binding) {
             case EX_RC_OF:     stack[sp++] = cur->as.rc_of_.expr;    break;
             case EX_RC_DROP:   stack[sp++] = cur->as.rc_drop_.expr;  break;
             case EX_RC_CLONE:  stack[sp++] = cur->as.rc_clone_.expr; break;
+            case EX_REINTERPRET:   stack[sp++] = cur->as.reinterpret_.expr; break;
             case EX_ASCRIBE:   stack[sp++] = cur->as.ascribe_.inner; break;
             case EX_RETURN:
                 if (cur->as.return_.value) stack[sp++] = cur->as.return_.value;
@@ -3048,6 +3049,8 @@ Binding *expr_closure_fn_binding(const Expr *expr) {
     if (!expr) return NULL;
 
     switch (expr->kind) {
+        case EX_REINTERPRET:
+            return expr_closure_fn_binding(expr->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return expr_closure_fn_binding(expr->as.ascribe_.inner);
         case EX_CLOSURE:
@@ -3118,6 +3121,8 @@ static bool expr_fat_dispatches_closure(const Expr *e) {
             return expr_fat_dispatches_closure(e->as.if_.cond) ||
                    expr_fat_dispatches_closure(e->as.if_.then_) ||
                    expr_fat_dispatches_closure(e->as.if_.else_or_null);
+        case EX_REINTERPRET:
+            return expr_fat_dispatches_closure(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return expr_fat_dispatches_closure(e->as.ascribe_.inner);
         default:
@@ -3186,6 +3191,8 @@ static bool expr_fat_dispatches_untyped(const Expr *e) {
             return expr_fat_dispatches_untyped(e->as.if_.cond) ||
                    expr_fat_dispatches_untyped(e->as.if_.then_) ||
                    expr_fat_dispatches_untyped(e->as.if_.else_or_null);
+        case EX_REINTERPRET:
+            return expr_fat_dispatches_untyped(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return expr_fat_dispatches_untyped(e->as.ascribe_.inner);
         default:
@@ -3199,6 +3206,8 @@ static bool expr_fat_dispatches_untyped(const Expr *e) {
 bool expr_closure_return_dispatches_untyped(const Expr *expr) {
     if (!expr) return false;
     switch (expr->kind) {
+        case EX_REINTERPRET:
+            return expr_closure_return_dispatches_untyped(expr->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return expr_closure_return_dispatches_untyped(expr->as.ascribe_.inner);
         case EX_CLOSURE:
@@ -3230,6 +3239,8 @@ bool expr_closure_return_dispatches_untyped(const Expr *expr) {
 bool expr_closure_return_dispatches(const Expr *expr) {
     if (!expr) return false;
     switch (expr->kind) {
+        case EX_REINTERPRET:
+            return expr_closure_return_dispatches(expr->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return expr_closure_return_dispatches(expr->as.ascribe_.inner);
         case EX_CLOSURE:

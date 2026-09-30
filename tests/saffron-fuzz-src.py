@@ -112,6 +112,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fuzz_arm  # noqa: E402  (tests/fuzz_arm.py)
+import fconv_lint  # noqa: E402  (tests/fconv_lint.py)
 
 TIMEOUT = 90
 
@@ -694,6 +695,33 @@ def _env():
     return env
 
 
+# The shape-independent value-conversion check (tests/fconv_lint.py): a clean,
+# correct run whose emitted C still converts a float<->int VALUE where no `as`
+# asked for it is a finding the output oracle cannot see -- the value may
+# happen to round-trip (7.0) or the conversion may sit on a path this program
+# does not print.  The corpus is at zero, so this class fails the run.
+_FCONV_CLANG = fconv_lint.find_clang()
+
+
+def value_conversions(tur, path, env):
+    if not _FCONV_CLANG or os.environ.get("TUR_FUZZ_FCONV", "1") == "0":
+        return []
+    r = subprocess.run([tur, "emit-c", path], capture_output=True, text=True,
+                       timeout=TIMEOUT, cwd=REPO, env=env)
+    if r.returncode != 0 or fconv_lint.MARK not in r.stdout:
+        return []
+    cpath = path + ".fconv.c"
+    with open(cpath, "w") as f:
+        f.write(r.stdout)
+    try:
+        return fconv_lint.lint_c(cpath, _FCONV_CLANG)
+    finally:
+        try:
+            os.unlink(cpath)
+        except OSError:
+            pass
+
+
 def run_case(tur, path, src):
     with open(path, "w") as f:
         f.write(src)
@@ -712,6 +740,12 @@ def run_case(tur, path, src):
         return Outcome("timeout")
     if p.returncode == 0:
         kind = "clean"
+        conv = value_conversions(tur, path, env)
+        if conv:
+            ln, ck, how, text = conv[0]
+            kind = "value_conv"
+            p = subprocess.CompletedProcess(p.args, 0, p.stdout,
+                "emitted C line %d: %s %s value conversion: %s" % (ln, how, ck, text))
     elif p.returncode == fuzz_arm.FNSAN_TRAP_RC:
         kind = "fnptr_trap"
     elif p.returncode in (134, 138, 139) or p.returncode < 0:
@@ -739,7 +773,8 @@ def run_case(tur, path, src):
 
 BUG_OF = {"crash": "BUG_crash", "invalid_c": "BUG_invalid_c",
           "link": "BUG_link", "other": "BUG_toolchain_other",
-          "fnptr_trap": fuzz_arm.TRAP_CLASS}
+          "fnptr_trap": fuzz_arm.TRAP_CLASS,
+          "value_conv": "BUG_value_conversion"}
 
 
 def classify(out, expected):

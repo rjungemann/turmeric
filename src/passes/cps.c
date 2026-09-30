@@ -137,6 +137,8 @@ bool cps_expr_contains_shift(const Expr *e) {
                 if (cps_expr_contains_shift(e->as.program.items[i])) return true;
             }
             return false;
+        case EX_REINTERPRET:
+            return cps_expr_contains_shift(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             /* Type ascription is erased at codegen; a control op reachable only
              * through (:: <control-op> T) must still be seen by coloring. */
@@ -259,6 +261,8 @@ bool cps_expr_contains_effect_op(const Expr *e) {
             /* Only reachable inside a handler case; the case runs only when
              * the handle's body suspends, which the body walk above finds. */
             return false;
+        case EX_REINTERPRET:
+            return cps_expr_contains_effect_op(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return cps_expr_contains_effect_op(e->as.ascribe_.inner);
         default:
@@ -728,6 +732,8 @@ static bool cps_directly_uses_control(const Expr *e) {
                 if (cps_directly_uses_control(e->as.dynvar_binding_.pairs[i].override_expr))
                     return true;
             return cps_directly_uses_control(e->as.dynvar_binding_.body);
+        case EX_REINTERPRET:
+            return cps_directly_uses_control(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             /* Ascription is erased at codegen; seed on a control op that is
              * only reachable through (:: <control-op> T). */
@@ -1236,6 +1242,7 @@ static bool cps_force_color_eff_fnval_args(const Expr *e, CpsNode *nodes, uint32
         case EX_RETURN: return cps_force_color_eff_fnval_args(e->as.return_.value, nodes, n);
         case EX_DEFER:  return cps_force_color_eff_fnval_args(e->as.defer_.body, nodes, n);
         case EX_DEF:    return cps_force_color_eff_fnval_args(e->as.def_.init, nodes, n);
+        case EX_REINTERPRET:return cps_force_color_eff_fnval_args(e->as.reinterpret_.expr, nodes, n);
         case EX_ASCRIBE:return cps_force_color_eff_fnval_args(e->as.ascribe_.inner, nodes, n);
         case EX_RESET:  return cps_force_color_eff_fnval_args(e->as.reset_.body, nodes, n);
         case EX_HANDLE: {
@@ -1280,6 +1287,7 @@ static bool cps_body_has_with_handler(const Expr *e) {
             return cps_body_has_with_handler(e->as.if_.cond)
                 || cps_body_has_with_handler(e->as.if_.then_)
                 || cps_body_has_with_handler(e->as.if_.else_or_null);
+        case EX_REINTERPRET: return cps_body_has_with_handler(e->as.reinterpret_.expr);
         case EX_ASCRIBE: return cps_body_has_with_handler(e->as.ascribe_.inner);
         case EX_RETURN:  return cps_body_has_with_handler(e->as.return_.value);
         case EX_HANDLE: {

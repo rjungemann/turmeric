@@ -371,6 +371,8 @@ static bool body_yields_thin_fn(const Expr *e) {
             return e->as.var.binding && e->as.var.binding->is_global &&
                    e->as.var.binding->type.kind == TY_FN &&
                    !e->as.var.binding->type.as.fn.boxed;
+        case EX_REINTERPRET:
+            return body_yields_thin_fn(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return body_yields_thin_fn(e->as.ascribe_.inner);
         case EX_DO:
@@ -779,6 +781,7 @@ static void ic_scan_expr(ICScan *sc, const Expr *e) {
                 ic_scan_expr(sc, arm->body);
             }
             return;
+        case EX_REINTERPRET: ic_scan_expr(sc, e->as.reinterpret_.expr); return;
         case EX_ASCRIBE: ic_scan_expr(sc, e->as.ascribe_.inner); return;
         case EX_CAST:    ic_scan_expr(sc, e->as.cast_.expr);     return;
         case EX_RETURN:  ic_scan_expr(sc, e->as.return_.value);  return;
@@ -1886,6 +1889,7 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             if (bc_expr_roots_at_b(e->as.get_field_.struct_expr, b))
                 return !bc_kind_can_alias(e->type.kind) || confined;
             return box_uses_confined(e->as.get_field_.struct_expr, b, true);
+        case EX_REINTERPRET: return box_uses_confined(e->as.reinterpret_.expr, b, confined);
         case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
         case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
         /* byvalue-recursive-shared-copies-leak: an rc clone takes a count on
@@ -6019,6 +6023,33 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         char *result = strdup(out.data);
         buf_free(&out);
         return result;
+    }
+
+    /* carrier-bridge-pointer-leaf-dereferenced: a cstr / ptr<void> / sym (and
+     * the int64 family) IS one carrier word -- the producer stores it with
+     * `(int64_t)(intptr_t)`, so the crossing is a cast both ways.  These kinds
+     * used to fall to the aggregate arms below: carrier->concrete read the
+     * word as a POINTER TO a cstr (`*(const char **)w`, a segfault on the
+     * first `(let [y (vec-get v 0)] y)` at A=cstr) and concrete->carrier
+     * spilled the pointer to a stack temp and passed the temp's ADDRESS.
+     * The M3 audit above already names these leaves "cross with no
+     * reinterpret"; this arm is what makes that true. */
+    switch (concrete_ty.kind) {
+        case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
+        case TY_INT: case TY_INT64: case TY_UINT64: {
+            bool ptr = cname && strchr(cname, '*') != NULL;
+            if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+                buf_printf(&out, ptr ? "((%s)(intptr_t)(%s))" : "((%s)(%s))",
+                           cname ? cname : "int64_t", src_str);
+            else
+                buf_printf(&out, ptr ? "((int64_t)(intptr_t)(%s))"
+                                     : "((int64_t)(%s))", src_str);
+            free(src_str);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
+        default: break;
     }
 
     if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {

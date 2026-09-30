@@ -2048,6 +2048,8 @@ static Binding *emit_expr_closure_fn_binding(const Expr *expr) {
     if (!expr) return NULL;
 
     switch (expr->kind) {
+        case EX_REINTERPRET:
+            return emit_expr_closure_fn_binding(expr->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return emit_expr_closure_fn_binding(expr->as.ascribe_.inner);
         case EX_CLOSURE:
@@ -2737,6 +2739,8 @@ static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
     switch (x->kind) {
         case EX_VAR:
             return x->as.var.binding == cell;
+        case EX_REINTERPRET:
+            return mut_cell_escapes(x->as.reinterpret_.expr, cell, depth + 1);
         case EX_ASCRIBE:
             return mut_cell_escapes(x->as.ascribe_.inner, cell, depth + 1);
         case EX_GET_FIELD:
@@ -6072,6 +6076,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     memcpy(ret_note, ctx->call_ret_note, sizeof ret_note);
     ctx->call_ret_note[0] = '\0';
     if (e->kind != EX_CALL) {
+        /* A reinterpret typed as the enclosing generic's own tyvar is
+         * transparent: its value IS the call it wraps (or that call's value
+         * bridged to the clone's concrete type, in which case the arm below
+         * re-noted the concrete spelling).  Pass the note through so the
+         * consumer's representation rules see what was emitted -- clearing it
+         * here hid the carrier word from the SR2b element-dispatch bridge. */
+        if (e->kind == EX_REINTERPRET &&
+            e->as.reinterpret_.target_kind == TY_TYVAR && ret_note[0])
+            note_call_ret(ctx, ret_note);
         if (e->any_drop_after) v = emit_any_drop_arm(ctx, body, v);
         return v;
     }
@@ -7113,6 +7126,7 @@ static bool tb_tail_reaches_dyn_call(const Expr *e) {
         switch (e->kind) {
             case EX_DYN_CALL:
                 return e->as.dyn_call_.n_args <= TUR_FAT_SHIM_MAX_ARITY;   /* the trampoline's slots */
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr; continue;
             case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
             case EX_IF:
                 if (!e->as.if_.else_or_null) return false;
@@ -7385,9 +7399,10 @@ static char *dyn_widen_to_any(EmitCtx *ctx, Buf *stmts, Type t, const char *val)
     Type r = emit_resolve_type(ctx, t);
     int64_t id = emit_any_type_id(ctx, t);
     Buf out; buf_init(&out);
-    if (r.kind == TY_FLOAT) {
+    if (r.kind == TY_FLOAT || r.kind == TY_FLOAT32 || r.kind == TY_FLOAT64) {
+        /* float32: promoted to double, exactly (see emit_any_type_id). */
         buf_printf(&out,
-                   "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
+                   "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (double)(%s)}).i)",
                    (long long)id, val);
     } else if (emit_type_is_byvalue_adt(ctx, t)) {
         /* jit-x86-64-struct-valued-statement-expression-miscompiles: the box
@@ -7682,7 +7697,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *inner = emit_value(ctx, body, e->as.cast_.expr);
             Type target = type_simple(e->as.cast_.target_kind, CK_COPY);
             Buf out; buf_init(&out);
-            buf_printf(&out, "((%s)(%s))", type_c_name(target), inner);
+            /* A float<->integer `as` is a conversion the PROGRAM asked for.
+             * Spell it TUR_AS (a preamble macro, so clang attributes the cast
+             * to the preamble) so tests/check-emitted-float-conversions.py can
+             * tell it apart from every other float<->int value conversion in
+             * emitted code -- each of which is a representation bug. */
+            TypeKind src_k = emit_resolve_type(ctx, e->as.cast_.expr->type).kind;
+            TypeKind tgt_k = e->as.cast_.target_kind;
+            bool tgt_f = tgt_k == TY_FLOAT || tgt_k == TY_FLOAT32 || tgt_k == TY_FLOAT64;
+            bool src_f = src_k == TY_FLOAT || src_k == TY_FLOAT32 || src_k == TY_FLOAT64;
+            if (tgt_f != src_f && src_k != TY_UNKNOWN && src_k != TY_TYVAR)
+                buf_printf(&out, "TUR_AS(%s, %s)", type_c_name(target), inner);
+            else
+                buf_printf(&out, "((%s)(%s))", type_c_name(target), inner);
             buf_putc(&out, '\0');
             free(inner);
             char *result = strdup(out.data);
@@ -7709,9 +7736,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!want || strcmp(want, "int64_t") == 0) return inner;
                 if (emit_str_is_bare_ident(inner)) {
                     const char *have = emit_localvar_lookup_ctype(inner);
-                    if (have && strcmp(have, "int64_t") == 0)
-                        return emit_carrier_bridge(ctx, body, inner,
-                                                   CK_CARRIER, CK_CONCRETE, rt);
+                    if (have && strcmp(have, "int64_t") == 0) {
+                        char *br = emit_carrier_bridge(ctx, body, inner,
+                                                       CK_CARRIER, CK_CONCRETE, rt);
+                        /* The value is the concrete type now; say so. */
+                        note_call_ret(ctx, want);
+                        return br;
+                    }
                 }
                 return inner;
             }
@@ -7901,11 +7932,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_free(&out);
                 return inner;
             }
-            if (inj_pt.kind == TY_FLOAT) {
+            if (inj_pt.kind == TY_FLOAT ||
+                (e->type.kind == TY_ANY &&
+                 (inj_pt.kind == TY_FLOAT32 || inj_pt.kind == TY_FLOAT64))) {
                 /* TY2.2: a double does not survive an integer cast -- store its
-                 * IEEE-754 bit pattern in the payload via a union reinterpret. */
+                 * IEEE-754 bit pattern in the payload via a union reinterpret.
+                 * A float32 widened to `any` is promoted to double first
+                 * (exact), under the float tag (emit_any_type_id); it used to
+                 * fall to the scalar cast below, `(int64_t)(intptr_t)f`,
+                 * which truncated 2.5 to 2. */
                 buf_printf(&out,
-                    "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
+                    "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (double)(%s)}).i)",
                     (long long)tag, inner);
             } else if (emit_type_is_byvalue_adt(ctx,
                            e->as.union_inject_.value->type)) {
@@ -8112,8 +8149,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * so binding it here changes no evaluation order. */
                 char *cb = fresh_tmp(ctx);
                 emit_any_cast_bind_check(ctx, body, e, cb, inner, target_tag);
-                buf_printf(&out,
-                    "((union { int64_t i; double d; }){.i = TUR_UNTAG(%s)}).d", cb);
+                /* A float32 target holds its value as a promoted double
+                 * (emit_any_type_id): read the double, narrow on purpose. */
+                TypeKind ck = emit_resolve_type(ctx, e->type).kind;
+                if (ck == TY_FLOAT32)
+                    buf_printf(&out,
+                        "TUR_AS(float, ((union { int64_t i; double d; }){.i = TUR_UNTAG(%s)}).d)", cb);
+                else
+                    buf_printf(&out,
+                        "((union { int64_t i; double d; }){.i = TUR_UNTAG(%s)}).d", cb);
                 free(cb);
             } else if (emit_type_is_byvalue_adt(ctx, e->type)) {
                 /* CONV-S1 seam 4: by-value record-ADT target (lowered defstruct).
@@ -11068,6 +11112,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
                 }
                 const Expr *emit_arg = arg_expr;
+                /* generic-call-result-in-generic-collapses-to-int: an argument
+                 * that is a reinterpret typed as the enclosing generic's own
+                 * tyvar, passed to a parameter that is itself the CARRIER word
+                 * -- a `val : A` inline-C sink (`vec-push!`, the map setters) or
+                 * an unspecialized generic base -- is the wrapped call's carrier
+                 * word verbatim.  Hand the chain below the call it wraps, which
+                 * is the argument it was written against; emitting the wrapper
+                 * would bridge carrier->concrete only for the chain to bridge
+                 * straight back (and it does not, for a scalar: that was the
+                 * double handed to `vec_hypush_ex`'s int64 slot). */
+                if (arg_expr && arg_expr->kind == EX_REINTERPRET &&
+                    arg_expr->as.reinterpret_.target_kind == TY_TYVAR &&
+                    arg_expr->as.reinterpret_.expr &&
+                    fn_binding && fn_binding->type.kind == TY_FN &&
+                    fn_binding->type.as.fn.arg_kinds &&
+                    i < fn_binding->type.as.fn.arity &&
+                    fn_binding->type.as.fn.arg_kinds[i] == TY_TYVAR &&
+                    (!matched_spec || fn_binding->body_is_inline_c)) {
+                    emit_arg = arg_expr->as.reinterpret_.expr;
+                }
                 if (matched_spec && arg_expr && arg_expr->kind == EX_REINTERPRET &&
                     arg_expr->as.reinterpret_.expr &&
                     type_eq(matched_spec->arg_types[i], arg_expr->as.reinterpret_.expr->type)) {
@@ -13269,6 +13333,34 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = strdup(_rb.data);
                     }
                     buf_free(&_rb);
+                }
+                /* generic-float-into-carrier-slot-value-converts: the last word
+                 * on a float.  A value whose type in THIS clone is a float --
+                 * `x : A` inside the float spec -- handed to a parameter whose
+                 * C spelling is the int64 CARRIER (`vec-push!`'s `val : A`, an
+                 * unspecialized generic base) must go in as its BITS.  Every
+                 * rule above is keyed on the elaborated type, which is the
+                 * tyvar, so none fired and C converted the value: 7.1 was
+                 * stored as 7, read back as 3.45846e-323.  Keyed on the two C
+                 * spellings, so an argument that already arrives as a carrier
+                 * word (elab type `int`, or a union bridge above) is left
+                 * alone; every non-float scalar survives the carrier by value. */
+                if (raw && fn_name && emit_arg &&
+                    emit_arg->type.kind != TY_INT &&
+                    strncmp(raw, "((union", 7) != 0 &&
+                    strncmp(raw, "(((union", 8) != 0) {
+                    const char *_cpc = emit_sig_lookup_param_ctype(fn_name, i);
+                    Type _cat = emit_resolve_type(ctx, emit_arg->type);
+                    if (_cpc && strcmp(_cpc, "int64_t") == 0 &&
+                        (_cat.kind == TY_FLOAT || _cat.kind == TY_FLOAT64 ||
+                         _cat.kind == TY_FLOAT32)) {
+                        const char *_have = emit_str_is_bare_ident(raw)
+                            ? emit_localvar_lookup_ctype(raw) : NULL;
+                        if (!_have || strcmp(_have, "int64_t") != 0)
+                            raw = emit_carrier_bridge(ctx, body, raw,
+                                                      CK_CONCRETE, CK_CARRIER,
+                                                      _cat);
+                    }
                 }
                 ctx->ce_word_store_sink = ce_sink_prev;
                 arg_strs[i] = raw;

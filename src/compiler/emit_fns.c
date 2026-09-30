@@ -1,5 +1,27 @@
 /* emit_fns.c -- function-definition C emission (emit_fn_def). */
 #include "emit_internal.h"
+
+/* The inline-C function names of the program being emitted -- written by
+ * emit_program as one trailing `tur:inline-c-fns: a b c` comment for the
+ * emitted-C checks.
+ * One line per program instead of one per function: the stdlib alone puts
+ * ~190 inline-C definitions in every program. */
+static Buf g_inline_c_fns;
+static bool g_inline_c_fns_init;
+void emit_note_inline_c_fn(const char *cname) {
+    if (!cname || !*cname) return;
+    if (!g_inline_c_fns_init) { buf_init(&g_inline_c_fns); g_inline_c_fns_init = true; }
+    buf_putc(&g_inline_c_fns, ' ');
+    buf_puts(&g_inline_c_fns, cname);
+}
+void emit_write_inline_c_fns(Buf *out) {
+    if (g_inline_c_fns_init && g_inline_c_fns.len > 0) {
+        buf_puts(out, "/* tur:inline-c-fns:");
+        buf_write(out, g_inline_c_fns.data, g_inline_c_fns.len);
+        buf_puts(out, " */\n");
+    }
+    if (g_inline_c_fns_init) { buf_free(&g_inline_c_fns); g_inline_c_fns_init = false; }
+}
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path, g_panic_trace */
 
@@ -422,6 +444,8 @@ static bool tco_drop_use_ok(const Expr *e, const Binding *b) {
                 !tco_drop_use_ok(e->as.set_deref_.ref, b))
                 return false;
             return tco_drop_use_ok(e->as.set_deref_.value, b);
+        case EX_REINTERPRET:
+            return tco_drop_use_ok(e->as.reinterpret_.expr, b);
         case EX_ASCRIBE:
             return tco_drop_use_ok(e->as.ascribe_.inner, b);
         case EX_IF:
@@ -2126,6 +2150,7 @@ static FnDef *gs_thunk_fn(const Expr *cu) {
             case EX_POLY_WRAP: th = th->as.poly_wrap_.inner; break;
             case EX_FN_TO_FAT: th = th->as.fn_to_fat_.inner; break;
             case EX_CAST:      th = th->as.cast_.expr; break;
+            case EX_REINTERPRET:   th = th->as.reinterpret_.expr; break;
             case EX_ASCRIBE:   th = th->as.ascribe_.inner; break;
             default: return NULL;
         }
@@ -2162,6 +2187,7 @@ static bool gs_suspends(const Expr *e, FnDef *fd) {
                 if (gs_suspends(e->as.call_.args[i], fd)) return true;
             return false;
         case EX_CAST:    return gs_suspends(e->as.cast_.expr, fd);
+        case EX_REINTERPRET: return gs_suspends(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE: return gs_suspends(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends(e->as.panic_payload_value_.payload, fd);
@@ -2420,6 +2446,7 @@ static bool gs_has_br3b(const Expr *e, FnDef *fd) {
         case EX_GET_FIELD: return gs_has_br3b(e->as.get_field_.struct_expr, fd);
         case EX_DEREF:     return gs_has_br3b(e->as.deref_.expr, fd);
         case EX_CAST:      return gs_has_br3b(e->as.cast_.expr, fd);
+        case EX_REINTERPRET:   return gs_has_br3b(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE:   return gs_has_br3b(e->as.ascribe_.inner, fd);
         default:           return false;
     }
@@ -2446,6 +2473,7 @@ static bool gs_value_ok(const Expr *e, FnDef *fd) {
         case EX_CSTR_LIT: case EX_NIL_LIT: case EX_VAR:
             return true;
         case EX_CAST:       return gs_value_ok(e->as.cast_.expr, fd);
+        case EX_REINTERPRET:    return gs_value_ok(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE:    return gs_value_ok(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_value_ok(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_value_ok(e->as.panic_payload_value_.payload, fd);
@@ -2581,6 +2609,7 @@ static bool gs_has_panic(const Expr *e) {
                 if (gs_has_panic(e->as.call_.args[i])) return true;
             return false;
         case EX_CAST:                return gs_has_panic(e->as.cast_.expr);
+        case EX_REINTERPRET:             return gs_has_panic(e->as.reinterpret_.expr);
         case EX_ASCRIBE:             return gs_has_panic(e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_has_panic(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_has_panic(e->as.panic_payload_value_.payload);
@@ -2636,6 +2665,7 @@ static const Expr *gs_leftmost_panic(const Expr *e) {
             }
             return NULL;
         case EX_CAST:                return gs_leftmost_panic(e->as.cast_.expr);
+        case EX_REINTERPRET:             return gs_leftmost_panic(e->as.reinterpret_.expr);
         case EX_ASCRIBE:             return gs_leftmost_panic(e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost_panic(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost_panic(e->as.panic_payload_value_.payload);
@@ -2669,6 +2699,7 @@ static bool gs_has_catch(const Expr *e, FnDef *fd) {
                 if (gs_has_catch(e->as.call_.args[i], fd)) return true;
             return false;
         case EX_CAST:    return gs_has_catch(e->as.cast_.expr, fd);
+        case EX_REINTERPRET: return gs_has_catch(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE: return gs_has_catch(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_has_catch(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_has_catch(e->as.panic_payload_value_.payload, fd);
@@ -2849,6 +2880,7 @@ static void gs_collect(GsCtx *gs, const Expr *e) {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) { gs_collect(gs, e->as.call_.args[i]); }
             break;
         case EX_CAST:       gs_collect(gs, e->as.cast_.expr); break;
+        case EX_REINTERPRET:    gs_collect(gs, e->as.reinterpret_.expr); break;
         case EX_ASCRIBE:    gs_collect(gs, e->as.ascribe_.inner); break;
         case EX_PANIC_PAYLOAD_TYPE:  gs_collect(gs, e->as.panic_payload_type_.payload); break;
         case EX_PANIC_PAYLOAD_VALUE: gs_collect(gs, e->as.panic_payload_value_.payload); break;
@@ -2887,6 +2919,7 @@ static bool gs_suspends_live(GsCtx *gs, const Expr *e) {
                 if (gs_suspends_live(gs, e->as.call_.args[i])) return true;
             return false;
         case EX_CAST:    return gs_suspends_live(gs, e->as.cast_.expr);
+        case EX_REINTERPRET: return gs_suspends_live(gs, e->as.reinterpret_.expr);
         case EX_ASCRIBE: return gs_suspends_live(gs, e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends_live(gs, e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends_live(gs, e->as.panic_payload_value_.payload);
@@ -2933,6 +2966,7 @@ static const Expr *gs_leftmost(GsCtx *gs, const Expr *e) {
             }
             return NULL;
         case EX_CAST:    return gs_leftmost(gs, e->as.cast_.expr);
+        case EX_REINTERPRET: return gs_leftmost(gs, e->as.reinterpret_.expr);
         case EX_ASCRIBE: return gs_leftmost(gs, e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost(gs, e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost(gs, e->as.panic_payload_value_.payload);
@@ -3356,6 +3390,7 @@ static bool gs_has_br3b_live(GsCtx *gs, const Expr *e) {
                 if (gs_has_br3b_live(gs, e->as.call_.args[i])) return true;
             return false;
         case EX_CAST:    return gs_has_br3b_live(gs, e->as.cast_.expr);
+        case EX_REINTERPRET: return gs_has_br3b_live(gs, e->as.reinterpret_.expr);
         case EX_ASCRIBE: return gs_has_br3b_live(gs, e->as.ascribe_.inner);
         default:         return false;
     }
@@ -3377,6 +3412,7 @@ static void gs_preemit_br3b(GsCtx *gs, Buf *b, const Expr *e) {
                 gs_preemit_br3b(gs, b, e->as.builtin.args[i]);
             return;
         case EX_CAST:    gs_preemit_br3b(gs, b, e->as.cast_.expr); return;
+        case EX_REINTERPRET: gs_preemit_br3b(gs, b, e->as.reinterpret_.expr); return;
         case EX_ASCRIBE: gs_preemit_br3b(gs, b, e->as.ascribe_.inner); return;
         case EX_CALL: {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
@@ -3816,6 +3852,7 @@ static void gs_callees(const Expr *e, FnDef **out, int *n, int cap) {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) { gs_callees(e->as.call_.args[i], out, n, cap); }
             break;
         case EX_CAST:       gs_callees(e->as.cast_.expr, out, n, cap); break;
+        case EX_REINTERPRET:    gs_callees(e->as.reinterpret_.expr, out, n, cap); break;
         case EX_ASCRIBE:    gs_callees(e->as.ascribe_.inner, out, n, cap); break;
         case EX_PANIC_PAYLOAD_TYPE:  gs_callees(e->as.panic_payload_type_.payload, out, n, cap); break;
         case EX_PANIC_PAYLOAD_VALUE: gs_callees(e->as.panic_payload_value_.payload, out, n, cap); break;
@@ -4603,6 +4640,30 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
         Type body_rt = emit_type_from_kind(emit_tail_float_kind(ctx, tail_e));
         char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
                                             CK_CONCRETE, CK_CARRIER, body_rt);
+        indent_buf(out, ctx->indent);
+        buf_printf(out, "return %s;\n", bridged);
+        free(bridged);
+    } else if (!ret_is_int64_carrier && ret_ctype && ret_val &&
+               tail_e && tail_e->type.kind != TY_NEVER &&
+               (strcmp(ret_ctype, "double") == 0 ||
+                strcmp(ret_ctype, "float") == 0) &&
+               (emit_tail_call_returns_tyvar_carrier(ctx, tail_e) ||
+                (emit_str_is_bare_ident(ret_val) &&
+                 emit_localvar_lookup_ctype(ret_val) &&
+                 strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) {
+        /* generic-tail-call-carrier-into-float-return: a spec whose C return
+         * is a concrete `double`/`float` (`first-of [A] ... : A` at A=float)
+         * but whose tail value is the int64 CARRIER -- a generic callee
+         * returning a bare tyvar (`(vec-get v 0)`), hoisted into an int64
+         * temp.  `return __ps;` is then C's implicit integer->float VALUE
+         * conversion: 7.1's bit pattern printed as 4.61968e+18.  Keyed on the
+         * two C types, not on the tail's shape: an int64 word handed to a
+         * float return is a carrier, because a conversion the program ASKED
+         * for is spelled TUR_AS and never reaches here as a bare temp. */
+        Type sink_rt = emit_type_from_kind(strcmp(ret_ctype, "float") == 0
+                                               ? TY_FLOAT32 : TY_FLOAT);
+        char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
+                                            CK_CARRIER, CK_CONCRETE, sink_rt);
         indent_buf(out, ctx->indent);
         buf_printf(out, "return %s;\n", bridged);
         free(bridged);
@@ -5481,6 +5542,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
               || user_inst_method)
           && !fd->binding->is_from_stdlib) &&
         !(emit_split_lib_owns(fd->binding) && !ctx->fn_name_override);
+    /* A HAND-WRITTEN body is recorded for the emitted-C checks
+     * (tests/check-emitted-float-conversions.py): they police what the
+     * EMITTER decides, and a conversion an inline-C author wrote on purpose
+     * -- `return (double)n;` in int->float -- is reviewed as code, not
+     * inferred.  emit_program writes the list as one trailing comment. */
+    if (fd->body && fd->body->kind == EX_INLINE_C)
+        emit_note_inline_c_fn(fn_name);
     if (needs_static) {
         buf_printf(file, "static ");
     }

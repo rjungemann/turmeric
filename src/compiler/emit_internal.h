@@ -1528,6 +1528,10 @@ char *emit_word_slot_bits(const Type *t, const char *v);
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
  * for a primitive, an interned per-monomorph id for a struct/ADT. */
 int64_t emit_any_type_id(EmitCtx *ctx, Type t);
+/* tests/check-emitted-float-conversions.py: record an inline-C (hand-written)
+ * function's C name; emit_program writes the list as one trailing comment. */
+void emit_note_inline_c_fn(const char *cname);
+void emit_write_inline_c_fns(Buf *out);
 
 /* saffron-lang-plan S5: emit the dynamic operator runtime into this TU's
  * file-scope buffer, once.  Called from the three EX_DYN_* emitters rather than

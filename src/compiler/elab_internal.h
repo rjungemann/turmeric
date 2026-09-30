@@ -699,6 +699,10 @@ typedef struct Elab {
      * kind `*` and tripping TUR-E0012. */
     Kind         sig_tyvar_kinds[32];
     uint8_t      n_sig_tyvars;
+    /* generic-ctor-over-sig-tyvar-erased: the defn being elaborated is a
+     * `#{Construct}` template (stdlib `some`/`ok`/`err`...), whose bare-ctor
+     * body the emitter types from the spec's RESULT, not its bindings. */
+    bool         in_construct_template;
     /* Phase G3: coerce special form */
     const Symbol *sym_coerce;
     /* Phase G3: (~ a b) equality constraint notation */

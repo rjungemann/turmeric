@@ -1,0 +1,15 @@
+;; A float32 through `any`.  The widen stored `(int64_t)(intptr_t)f` -- a VALUE
+;; conversion, so 2.5 came back as 2 -- under the bare TY_FLOAT32 tag, which
+;; `type-of` could not name ("unknown").  The interpreter holds one float kind,
+;; so a float32 now rides `any` as its value promoted to double (exact) under
+;; the float tag, and a cast back to float32 narrows.  Found by
+;; tests/check-emitted-float-conversions.py on its first corpus run.
+(defn wrap [x : any] : any x)
+(defn main [] : int
+  (let [f (:: 2.5 float32)
+        g (:: 0.75 float32)]
+    (println (cast (wrap f) float32))
+    (println (type-of (wrap f)))
+    (println (is? (wrap g) float))
+    (println (cast (wrap g) float32)))
+  0)

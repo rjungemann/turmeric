@@ -384,6 +384,11 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
              * inverse of what the widen wrote), as the direct shim below
              * already spells it. */
             buf_puts(ctx->file, "((union { double d; int64_t i; }){.i = __r}).d");
+        else if (rr.kind == TY_FLOAT32)
+            /* A float32 rides `any` as its promoted double (emit_any_type_id);
+             * `(float)(intptr_t)__r` read the bit pattern as a count. */
+            buf_puts(ctx->file,
+                     "TUR_AS(float, ((union { double d; int64_t i; }){.i = __r}).d)");
         else
             buf_printf(ctx->file, "(%s)(intptr_t)__r", rcn);
         for (uint32_t k = 0; k < nx; k++) buf_printf(ctx->file, ", __a%u", k + 1);
@@ -438,7 +443,10 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
         } else if (strchr(pcn, '*') != NULL) {
             snprintf(conv, sizeof(conv), "(%s)(intptr_t)__r", pcn);
         } else if (pt.kind == TY_FLOAT32) {
-            continue;   /* not yet: the box's 32-bit widen shape is its own question */
+            /* The box holds the float32 as its promoted double, under the
+             * float tag (emit_any_type_id): read the double, narrow. */
+            snprintf(conv, sizeof(conv),
+                     "TUR_AS(float, ((union { double d; int64_t i; }){.i = __r}).d)");
         } else {
             snprintf(conv, sizeof(conv), "(%s)__r", pcn);
         }

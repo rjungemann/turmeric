@@ -28,7 +28,11 @@
 (defn seq-call-bool-fn1 [f : int x : int] : bool
   ;; Typed-ABI: a :bool-returning fat closure dispatched through the typed
   ;; TUR_APPLY1_T macro (closure-typed-invocation-abi-plan, de-workaround).
-  ```c return TUR_APPLY1_T(bool, int64_t, f, x); ```)
+  ;; Slot 0 returns a narrow result WIDENED to int64_t
+  ;; (narrow-closure-result-read-through-int64-carrier), so it is called as
+  ;; int64_t and narrowed here -- casting it `bool` was a call through a
+  ;; mismatched function type (emitted-c-indirect-calls-are-not-type-exact).
+  ```c return TUR_APPLY1_T(int64_t, int64_t, f, x) != 0; ```)
 ;;; seq-call-fn2 -- call a two-arg fat closure stored as int64_t.
 ;;;
 ;;; Parameters:

@@ -431,6 +431,7 @@ static bool lens_is_simple_for_pathb(const FnDef *lens) {
     for (;;) {
         if (!e) return false;
         switch (e->kind) {
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr; continue;
             case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
             case EX_RETURN:  e = e->as.return_.value;  continue;
             case EX_LET:
@@ -633,6 +634,7 @@ static const Expr *peel_to_tail(const Expr *e) {
     for (;;) {
         if (!e) return NULL;
         switch (e->kind) {
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr; continue;
             case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
             case EX_RETURN:  e = e->as.return_.value;  continue;
             case EX_LET:
@@ -827,6 +829,9 @@ static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
         case EX_RETURN:
             resolve_walk(e->as.return_.value, rc);
             break;
+        case EX_REINTERPRET:
+            resolve_walk(e->as.reinterpret_.expr, rc);
+            break;
         case EX_ASCRIBE:
             resolve_walk(e->as.ascribe_.inner, rc);
             break;
@@ -928,6 +933,7 @@ static void clear_g_box_walk(const Expr *e, const Binding *lensb) {
                 clear_g_box_walk(e->as.call_.args[i], lensb);
             break;
         case EX_RETURN: clear_g_box_walk(e->as.return_.value, lensb); break;
+        case EX_REINTERPRET: clear_g_box_walk(e->as.reinterpret_.expr, lensb); break;
         case EX_ASCRIBE: clear_g_box_walk(e->as.ascribe_.inner, lensb); break;
         case EX_MATCH:
             clear_g_box_walk(e->as.match_.scrutinee, lensb);
@@ -1053,6 +1059,7 @@ static void register_forwarding_walk(const Expr *e, FwdCtx *fc) {
                 register_forwarding_walk(e->as.builtin.args[i], fc);
             break;
         case EX_RETURN:  register_forwarding_walk(e->as.return_.value, fc); break;
+        case EX_REINTERPRET: register_forwarding_walk(e->as.reinterpret_.expr, fc); break;
         case EX_ASCRIBE: register_forwarding_walk(e->as.ascribe_.inner, fc); break;
         case EX_FN_TO_FAT:   register_forwarding_walk(e->as.fn_to_fat_.inner, fc); break;
         case EX_POLY_TO_FAT: register_forwarding_walk(e->as.poly_to_fat_.inner, fc); break;

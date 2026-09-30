@@ -353,7 +353,15 @@ static CKont kont_ret(TypeKind ty) {
 /* Type ascription `(:: e T)` is erased at codegen (its value is the inner
  * expression's value), so peel it everywhere the translator inspects a form. */
 static const Expr *ascribe_peel(const Expr *e) {
-    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    /* generic-call-result-in-generic-collapses-to-int: a generic call whose
+     * result is the enclosing signature's own tyvar is wrapped in a reinterpret
+     * typed `A` (elab_call.c).  The direct emitter lowers it per clone; to this
+     * pass it is the call it wraps, exactly what it saw before the wrap. */
+    while (e && (e->kind == EX_ASCRIBE ||
+                 (e->kind == EX_REINTERPRET &&
+                  e->as.reinterpret_.target_kind == TY_TYVAR)))
+        e = e->kind == EX_ASCRIBE ? e->as.ascribe_.inner
+                                  : e->as.reinterpret_.expr;
     return e;
 }
 
@@ -2811,6 +2819,8 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
             for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++)
                 if (!pap_calls_saturated(e->as.perform_.perform->args[i], var, rem_arity)) return false;
             return true;
+        case EX_REINTERPRET:
+            return pap_calls_saturated(e->as.reinterpret_.expr, var, rem_arity);
         case EX_ASCRIBE:
             return pap_calls_saturated(e->as.ascribe_.inner, var, rem_arity);
         default:

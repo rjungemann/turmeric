@@ -3320,6 +3320,7 @@ static bool expr_has_handle(const Expr *e) {
         case EX_IF:
             return expr_has_handle(e->as.if_.cond) || expr_has_handle(e->as.if_.then_)
                 || expr_has_handle(e->as.if_.else_or_null);
+        case EX_REINTERPRET: return expr_has_handle(e->as.reinterpret_.expr);
         case EX_ASCRIBE: return expr_has_handle(e->as.ascribe_.inner);
         case EX_RETURN:  return expr_has_handle(e->as.return_.value);
         /* A `(with-handler hv body)` is a delimited handler install just like
@@ -4246,6 +4247,7 @@ static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
                     NESC(h->cases[i].body);
             }
             return;
+        case EX_REINTERPRET: NESC(e->as.reinterpret_.expr); return;
         case EX_ASCRIBE: NESC(e->as.ascribe_.inner); return;
         case EX_RETURN:  NESC(e->as.return_.value);  return;
         case EX_DO:
@@ -4692,6 +4694,7 @@ static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
                 if (expr_stores_fnval_in_struct(h->cases[i].body, fv)) return true;
             return false;
         }
+        case EX_REINTERPRET: return expr_stores_fnval_in_struct(e->as.reinterpret_.expr, fv);
         case EX_ASCRIBE: return expr_stores_fnval_in_struct(e->as.ascribe_.inner, fv);
         case EX_RETURN:  return expr_stores_fnval_in_struct(e->as.return_.value, fv);
         case EX_SET:     return expr_stores_fnval_in_struct(e->as.set_.value, fv);
@@ -4794,6 +4797,9 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
                     break;
                 case EX_IF:
                     if (sp < 509) { stack[sp++] = e->as.if_.cond; stack[sp++] = e->as.if_.then_; stack[sp++] = e->as.if_.else_or_null; }
+                    break;
+                case EX_REINTERPRET:
+                    if (sp < 511) stack[sp++] = e->as.reinterpret_.expr;
                     break;
                 case EX_ASCRIBE:
                     if (sp < 511) stack[sp++] = e->as.ascribe_.inner;
