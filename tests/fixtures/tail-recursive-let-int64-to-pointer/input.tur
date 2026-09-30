@@ -1,0 +1,96 @@
+;; tail-recursive-let-int64-to-pointer -- a `let` that binds a POINTER-repr
+;; opaque handle from a carrier-returning producer, INSIDE a self-tail-recursive
+;; body.
+;;
+;; The mirror of tests/fixtures/tail-recursive-let-carrier-bridge. That one
+;; covers the carrier -> by-value-aggregate crossing; this one covers
+;; carrier -> pointer, which `emit_let_init_carrier_bridge_type` cannot serve
+;; because a pointer handle is not a by-value aggregate (it returns TY_UNKNOWN
+;; and the plain relabel won).
+;;
+;; A TCO'd function's `let` is emitted by emit_tail's inline EX_LET arm
+;; (src/compiler/emit_fns.c) rather than through emit_let_value, so every cast
+;; that lives there has to be repeated. The arm had the pointer -> int64_t
+;; direction but not its mirror: a call hoisted behind a panic check spills as
+;; `int64_t __ps_N = f(...);` and a `:ptr<void>` opaque binder is declared
+;; `void *`, so the arm emitted
+;;
+;;     void * h = __ps_N;
+;;
+;; a hard error under Apple clang's default -Wint-conversion and a bare warning
+;; under gcc -- which is why it read as a macOS-only spice failure. Found in
+;; turmeric-spices' thread-pool spice, whose `(defopaque Pool [T] :ptr<void>)`
+;; bound from `pool-new` in exactly this position.
+;;
+;; All three shapes are pinned at once, because either ingredient alone makes
+;; the defect disappear:
+;;
+;;   drain-tail    self-tail-recursive + let  -- the regression
+;;   drain-nontail same let, recursive call OUT of tail position (compiled
+;;                 before the fix, and must still compile after it)
+;;   drain-helper  same let, hoisted into a non-recursive helper (ditto)
+
+(defopaque Cell [T] :ptr<void>)
+
+;; A producer whose declared result is a `:ptr<void>` opaque, so its C return is
+;; the int64 carrier while a binder of that type is declared `void *`.
+(defn cell-of [n : int] : (Cell int)
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = n;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn cell-get [c : (Cell int)] : int
+  ```c
+  return *(int64_t *)(intptr_t)c;
+  ```)
+
+(defn cell-free [c : (Cell int)] : void
+  ```c
+  free((void *)(intptr_t)c);
+  ```)
+
+;; THE REGRESSION: self-tail-recursive, and the `let` binds the pointer handle.
+(defn drain-tail [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (let [c (cell-of n)]
+      (let [v (cell-get c)]
+        (do (cell-free c)
+            (drain-tail (- n 1) (+ acc v)))))))
+
+;; CONTROL: identical `let`, recursive call out of tail position.
+(defn drain-nontail [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (let [c (cell-of n)]
+      (let [v (cell-get c)]
+        (do (cell-free c)
+            (+ 0 (drain-nontail (- n 1) (+ acc v))))))))
+
+;; CONTROL: the `let` hoisted out, so the tail-recursive body binds nothing.
+(defn take-one [n : int] : int
+  (let [c (cell-of n)]
+    (let [v (cell-get c)]
+      (do (cell-free c) v))))
+
+(defn drain-helper [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (drain-helper (- n 1) (+ acc (take-one n)))))
+
+;; The handle still reads back correctly through the cast binding: a wrong
+;; reinterpretation would compile and print garbage rather than 7 here.
+(defn round-trip [] : int
+  (let [c (cell-of 7)]
+    (let [v (cell-get c)]
+      (do (cell-free c) v))))
+
+(defn main [] : int
+  (println (drain-tail 4 0))     ; 4+3+2+1
+  (println (drain-nontail 4 0))
+  (println (drain-helper 4 0))
+  (println (drain-tail 0 99))    ; the empty arm binds nothing
+  (println (round-trip))
+  0)

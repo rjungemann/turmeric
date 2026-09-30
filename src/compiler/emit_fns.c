@@ -1741,11 +1741,33 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                      * docs/reported/emit-tail-return-path-lacks-carrier-bridges.md,
                      * whose fix direction covers this arm too. */
                     bool iv_recorded_ptr = false;
-                    if (bind_c && strcmp(bind_c, "int64_t") == 0 &&
-                        emit_str_is_bare_ident(iv)) {
+                    /* ...and the FORWARD straddle, which this arm was still
+                     * missing: a bare temp whose RECORDED emitted C type is the
+                     * int64 carrier, initialising a POINTER binder.  A call
+                     * hoisted behind a panic check spills as
+                     * `int64_t __ps_N = f(...);` (emit_expr.c's `__ps_` hoist,
+                     * which records the temp's ctype), and a binder whose type
+                     * lowers to a pointer -- an opaque handle like thread-pool's
+                     * `(Pool T)`, so `void *` -- then declared
+                     * `void * p = __ps_N;`: a hard error under Apple clang's
+                     * default -Wint-conversion, a bare warning under gcc, which
+                     * is why it read as a macOS-only spice failure.
+                     *
+                     * emit_let_value bridges this at emit_expr.c:3800 on the
+                     * same two facts (`bind_is_ptr_repr` + `init_val_recorded_i64`);
+                     * the arm below is that arm, and `void *` is exactly the case
+                     * emit_let_init_carrier_bridge_type above cannot serve --
+                     * a pointer handle is not a by-value aggregate, so it
+                     * returns TY_UNKNOWN and the plain relabel won.  Fourth face
+                     * of the defect this arm's other two comments describe. */
+                    bool iv_recorded_i64 = false;
+                    bool bind_is_ptr_repr = bind_c && strchr(bind_c, '*') != NULL;
+                    if (bind_c && emit_str_is_bare_ident(iv)) {
                         const char *lvty = emit_localvar_lookup_ctype(iv);
                         size_t lL = lvty ? strlen(lvty) : 0;
-                        iv_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*';
+                        if (strcmp(bind_c, "int64_t") == 0)
+                            iv_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*';
+                        iv_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
                     }
                     indent_buf(body, ctx->indent);
                     /* let-bound-erasing-ascription-int-to-pointer: the same
@@ -1756,6 +1778,9 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                                    bind_c, bn, iv);
                     else if (emit_let_init_is_erased_word_to_ptr(
                             ctx, e->as.let_.bindings[i].init, bind_c))
+                        buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
+                                   bind_c, bn, bind_c, iv);
+                    else if (bind_is_ptr_repr && iv_recorded_i64)
                         buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
                                    bind_c, bn, bind_c, iv);
                     else
