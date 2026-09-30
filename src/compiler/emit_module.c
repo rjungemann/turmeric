@@ -12433,8 +12433,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * !defined(x): a front end or split half that already reaches x through
      * a host accessor (tur_tls.c) has x as a macro and keeps it.  Not
      * applied to thread-locals that belong to the thread rather than the
-     * fiber, tur_panicking above all, which every CPS call site reads. */
-    buf_puts(out, "#if defined(__clang__) || (defined(_WIN32) && defined(__GNUC__))\n");
+     * fiber, tur_panicking above all, which every CPS call site reads.
+     *
+     * gcc on ELF is safe only while each access stays a %fs-relative load.
+     * A sanitizer's instrumentation needs the ADDRESS -- it passes it to the
+     * runtime's check -- so gcc materializes it once and reuses it across the
+     * switch like clang does: under -fsanitize=thread,
+     * fiber-scheduler-mt-migration read the first worker's slot from the
+     * second (TSan: "Location is TLS of thread T1"), two or three reports a
+     * run, and none with the accessor (security-audit-plan WP5's TSan job).
+     * ASan instruments the same way, so it is covered too, unmeasured. */
+    buf_puts(out, "#if defined(__clang__) || (defined(_WIN32) && defined(__GNUC__)) || \\\n"
+                  "    defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)\n");
     buf_puts(out, "#  define TUR_TLS_FRESH(T, x, at) __attribute__((noinline, unused)) static T *at(void) { __asm__ volatile (\"\" ::: \"memory\"); return &x; } extern int tur_tls_fresh_end\n");
     buf_puts(out, "#endif\n");
     if (!r7rs_gc_active(shared)) {
@@ -15375,7 +15385,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);\n");
     buf_puts(out, "    /* Sleep until woken by a channel operation or cancelled (TC1) */\n");
     buf_puts(out, "    pthread_mutex_lock(&wakeup_mutex);\n");
-    buf_puts(out, "    while (selected_idx == -1) {\n");
+    /* selected_idx is WRITTEN by tur_waiter_signal_one's CAS, on the
+     * signalling thread and before it takes wakeup_mutex, so a plain read
+     * here raced with it -- a C11 data race TSan reports on
+     * select-send-block (security-audit-plan WP5's TSan job).  Read it
+     * atomically, with the ordering the CAS publishes. */
+    buf_puts(out, "    while (TUR_ATOMIC_LOAD_INT(&selected_idx, __ATOMIC_ACQUIRE) == -1) {\n");
     buf_puts(out, "        if (tur_thread_cancel_requested()) {\n");
     buf_puts(out, "            pthread_mutex_unlock(&wakeup_mutex);\n");
     buf_puts(out, "            /* Deregister all waiters before cancelling */\n");
@@ -15404,7 +15419,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        __sel_ts.tv_nsec = __sel_ns % 1000000000L;\n");
     buf_puts(out, "        pthread_cond_timedwait(&wakeup_cond, &wakeup_mutex, &__sel_ts);\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    int winner = selected_idx;\n");
+    buf_puts(out, "    int winner = TUR_ATOMIC_LOAD_INT(&selected_idx, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "    pthread_mutex_unlock(&wakeup_mutex);\n");
     buf_puts(out, "    /* Deregister all waiters */\n");
     buf_puts(out, "    for (int i = 0; i < wn; i++) {\n");

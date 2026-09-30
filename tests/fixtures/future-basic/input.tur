@@ -113,7 +113,7 @@
   return (int)((Result *)r)->err_val;
   ```)
 
-(defn result-free [r : ptr<void>] : nil
+(defn fut-result-free [r : ptr<void>] : nil
   ```c
   free(r);
   ```)
@@ -179,7 +179,7 @@
           (if (result-ok? result)
             (print-labelled "ok:" (result-val result))
             (print-labelled "err:" (result-err result)))
-          (result-free result)
+          (fut-result-free result)
           (thread-join-raw t))
         (fc-free fc)))
     0))

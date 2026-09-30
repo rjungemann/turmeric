@@ -45,6 +45,10 @@
 ;;;
 ;;; Since: Phase TC2
 
+;; A negative length cast to size_t became SIZE_MAX: malloc failed but the
+;; length was kept, and move-left/move-right indexed and memcpy'd by it
+;; (security audit WP5, M-5).  The buffers themselves are the caller's to vouch
+;; for, as with any pointer-and-length API.
 (defn zipper-new-raw [left : ptr<void>
                       left-len : int
                       focus : int
@@ -53,12 +57,23 @@
   #fx{}
   : int
   ```c
+  if (left_len < 0 || right_len < 0 ||
+      (uint64_t)left_len > SIZE_MAX / sizeof(int64_t) - 1 ||
+      (uint64_t)right_len > SIZE_MAX / sizeof(int64_t) - 1) {
+    fprintf(stderr, "zipper-new: lengths %lld/%lld out of range\n",
+            (long long)left_len, (long long)right_len);
+    exit(1);
+  }
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+  if (!z) { fprintf(stderr, "zipper-new: out of memory\n"); exit(1); }
   z->left_len  = (size_t)left_len;
   z->right_len = (size_t)right_len;
   z->focus     = focus;
   z->left  = z->left_len  > 0 ? malloc(sizeof(int64_t) * z->left_len)  : NULL;
   z->right = z->right_len > 0 ? malloc(sizeof(int64_t) * z->right_len) : NULL;
+  if ((z->left_len && !z->left) || (z->right_len && !z->right)) {
+    fprintf(stderr, "zipper-new: out of memory\n"); exit(1);
+  }
   if (z->left  && left)  memcpy(z->left,  (int64_t*)(intptr_t)left,  sizeof(int64_t) * z->left_len);
   if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;

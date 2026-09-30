@@ -175,8 +175,7 @@ authenticity -- is an open question in the audit plan.
 
 Also open under T2: JSON has no nesting depth limit and over-reads on input
 ending in a backslash (M-2); `httpd` does not cap a request body and does not
-reject a request carrying both `Content-Length` and `Transfer-Encoding` (M-4);
-several size computations are done in signed `int` (M-5).
+reject a request carrying both `Content-Length` and `Transfer-Encoding` (M-4).
 
 ---
 
