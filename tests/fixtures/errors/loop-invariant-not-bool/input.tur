@@ -1,0 +1,6 @@
+;; loop-invariants-plan LI0: an invariant must be a bool predicate.
+(defn main [] : int
+  (let [^mut i 0]
+    (while (< i 3) :invariant (+ i 1)
+      (set! i (+ i 1))))
+  0)

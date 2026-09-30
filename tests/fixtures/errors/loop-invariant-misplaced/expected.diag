@@ -1,0 +1,3 @@
+while: at most one `:invariant` per loop -- combine the predicates with `and`
+while: `:invariant` must directly follow the loop condition
+while: `:invariant` must be followed by a predicate

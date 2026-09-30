@@ -299,7 +299,7 @@ both are worth knowing.
 about a mutable resource, congruent in a scope where that resource is frozen."
 The same `frozen` + `#reads` pair covers an open file (`(open? conn)`), a
 resizable buffer (`(in-bounds? buf i)` -- the bounds-elimination case
-[`loop-invariants-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/hold/loop-invariants-plan.md) wants;
+[`loop-invariants-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md) wants;
 pinned by
 `tests/fixtures/refine-stateful-resizable-bounds`: the guard proves inside the
 region, `grow!` is `TUR-E0200` there, and without the region the read is

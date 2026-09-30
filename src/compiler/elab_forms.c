@@ -1,6 +1,7 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
 #include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
+#include "experiments.h"     /* loop-invariants-plan: experiment_warn_if_used */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -4531,6 +4532,26 @@ Expr *elab_set(Elab *e, const Form *call) {
     return out;
 }
 
+/* loop-invariants-plan: is `f` the `:invariant` keyword? */
+static bool while_is_invariant_kw(const Elab *e, const Form *f) {
+    return f && f->tag == F_KEYWORD && f->as.sym == e->kw_invariant;
+}
+
+/* The source location a loop-invariant panic names, as `file:line:col`.
+ * Basename only: the message is program output, and an absolute build path
+ * would make it differ between checkouts. */
+static const char *while_loc_str(Elab *e, Span sp) {
+    Span t = diag_translate_span(sp);
+    const char *path = diag_file_path(t.file_id);
+    const char *base = path ? path : "<input>";
+    for (const char *q = base; *q; q++)
+        if (*q == '/' || *q == '\\') base = q + 1;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s:%u:%u", base, (unsigned)t.line,
+             (unsigned)t.col_start);
+    return arena_strdup(e->arena, buf, strlen(buf));
+}
+
 Expr *elab_while(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span, "while requires a condition");
@@ -4550,25 +4571,120 @@ Expr *elab_while(Elab *e, const Form *call) {
                   "while condition must be bool, got %s", type_name(cond->type));
         return NULL;
     }
-    uint32_t n = call->as.list.len - 2;
+
+    /* loop-invariants-plan LI0: `(while c :invariant p body...)`.  The keyword
+     * is accepted only DIRECTLY after the condition and at most once -- the
+     * `:pre`/`:post` scan shape, narrowed to one slot.  Before this, a stray
+     * keyword in a `while` body was an ordinary (ignored) value statement, so
+     * `:invariant p` would have silently evaluated `p` each iteration and
+     * checked nothing; rejecting it anywhere but the annotation slot is what
+     * keeps a misplaced one from reading as a working invariant.
+     *
+     * The annotation always PARSES and is always VALIDATED (a pure `bool`); the
+     * `loop-invariants` gate withholds only the acting. */
+    uint32_t body_start = 2;
+    const Form *inv_form = NULL;
+    Expr *inv_e = NULL;
+    if (call->as.list.len > 2 && while_is_invariant_kw(e, call->as.list.items[2])) {
+        if (call->as.list.len < 4) {
+            diag_emit(DIAG_ERROR, call->as.list.items[2]->span,
+                      "while: `:invariant` must be followed by a predicate");
+            return NULL;
+        }
+        inv_form = call->as.list.items[3];
+        body_start = 4;
+    }
+    for (uint32_t k = body_start; k < call->as.list.len; k++) {
+        if (!while_is_invariant_kw(e, call->as.list.items[k])) continue;
+        diag_emit(DIAG_ERROR, call->as.list.items[k]->span,
+                  inv_form && k == body_start
+                      ? "while: at most one `:invariant` per loop -- combine the "
+                        "predicates with `and`"
+                      : "while: `:invariant` must directly follow the loop "
+                        "condition");
+        return NULL;
+    }
+    if (inv_form) {
+        inv_e = elab_loop_invariant_pred(e, inv_form, inv_form->span);
+        if (!inv_e) return NULL;
+    }
+    bool li_on = inv_form && g_opt_loop_invariants;
+    if (li_on) experiment_warn_if_used("loop-invariants");
+
+    uint32_t n = call->as.list.len - body_start;
     Expr *body;
     if (n == 0) body = e_nil(e, call->span);
     else if (n == 1) {
-        body = elab_form(e, call->as.list.items[2]);
+        body = elab_form(e, call->as.list.items[body_start]);
         if (!body) return NULL;
     } else {
         Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
         for (uint32_t i = 0; i < n; i++) {
-            items[i] = elab_form(e, call->as.list.items[2 + i]);
+            items[i] = elab_form(e, call->as.list.items[body_start + i]);
             if (!items[i]) return NULL;
         }
         body = expr_new(e->arena, EX_DO, TYPE_NIL, call->span);
         body->as.do_.items = items;
         body->as.do_.n = n;
     }
+
+    /* LI1: the invariant is a contract first.  Checked on entry and as the
+     * last statement of every iteration (re-establishment), injected as
+     * ordinary Exprs so the compiled and interpreted paths agree for free.
+     * A static proof (LI2, decided by the enclosing defn) overwrites the slot
+     * with nil -- the same elision a proved `:pre`/`:post` gets. */
+    Expr **entry_slot = NULL, **body_slot = NULL;
+    Expr *entry_do = NULL;
+    if (li_on && rt_contracts_emitted()) {
+        const char *loc = while_loc_str(e, call->span);
+        char msg[384];
+        snprintf(msg, sizeof(msg), "Loop invariant failed on entry to the while "
+                 "loop at %s", loc);
+        Expr *entry_chk = li_contract_check(
+            e, inv_e, arena_strdup(e->arena, msg, strlen(msg)), inv_form->span);
+        Expr *body_pred = entry_chk ? elab_loop_invariant_pred(e, inv_form,
+                                                               inv_form->span)
+                                    : NULL;
+        snprintf(msg, sizeof(msg), "Loop invariant not re-established by the "
+                 "body of the while loop at %s", loc);
+        Expr *body_chk = body_pred ? li_contract_check(
+            e, body_pred, arena_strdup(e->arena, msg, strlen(msg)),
+            inv_form->span) : NULL;
+        if (entry_chk && body_chk) {
+            Expr **bi = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+            bi[0] = body;
+            bi[1] = body_chk;
+            Expr *nb = expr_new(e->arena, EX_DO, TYPE_NIL, call->span);
+            nb->as.do_.items = bi;
+            nb->as.do_.n = 2;
+            body = nb;
+            body_slot = &bi[1];
+
+            Expr **ei = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+            ei[0] = entry_chk;
+            entry_do = expr_new(e->arena, EX_DO, TYPE_NIL, call->span);
+            entry_do->as.do_.items = ei;
+            entry_do->as.do_.n = 2;
+            entry_slot = &ei[0];
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_WHILE, TYPE_NIL, call->span);
     out->as.while_.cond = cond;
     out->as.while_.body = body;
+    out->as.while_.invariant = inv_form;
+    if (li_on) {
+        LoopInvSite *site = li_register_site(e, call, call->as.list.items[1],
+                                             inv_form, body_start, call->span);
+        if (site) {
+            site->entry_check = entry_slot;
+            site->body_check  = body_slot;
+        }
+    }
+    if (entry_do) {
+        entry_do->as.do_.items[1] = out;
+        return entry_do;
+    }
     return out;
 }
 

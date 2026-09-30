@@ -1,0 +1,30 @@
+;; loop-invariants-plan: two channels that rebind a local with no `set!` in the
+;; loop.  Both were live miscompiles during development -- preservation
+;; "proved", the re-establishment check elided, and the functions returned
+;; -100 and -50 against a `(>= acc 0)` invariant.  Both must now be declined
+;; (TUR-W0372, promoted to an error here by --strict-refine).
+(defeffect Tick [] : nil)
+(defn zap [r : &mut int] : int (set! @r -100) 0)
+
+;; A `&mut` alias taken BEFORE the loop, handed to a writing callee inside it.
+(defn alias [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0
+        rm       &mut acc]
+    (while (< i n) :invariant (>= acc 0)
+      (zap rm)
+      (set! i (+ i 1)))
+    acc))
+
+;; A handler clause of the same function, run by the `perform` in the body.
+(defn handler [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (handle
+      (while (< i n) :invariant (>= acc 0)
+        (perform (Tick))
+        (set! i (+ i 1)))
+      (Tick [] k) (do (set! acc -50) (resume k nil)))
+    acc))
+
+(defn main [] : int 0)

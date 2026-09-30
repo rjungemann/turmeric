@@ -2426,6 +2426,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* CT0: Contract keyword symbols */
     e->kw_pre  = intern_cstr(st, "pre");
     e->kw_post = intern_cstr(st, "post");
+    e->kw_invariant = intern_cstr(st, "invariant");
     e->sym_result             = intern_cstr(st, "result");
     e->sym_tur_contract_check = intern_cstr(st, "tur-contract-check");
     /* DV0: Dynamic vars */

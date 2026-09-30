@@ -1,0 +1,13 @@
+;; loop-invariants-plan LI4: an undecided invariant obligation is TUR-W0372
+;; (a warning -- the runtime check stays), and --strict-refine promotes it to
+;; an error exactly as it does any other W0372.  `step` is opaque to the
+;; solver, so preservation cannot be decided either way.
+(defn step [x : int] : int (if (> x 100) 1 2))
+
+(defn f [n : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= i 0)
+      (set! i (+ i (step i))))
+    i))
+
+(defn main [] : int 0)

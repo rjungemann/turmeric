@@ -1,0 +1,13 @@
+;; mut-param-refinement-trusted-after-set: a `^mut` parameter's refinement
+;; holds ON ENTRY.  Once the body reassigns it, the entry fact is stale, and
+;; the return obligation must not use it.  It used to: `n >= 0` "proved"
+;; `r >= 0` for a body returning -5, the return check was elided, and the
+;; program printed -5.  Now the obligation is undecided (TUR-W0372), the check
+;; stays, and the violation panics where it happens.
+(defn f [^mut n : #refine{ v : int | (>= v 0) }] : #refine{ r : int | (>= r 0) }
+  (set! n -5)
+  n)
+
+(defn main [] : int
+  (println (f 3))
+  0)

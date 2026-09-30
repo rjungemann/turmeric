@@ -1,0 +1,41 @@
+;; loop-invariants-plan LI0/LI1: a `while` carrying `:invariant` parses, is
+;; checked, and runs unchanged -- whether the invariant is proved, left
+;; undecided, or declined.  Also run under --interpret by tests/run-turi.sh.
+
+;; step is opaque to the solver, so preservation is undecided (W0372) and the
+;; re-establishment check stays -- it passes, because step never goes below 1.
+(defn step [x : int] : int (if (> x 100) 1 2))
+
+(defn proved [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+      (set! acc (+ acc i))
+      (set! i   (+ i 1)))
+    acc))
+
+(defn undecided [n : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= i 0)
+      (set! i (+ i (step i))))
+    i))
+
+(defstruct Box [v : int])
+
+(defn declined [n : int] : int
+  (let [^mut b (Box 0)]
+    (while (< (.v b) n) :invariant (>= (.v b) 0)
+      (set! (.v b) (+ (.v b) 1)))
+    (.v b)))
+
+(defn empty-body [] : int
+  (let [^mut i 0]
+    (while (> i 0) :invariant (>= i 0))
+    i))
+
+(defn main [] : int
+  (println (proved 5))
+  (println (undecided 5))
+  (println (declined 4))
+  (println (empty-body))
+  0)

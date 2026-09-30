@@ -218,6 +218,13 @@ types), and `defmacro` (syntax extension). Each has a dedicated guide:
 - Modules, `import`/`export`: [module-system-guide.md](module-system-guide.md)
 - Macros (`defmacro`): [macros-guide.md](macros-guide.md)
 
+A `while` may carry a written loop invariant directly after its condition --
+`(while (< i n) :invariant (>= i 0) body...)` -- which is checked on entry and
+after every iteration and, when proved, usable after the loop (experimental,
+`--enable=loop-invariants`; see
+[refinement-types-guide.md](refinement-types-guide.md)).  Without the flag it
+parses and is validated, and nothing acts on it.
+
 ### Type-annotation syntax
 
 Types appear after a name with a leading colon. In a parameter list each

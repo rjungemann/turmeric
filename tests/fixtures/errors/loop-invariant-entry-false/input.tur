@@ -1,0 +1,18 @@
+;; loop-invariants-plan LI2: an invariant that is FALSE on entry, on every
+;; execution, is a compile error.  `closed` is the (safe-div 10 0) shape: the
+;; facts at the loop fix `i`.  `reassigned` loses `i = 0` to the assignment
+;; before the loop -- but keeps `i = -5`, which refutes the goal outright.
+(defn closed [n : int] : int
+  (let [^mut i -3]
+    (while (< i n) :invariant (>= i 0)
+      (set! i (+ i 1)))
+    i))
+
+(defn reassigned [n : int] : int
+  (let [^mut i 0]
+    (set! i -5)
+    (while (< i n) :invariant (>= i 0)
+      (set! i (+ i 1)))
+    i))
+
+(defn main [] : int 0)

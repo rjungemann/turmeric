@@ -1,0 +1,72 @@
+;; loop-invariants-plan: the conservative posture is a tested property.  Each
+;; loop below is one the analysis DECLINES -- TUR-W0372 "is not analysed
+;; statically: <reason>" and both runtime checks kept -- because proving it
+;; would need a channel the analysis does not model.  Every invariant here is
+;; true at runtime, so the kept checks pass.
+(defstruct Box [v : int])
+(defeffect Tick [] : nil)
+(defn peek-mut [r : &mut int] : int @r)
+
+;; A write through a place expression.
+(defn field-write [n : int] : int
+  (let [^mut b (Box 0)
+        ^mut i 0]
+    (while (< i n) :invariant (>= i 0)
+      (set! (.v b) i)
+      (set! i (+ i 1)))
+    i))
+
+;; An early exit: `(not c)` does not hold on the `return` path.
+(defn early [n : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= i 0)
+      (when (> i 100) (return -1))
+      (set! i (+ i 1)))
+    i))
+
+;; A mutable borrow of the accumulator: a callee could write it.
+(defn borrowed [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (>= acc 0)
+      (peek-mut &mut acc)
+      (set! acc (+ acc 1))
+      (set! i (+ i 1)))
+    acc))
+
+;; A lambda that assigns the loop variable: calling it rebinds `i`.
+(defn via-lambda [n : int] : int
+  (let [^mut i 0
+        bump (fn [] : int (set! i (+ i 0)) 0)]
+    (while (< i n) :invariant (>= i 0)
+      (bump)
+      (set! i (+ i 1)))
+    i))
+
+;; A handler clause in the same function that assigns what the invariant reads.
+(defn via-handler [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (handle
+      (while (< i n) :invariant (>= acc 0)
+        (perform (Tick))
+        (set! i (+ i 1)))
+      (Tick [] k) (do (set! acc (+ acc 1)) (resume k nil)))
+    acc))
+
+;; A body `let` that shadows the loop variable.
+(defn shadowing [n : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= i 0)
+      (let [^mut i 5] (set! i (+ i 1)))
+      (set! i (+ i 1)))
+    i))
+
+(defn main [] : int
+  (println (field-write 3))
+  (println (early 3))
+  (println (borrowed 3))
+  (println (via-lambda 3))
+  (println (via-handler 3))
+  (println (shadowing 3))
+  0)
