@@ -458,6 +458,13 @@ static bool extern_printf_format(const char *fmt, const char *kinds,
 
 /* printf: one optional argument, formatted through the checked format above.
  * A format the check rejects is a TURI_ERROR, never a libc call. */
+/* The checked copy is still not a string LITERAL, so -Wformat-nonliteral
+ * (security audit WP5) is silenced for this one function: the format that
+ * reaches printf is the one extern_printf_format rebuilt and vetted above. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
 static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || args[0].tag != TURI_CSTR || !args[0].as_cstr) return turi_int(0);
@@ -486,6 +493,9 @@ static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n,
     free(safe);
     return turi_int((int64_t)ret);
 }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 /* puts: write the cstr followed by a newline (libc semantics). */
 static TuriValue native_extern_puts(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
@@ -5676,8 +5686,13 @@ static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
             return turi_nil();
         memcpy(fmt_str, safe_fmt, strlen(safe_fmt) + 1);
     }
-    /* format the result */
+    /* format the result.  fmt_str is the vetted copy above but not a
+     * literal, so -Wformat-nonliteral (WP5) is silenced for this switch. */
     char result_buf[1024]; int rlen=0;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     switch(sn_argc){
         case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
         case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
@@ -5686,6 +5701,9 @@ static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
         case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
         default: return turi_nil();
     }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     if(rlen<0) return turi_nil();
     /* snprintf returns the length it WOULD have written; a result longer
      * than the buffer was truncated there, so copy only what is in it.
@@ -5935,6 +5953,18 @@ static TuriValue ic_exec_linked_list_print(const char *body,
     if (fmt_len >= sizeof(fmt_str)) return turi_nil();
     memcpy(fmt_str, fmts, fmt_len); fmt_str[fmt_len] = '\0';
     ic_unescape_str(fmt_str);
+    /* security-audit-plan S-3, the second emulator: this one formatted the
+     * PROGRAM's string unchecked too (a %s dereferenced the int it is handed),
+     * and WP3's check reached only ic_format_snprintf_call.  Same check: one
+     * integer conversion, since the field travels as a long long.  A format
+     * that fails, or outgrows the buffer once normalised, is declined. */
+    {
+        char safe_fmt[2 * sizeof fmt_str + 8];
+        if (!extern_printf_format(fmt_str, "i", safe_fmt, sizeof safe_fmt) ||
+            strlen(safe_fmt) >= sizeof fmt_str)
+            return turi_nil();
+        memcpy(fmt_str, safe_fmt, strlen(safe_fmt) + 1);
+    }
     pfq = fmte+1;
     if (*pfq == ',') pfq++;
     pfq = ic_skip_ws(pfq);
@@ -6021,7 +6051,15 @@ static TuriValue ic_exec_linked_list_print(const char *body,
         while (cur && safety-->0) {
             int64_t pval=cur[pidx];
             char line[256];
+            /* fmt_str is the vetted copy (above), not a literal. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
             int llen=snprintf(line,sizeof(line),fmt_str,(long long)pval);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
             if (llen>0) { fwrite(line,1,(size_t)llen,stdout); fflush(stdout); }
             cur=(int64_t*)(intptr_t)cur[nidx];
         }

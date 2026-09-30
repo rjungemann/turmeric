@@ -1,0 +1,112 @@
+name: TSan
+
+# The concurrency fixtures under ThreadSanitizer (security-audit-plan WP5).
+#
+# tests/run.sh has carried a TUR_TSAN=1 mode and a TSan CMake config since
+# T19, and eighteen fixtures carry a `requires.tsan` marker -- which SKIPS them
+# in every ordinary run -- but nothing ever ran them.  The first run found two
+# of them bit-rotted past building, one that hung a third of the time on its
+# own logic, two races in the emitted runtime, and a fiber thread-local that a
+# sanitized build read from the wrong worker.  This is where they run now;
+# tests/run-tsan.sh is the selection and runs the same locally.
+#
+# Deliberately NOT on push/pull_request, for the reason fuzz.yml gives: a race
+# is a finding to triage, and this project's standing position is that a red
+# suite never blocks landing.  Findings go to an issue, not only to a red X.
+
+on:
+  schedule:
+    # 05:10 UTC daily -- off the hour, and clear of the 04:30 fuzz run.
+    - cron: "10 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: tsan
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  tsan:
+    name: TSan concurrency fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          # Mirrors ci.yml: the runner image's Google Chrome apt source has
+          # served a stale index and killed jobs before any step ran.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      # Release, not the default Debug: that one is ASan-instrumented, and the
+      # fixture programs link the runtime archives beside `tur` -- ASan and
+      # TSan cannot share a process.
+      - name: Configure (Release)
+        run: cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build-tsan -j
+
+      - name: Smoke check (tur --version must not hang)
+        run: timeout 60 ./build-tsan/tur --version
+
+      # CLAUDE.md: every suite run carries the 12-minute timeout.
+      - name: Run the concurrency fixtures under TSan
+        id: run
+        env:
+          TUR: ./build-tsan/tur
+        run: |
+          set +e
+          timeout 720 bash tests/run-tsan.sh 2>&1 | tee tsan.log
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          grep -E '^FAIL ' tsan.log | sort -u > tsan-failures.txt || true
+          exit 0
+
+      - name: Upload the log
+        if: steps.run.outputs.rc != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-${{ github.run_id }}
+          path: |
+            tsan.log
+            tsan-failures.txt
+          retention-days: 30
+
+      # The `tsan` label is created rather than assumed, and a failed label
+      # never loses the issue -- fuzz.yml learned both the hard way.
+      - name: Open an issue for the findings
+        if: steps.run.outputs.rc != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RC: ${{ steps.run.outputs.rc }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create tsan --force --color 5319E7 \
+            --description "Nightly ThreadSanitizer finding" || true
+          FAILS="$(head -40 tsan-failures.txt)"
+          BODY="$(cat <<EOF
+          The nightly ThreadSanitizer run failed (exit $RC).
+
+          - **Run:** $RUN_URL (log attached as the \`tsan-${{ github.run_id }}\` artifact)
+
+          \`\`\`
+          $FAILS
+          \`\`\`
+
+          An \`exit 66\` is a TSan report: the race is in the fixture's stderr in
+          the log.  To reproduce locally, build a non-ASan \`tur\` and run
+          \`TUR=<it> timeout 720 bash tests/run-tsan.sh\` (the header of that
+          script has the commands).  A fixture TSan itself cannot run goes in
+          its \`EXCLUDE\` list with the reason beside it.
+          EOF
+          )"
+          TITLE="TSan: nightly run failed ($(date -u +%Y-%m-%d))"
+          gh issue create --title "$TITLE" --label tsan --body "$BODY" ||
+            gh issue create --title "$TITLE" --body "$BODY"

@@ -918,6 +918,7 @@ static const Symbol *fresh(SL *sl, const char *prefix) {
     }
 }
 
+static void err(const Form *at, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
 static void err(const Form *at, const char *fmt, ...) {
     char msg[512];
     va_list ap; va_start(ap, fmt);

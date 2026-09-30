@@ -13,7 +13,8 @@
 #else
 #  define TUR_THREAD_LOCAL __thread
 #endif
-#if defined(__clang__) || (defined(_WIN32) && defined(__GNUC__))
+#if defined(__clang__) || (defined(_WIN32) && defined(__GNUC__)) || \
+    defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
 #  define TUR_TLS_FRESH(T, x, at) __attribute__((noinline, unused)) static T *at(void) { __asm__ volatile ("" ::: "memory"); return &x; } extern int tur_tls_fresh_end
 #endif
 #define TUR_GC_FIBER_ENTER(sp) ((void)0)
@@ -2184,10 +2185,16 @@ static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
  * continuation frame) with a fresh, shared group id.  dk_case_enclosing_real and
  * dk_perform's re-install then skip only same-group handlers, so an enclosing
  * handle's handlers that become ADJACENT after a chain-flattening re-install are
- * no longer mistaken for this handle's siblings (they carry a different id). */
-static int g_dk_hgroup_ctr = 0;
+ * no longer mistaken for this handle's siblings (they carry a different id).
+ * The counter is process-wide and bumped from every thread, so it is atomic:
+ * a plain ++ lost updates, and a counter that goes BACKWARDS can hand one
+ * thread the same id twice -- two handles' cases read as siblings (TSan on
+ * threads-effects-tail-resume, security-audit-plan WP5).  Not per-thread: a
+ * fiber's chain can pick up ids on more than one worker.  Relaxed, because
+ * only uniqueness matters. */
+static volatile uint64_t g_dk_hgroup_ctr = 0;
 static DK *dk_hgroup(DK *head) {
-    int g = ++g_dk_hgroup_ctr;
+    int g = (int)TUR_ATOMIC_ADD_FETCH_U64(&g_dk_hgroup_ctr, 1, __ATOMIC_RELAXED);
     for (DK *p = head; p && p->kind == DKK_HANDLER; p = p->next) p->hgroup = g;
     return head;
 }
@@ -3892,7 +3899,7 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
     for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
     /* Sleep until woken by a channel operation or cancelled (TC1) */
     pthread_mutex_lock(&wakeup_mutex);
-    while (selected_idx == -1) {
+    while (TUR_ATOMIC_LOAD_INT(&selected_idx, __ATOMIC_ACQUIRE) == -1) {
         if (tur_thread_cancel_requested()) {
             pthread_mutex_unlock(&wakeup_mutex);
             /* Deregister all waiters before cancelling */
@@ -3921,7 +3928,7 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
         __sel_ts.tv_nsec = __sel_ns % 1000000000L;
         pthread_cond_timedwait(&wakeup_cond, &wakeup_mutex, &__sel_ts);
     }
-    int winner = selected_idx;
+    int winner = TUR_ATOMIC_LOAD_INT(&selected_idx, __ATOMIC_ACQUIRE);
     pthread_mutex_unlock(&wakeup_mutex);
     /* Deregister all waiters */
     for (int i = 0; i < wn; i++) {
@@ -7928,24 +7935,42 @@ static int64_t length(int64_t l) {
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
-        struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+        if (width < 0 || height < 0 || width > INT32_MAX || height > INT32_MAX ||
+      (height > 0 && (uint64_t)width > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)height)) {
+    fprintf(stderr, "grid-new: dimensions %lldx%lld out of range\n",
+            (long long)width, (long long)height);
+    exit(1);
+  }
+  struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+  if (!g) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   g->width  = (int)width;
   g->height = (int)height;
   g->cx = 0;
   g->cy = 0;
-  g->data = calloc((size_t)(width * height), sizeof(int64_t));
+  g->data = calloc((size_t)width * (size_t)height, sizeof(int64_t));
+  if (!g->data && width > 0 && height > 0) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)g;
   
 }
 
 static int64_t grid_hyget(int64_t g, int64_t x, int64_t y) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-get: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   
 }
 
 static void grid_hyset_ex(int64_t g, int64_t x, int64_t y, int64_t v) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-set!: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   TUR_REGION_NOTE(v);   /* region-lock-hardening: see vec-push! */
   grid->data[(size_t)(y * grid->width + x)] = v;
   
@@ -7971,12 +7996,23 @@ static void grid_hyfree(int64_t g) {
 }
 
 static int64_t zipper_hynew_hyraw(void * left, int64_t left_len, int64_t focus, void * right, int64_t right_len) {
-        struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+        if (left_len < 0 || right_len < 0 ||
+      (uint64_t)left_len > SIZE_MAX / sizeof(int64_t) - 1 ||
+      (uint64_t)right_len > SIZE_MAX / sizeof(int64_t) - 1) {
+    fprintf(stderr, "zipper-new: lengths %lld/%lld out of range\n",
+            (long long)left_len, (long long)right_len);
+    exit(1);
+  }
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+  if (!z) { fprintf(stderr, "zipper-new: out of memory\n"); exit(1); }
   z->left_len  = (size_t)left_len;
   z->right_len = (size_t)right_len;
   z->focus     = focus;
   z->left  = z->left_len  > 0 ? malloc(sizeof(int64_t) * z->left_len)  : NULL;
   z->right = z->right_len > 0 ? malloc(sizeof(int64_t) * z->right_len) : NULL;
+  if ((z->left_len && !z->left) || (z->right_len && !z->right)) {
+    fprintf(stderr, "zipper-new: out of memory\n"); exit(1);
+  }
   if (z->left  && left)  memcpy(z->left,  (int64_t*)(intptr_t)left,  sizeof(int64_t) * z->left_len);
   if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;
