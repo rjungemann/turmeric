@@ -53,4 +53,14 @@ int reader_macros_load_file(Arena *arena, SymbolTable *st,
                             const char *abs_path,
                             struct ReaderMacroRegistry *registry);
 
+/* repl-continuation-counter-misreads-reader-syntax: brackets left open by
+ * `src[0..len)` as the reader of type `rt` would lex it -- strings, ```c
+ * fences, nested #| |# comments, `;` / `#;` comments, `#\c` literals and
+ * (Scheme) |symbols| included.  Positive means the input is not a whole form
+ * yet; <= 0 means hand it to the reader (which reports an over-close).  Input
+ * that ends inside a string, fence or block comment returns >= 1 and sets
+ * *in_lexeme (may be NULL).  Used by the REPL's multi-line continuation. */
+int reader_open_depth(const char *src, size_t len, ReaderType rt,
+                      bool *in_lexeme);
+
 #endif

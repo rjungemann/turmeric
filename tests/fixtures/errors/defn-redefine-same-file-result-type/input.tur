@@ -1,0 +1,9 @@
+;; duplicate-defn-in-one-file-reaches-the-c-compiler: the second definition
+;; changes the result type.  Used to pass `check`, print 2.5 under
+;; --interpret, and fail in cc with "conflicting types for 'f'".
+(defn f [] : int 1)
+(defn f [] : float 2.5)
+
+(defn main [] : int
+  (println (f))
+  0)

@@ -1347,6 +1347,14 @@ add_test(
   COMMAND bash tests/turi/repl-smoke.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# repl-continuation-counter-misreads-reader-syntax: a multi-line form is
+# complete when the READER says so -- ```c fences, strings across lines,
+# #| |# comments and #\( literals do not hang or split the prompt.
+add_test(
+  NAME tur_repl_multiline_input
+  COMMAND bash tests/turi/repl-multiline-input.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # The REPL surface a GUI host drives: OSC 133 busy/idle markers, the logical
 # working directory, :load-string, and TUR_STDLIB_DIR validation.
 add_test(

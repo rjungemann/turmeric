@@ -2353,6 +2353,17 @@ answers.
 | ~~[fn-param-call-prototype-spelled-from-the-call-not-the-fn](../archive/fn-param-call-prototype-spelled-from-the-call-not-the-fn.md)~~ | high | **RESOLVED 2026-09-29** (archived): both halves were elaboration, not the emitter. Result half: the non-HKT dispatch now binds the METHOD's own tyvars (`b := float`) so the instance spec resolves them; argument half: `elab_poly_call` widens a concrete argument where a typed carrier's parameter is `any`. `instance-fn-param-call-result-tyvar`, `instance-fn-param-call-any-args` |
 | ~~[concrete-result-fn-passed-where-an-any-result-fn-is-expected](../archive/concrete-result-fn-passed-where-an-any-result-fn-is-expected.md)~~ | medium-high | **RESOLVED 2026-09-29** (archived): the `any` bridge marshals a function whose signature differs from a ground parameter only in `any` slots; for the generic spelling, a call through a LOCAL fn value no longer binds the enclosing definition's rigid tyvar from the expected return, and the `any`-widen spec trigger now covers plain generics (`B := int` changes no ABI). `fn-arg-any-result-bridge` |
 
+## Found investigating the AOT-compiled REPL plan (filed 2026-09-29)
+
+Found while checking the 2026-06-28 draft of
+[aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md) against
+`main`. Both were resolved the next day. The first was that plan's phase C0.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[repl-continuation-counter-misreads-reader-syntax](../archive/repl-continuation-counter-misreads-reader-syntax.md)~~ | medium | **RESOLVED 2026-09-30** (archived): the REPL decides whether a multi-line form is finished with `reader_open_depth` (`src/compiler/reader.c`). It lexes the whole accumulated input the way the reader does, so ```` ```c ```` bodies, strings across lines, nested `#\| \|#` comments and `#\(` literals no longer hang the `..` prompt or split a form. A blank line inside a string or fence is kept as content, and end of input mid-form prints `(cancelled)`. Pinned by `tests/turi/repl-multiline-input.sh`. Original row: `paren_balance` counted brackets inside all of those, so a C `for (...;...;...)` swallowed piped input with exit 0 |
+| ~~[duplicate-defn-in-one-file-reaches-the-c-compiler](../archive/duplicate-defn-in-one-file-reaches-the-c-compiler.md)~~ | low | **RESOLVED 2026-09-30** (archived): `elab_defn` records which form claimed a Pass-1 forward declaration (`Binding.defn_claim`). A second `defn` of the name from another form in the same file is now `defn: 'f' is already defined`, with a note at the first. Redefinition on a later REPL turn still works. Pinned by `tests/fixtures/errors/defn-redefine-same-file{,-result-type,-arity}`. Original row: `check` passed, `--interpret` ran the later body, and `build`/`jit` failed with `redefinition of 'f'` |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
