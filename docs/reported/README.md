@@ -2417,6 +2417,17 @@ tracked in `docs/upcoming/security-audit-plan.md`.
 | --- | --- | --- |
 | [stm-inside-closure-captured-tvar-undeclared](stm-inside-closure-captured-tvar-undeclared.md) | medium | `(atomically (stm (tvar/write tv v)))` inside any lambda that captures `tv` passes `tur check` and fails in cc with `'tv_N' undeclared`: the capture is lost where the lambda's lift and `stm`'s nest. Every `with-region` body is a lambda, so a transaction cannot run inside a bracket |
 
+## Found resolving the wasm-spices plan's open questions (filed 2026-09-30)
+
+Found while answering the browser-integration open questions in
+`docs/upcoming/hold/wasm-spices-plan.md` against a real Emscripten toolchain
+(emcc 5.0.5-git, CMake 4.3.3). Latent behind raylib specifically, whose own
+cmake floor sits exactly at CMake 4's cutoff.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [wasm-arm-suppresses-cmake-policy-min](wasm-arm-suppresses-cmake-policy-min.md) | medium | `pkg_cmake_build` guards `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` with `!wasm` (`src/compiler/pkg.c:4023`), so a `:cmake-deps` entry whose floor is below 3.5 configures natively and dies under `emcmake` with `Compatibility with CMake < 3.5 has been removed from CMake.` -- hiredis, the case pkg.c's own comment names, among others. Measured three ways (native+flag exit 0, wasm-no-flag exit 1, wasm+flag exit 0) with a 3-line repro. Fix: drop the `!wasm` conjunct; the `cmake_major_version() >= 4` test already handles the CMake 3.x noise the comment worried about |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

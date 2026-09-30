@@ -39,6 +39,15 @@ contradiction. What changed here:
 - **Reversed three "resolved" decisions** (threads, memory growth, audio
   unlock) on evidence -- flagged inline in
   [Amended decisions](#11-amended-decisions).
+- **Answered every open question by measurement (2026-09-30).** A second
+  pass took the plan's own open questions to a real toolchain -- emcc
+  5.0.5-git, CMake 4.3.3, raylib 5.5, Chromium -- rather than leaving them as
+  leads. That closed all five, **completed phase W1.5** (raylib renders in a
+  browser at 60 fps), **filed one bug**, and **corrected three claims this
+  plan had made from upstream documentation**: the Asyncify cost, the
+  `simulate_infinite_loop` advice, and the fixed-heap reversal. Section 12 is
+  now results rather than questions, and the affected subsections of 6 and 7
+  carry the corrections.
 - **Re-sequenced the phases raylib-first.** raylib is the forcing function
   that exercises canvas, audio, input, assets and the frame loop at once;
   OpenGL falls out of it nearly free rather than gating it.
@@ -132,7 +141,7 @@ by ~2600 lines and a subcommand that does not exist.
 | `--target wasm` accepted by `tur build` | `src/main.c:12821` | Exists. Any other value is a hard error: `unknown target '%s' (supported: wasm)`. |
 | wasm builds swap `cc` for `emcc` | `src/main.c:3492`-`3507` | Exists. |
 | wasm default flags | `src/main.c` (`cc_flags`) | `-O2 -std=c99 -Wall -fno-strict-aliasing -s WASM=1`. Nothing else -- no MODULARIZE, no shell, no GL. |
-| `:cmake-deps` configured through `emcmake` | `src/compiler/pkg.c:4007` | Exists: `emcmake cmake -S ...`. **Does not pass `-DPLATFORM=Web`** -- see W2 risk below. |
+| `:cmake-deps` configured through `emcmake` | `src/compiler/pkg.c:4007` | Exists: `emcmake cmake -S ...`. **Does not pass `-DPLATFORM=Web`**, which is fatal for raylib rather than merely suboptimal -- verified: the configure fails with `Could NOT find X11` (section 12, Q1). It also suppresses `CMAKE_POLICY_VERSION_MINIMUM` on this arm (`pkg.c:4023`), a filed bug (Q2). |
 | `target` parameter on the cmake build | `src/compiler/pkg.h:420` | `NULL` for native, `"wasm"` for Emscripten. |
 | `--shared` and `--target` mutually exclusive | `src/main.c:12846` | Yes. |
 | `:build-opts :c-sources` / `:c-includes` | `collect_build_aux`, `src/main.c:3544` | Exists. Vendored `.c` files compile as extra TUs and link in. This is where the frame-loop trampoline goes. |
@@ -199,6 +208,9 @@ App authors and spice authors describe browser needs declaratively. Read when
     :capture-keys ["Tab" "ArrowUp" "ArrowDown" "ArrowLeft" "ArrowRight" "Space"]
     :persist      false              ; IDBFS, opt-in (sqlite)
     :main-loop    :callback          ; :callback | :asyncify | :none
+    :gl           :es3               ; :es3 (WebGL2, default) | :es2 (WebGL1)
+                                     ;   drives BOTH raylib's OPENGL_VERSION
+                                     ;   and emcc's MAX_WEBGL_VERSION -- 6.9
     :heap         134217728          ; fixed heap; see Memory and threads
     :threads      false              ; DEFAULT false for apps (reversal, see 11)
     :title        "My Game"
@@ -278,12 +290,23 @@ instruments the module so a blocking call can suspend and resume, which lets
 runs **unchanged**.
 
 The cost is not merely "some overhead," and this is the number that decides
-the design: raylib's web `WindowShouldClose` waits a **fixed 16 ms** (raylib
-5.5; 12 ms in 5.6) *in addition to* the frame's own time. At a 60 Hz target
-the frame budget is 16.6 ms, so the fixed wait roughly halves the achievable
-rate -- expect ~30 fps and visible stutter, on top of Asyncify's own binary
-size (roughly 2x) and speed penalty. Asyncify is therefore a **porting and
-triage mode**, not the mode a game ships in.
+the mode choice, and it is **measured** (section 12, extra finding 3), not
+taken from upstream's blanket warning: raylib's web `WindowShouldClose` waits
+a **fixed ~16 ms** (raylib 5.5; 12 ms in 5.6) *in addition to* the frame's own
+time. That wait is **additive, not a frame-rate cap**, which makes the cost
+depend entirely on how much slack the frame has:
+
+| frame work | `:callback` | `:asyncify` |
+|---|---|---|
+| ~0 ms | 60.0 fps | 59.5 fps |
+| +8 ms | 60.0 fps | **40.0 fps** |
+
+At zero work the wait coincides with one vsync and Asyncify is free; by 8 ms
+of real work it has cost a third of the frame rate (`1000/(8+16)` predicts
+41.7). Binary cost measured **+21.7%** on a minimal program, growing with how
+much code Asyncify must instrument. So Asyncify is a genuinely usable mode for
+a game with frame time to spare -- not merely a triage step, which is what an
+earlier revision of this plan claimed on a misread of the upstream wiki.
 
 **Mode B -- `:callback` (shipping).** The program registers a per-frame
 function and returns. Emscripten calls it once per display refresh via
@@ -368,13 +391,25 @@ goes in a new `raylib/web/` source declared through
 
 Two smaller traps at this boundary:
 
-- **`simulate_infinite_loop`.** Pass `0`, as above. Passing `1` makes
-  Emscripten unwind by throwing a JS exception, so `main` never returns
-  normally and nothing after the call -- including `close-window` and any
-  Turmeric-side cleanup or `defer` -- ever runs.
-- **`-sEXIT_RUNTIME=0` is mandatory** in `:callback` mode. With the default,
-  the runtime tears down when `main` returns and the registered callback fires
-  into a dead module. The REPL already sets this; the app target must too.
+- **`simulate_infinite_loop`.** Pass **`1`**. It unwinds out of `main` by
+  throwing a JS exception, so nothing after the call runs -- and on the web
+  that is correct rather than regrettable: there is no window-close event, and
+  closing the tab reclaims the GL context, textures and heap together, so
+  `close-window` and any Turmeric-side teardown have nothing to do.
+  **Do not read `0` as the safe choice**: it does not preserve `main`'s frame
+  either. Both values abandon it before the first callback, which is exactly
+  why the note above is required and why a C++ build facing the same problem
+  had to move its state to `static` storage (section 12, extra finding 2).
+- **Use `emscripten_set_main_loop_arg`, not the plain form**, and pass the
+  `^fat` closure handle as the `void *arg`. The trampoline casts it back and
+  `TUR_APPLY0`s it, which removes the file-scope static it would otherwise
+  need. The region note is still required: Emscripten retains the handle
+  across the bracket either way.
+- **`-sEXIT_RUNTIME=0`** matters when `simulate_infinite_loop` is `0`, where
+  `main` returns normally and the default teardown would leave the callback
+  firing into a dead module. With `1` the unwind keeps the runtime alive on its
+  own; set it anyway, since it costs nothing and the two choices should not be
+  coupled. The REPL already sets it.
 
 ### 6.3 State hoisting: the real porting cost
 
@@ -548,15 +583,25 @@ match an artifact with different needs, inverts the priority. raylib's web
 build does not need threads. Default `:threads false`; `:threads true` stays
 available and keeps the `_headers` template for hosts that can serve them.
 
-**Memory: fixed heap, not growth.** The draft's decision list did not settle
-this and the REPL uses `-sALLOW_MEMORY_GROWTH=1`. For a game that is the wrong
-default: upstream raylib marks memory growth **"NOT RECOMMENDED"**, because
-growth invalidates cached views into the heap and costs a copy at every grow
--- a frame-time spike exactly when a level loads. Use a fixed heap
-(`:heap`, default 128 MB, matching raylib's own `BUILD_WEB_HEAP_SIZE`
-default), and document raising it for asset-heavy games. Growth stays
-available for the pure-computational (non-raylib) case where the working set
-is genuinely unknown.
+**Memory: prefer a fixed heap, allow growth when the working set is not
+known.** Upstream raylib marks `-sALLOW_MEMORY_GROWTH=1` **"NOT
+RECOMMENDED"**, because growth invalidates cached views into the heap and
+costs a copy at every grow -- a frame-time spike exactly when a level loads.
+So a fixed `:heap` (default 128 MB, matching raylib's own
+`BUILD_WEB_HEAP_SIZE`) is the better default.
+
+But this is a preference, not the flat reversal an earlier revision of this
+plan made of it. A working raylib web game on this machine uses growth
+deliberately, and the reason generalizes: a texture cache sized by whatever
+the asset manifest names is not knowable at link time. The spike measured
+60 fps *with* growth on, so the cost is not visible at small scale.
+
+Two consequences when growth is on: raise `:heap` first if you can bound the
+working set, and **export the heap views you rely on** --
+`-sEXPORTED_RUNTIME_METHODS=HEAPF32` is what makes Emscripten's
+`updateMemoryViews()` re-publish `Module.HEAPF32` after each grow, without
+which raylib's audio path reads a stale or absent view (section 12, extra
+finding 5).
 
 One interaction to record: `-sASYNCIFY` has its own stack, and the default is
 often too small for a deep call graph -- the symptom is a runtime abort
@@ -569,12 +614,24 @@ mentioning the Asyncify stack. If mode A shows it, raise
   seconds of blank canvas on a cold load. The shell ships a loading indicator
   driven by Emscripten's `setStatus` hook; the click-to-start overlay (6.6)
   covers the tail of it, since the user cannot click until assets are in.
-- **GL context choice.** raylib must be compiled with
-  `-DGRAPHICS_API_OPENGL_ES2` or `-DGRAPHICS_API_OPENGL_ES3`. ES3 additionally
-  needs `-sMAX_WEBGL_VERSION=2` on the *program* link line. (The draft wrote
-  `-sMIN_WEBGL_VERSION=2`, which is a different setting -- it raises the
-  floor rather than the ceiling.) v0 targets ES3 + WebGL2, with ES2 as the
-  documented fallback for old mobile.
+- **GL context choice, and the two-knob hazard.** The GL version is set in
+  **two independent places**: raylib's own `OPENGL_VERSION` (`"ES 2.0"` /
+  `"ES 3.0"`) at configure time, and emcc's `-sMAX_WEBGL_VERSION=2` on the
+  *program* link line. (An earlier revision wrote `-sMIN_WEBGL_VERSION=2`,
+  a different setting -- it raises the floor, not the ceiling.)
+
+  **Measured:** v0 targets **ES3 + WebGL2**, which reports
+  `OpenGL ES 3.0 (WebGL 2.0)` and `full NPOT textures supported`, against
+  ES2's `limited NPOT support (no-mipmaps, no-repeat)`. raylib's Web branch
+  defaults `GRAPHICS` to ES2, so ES3 must be named explicitly.
+
+  Set them from **one** `:web :gl` key. If they disagree -- ES3 raylib linked
+  without `MAX_WEBGL_VERSION=2` -- the link succeeds, Emscripten hands back a
+  WebGL1 context, raylib's shaders fail with `unsupported shader version 300`,
+  and the program dies on `TypeError: Failed to execute 'attachShader' ...
+  parameter 2 is not of type 'WebGLShader'`. Nothing in that says "you did not
+  get WebGL2", so the manifest must make the pair unrepresentable rather than
+  documenting the trap. See section 12, Q4.
 - **Exit.** `close-window` on the web is close to meaningless -- there is no
   window to reclaim and the tab is still there. In `:callback` mode, quitting
   means `emscripten_cancel_main_loop`, then leaving the module resident. v0
@@ -596,18 +653,34 @@ across the prose above.
 -O2 -std=c99 -Wall -fno-strict-aliasing
 ```
 
-**When `:canvas true`:** `-sUSE_GLFW=3 -sMAX_WEBGL_VERSION=2`
-**When `:audio true`:** `-sEXPORTED_RUNTIME_METHODS=ccall`
+**When `:canvas true`:** `-sUSE_GLFW=3 -sGL_ENABLE_GET_PROC_ADDRESS`, plus
+`-sMAX_WEBGL_VERSION=2` when `:gl` is `:es3`. `GL_ENABLE_GET_PROC_ADDRESS` is
+insurance, not a requirement -- a minimal ES2 program runs clean without it,
+but a real game using shaders has been seen to die at `InitWindow()` (section
+12, extra finding 4).
+
+**When `:audio true`:** `-sEXPORTED_RUNTIME_METHODS=ccall,HEAPF32`. Both:
+`ccall` per upstream, and `HEAPF32` because miniaudio reads the heap as
+`Module.HEAPF32.buffer` from its `ScriptProcessorNode` callback and Emscripten
+no longer publishes those views by default. Omitting `HEAPF32` is a
+`TypeError` thrown out of the audio callback, and only once audio is actually
+unlocked (6.6).
+
 **When `:main-loop :asyncify`:** `-sASYNCIFY` (+ `-sASYNCIFY_STACK_SIZE` as needed)
 **When `:threads true`:** `-pthread -sPTHREAD_POOL_SIZE_STRICT=0` + the `_headers` template
 **When assets exist:** `--preload-file web/assets@assets`
 **When `:persist true`:** `-sFORCE_FILESYSTEM=1` + IDBFS mount
+**When `:heap` is unset and the working set is unbounded:** `-sALLOW_MEMORY_GROWTH=1`, which then *requires* the `HEAPF32` export above (6.8).
 
-**Passed to `emcmake` for raylib:** `-DPLATFORM=Web`, and
-`-DCMAKE_C_FLAGS=-DGRAPHICS_API_OPENGL_ES3`.
+**Passed to `emcmake` for raylib:** `-DPLATFORM=Web` -- **not optional**, and
+not something raylib infers: without it the configure fails with
+`Could NOT find X11` (section 12, Q1). Plus `-DOPENGL_VERSION="ES 3.0"` for
+`:gl :es3`, using raylib's own enum_option rather than poking `CMAKE_C_FLAGS`.
 
-Note `-sALLOW_MEMORY_GROWTH=1` is deliberately **not** in the base set --
-see 6.8.
+**One `:gl` key drives both GL knobs.** `-DOPENGL_VERSION` (configure) and
+`-sMAX_WEBGL_VERSION` (link) must agree; a mismatch links clean and dies on a
+`TypeError` in `attachShader`. The tool composes both from `:web :gl` and
+never exposes them separately. See 6.9.
 
 ---
 
@@ -617,7 +690,7 @@ see 6.8.
 |---|---|---|---|
 | `:none` | No spice requests a loop | Run `main()` once. | -- |
 | `:callback` | **Default** when a canvas spice is present | Frame closure registered via `emscripten_set_main_loop`; `main` returns. Needs `-sEXIT_RUNTIME=0` and the region note (6.2). | State must leave `main` (6.3). |
-| `:asyncify` | Opt-in, or `tur build` suggests it when it sees a blocking loop | Link `-sASYNCIFY`; existing `while` loop yields. | ~30 fps on raylib 5.5 (fixed 16 ms wait), ~2x binary, slower. |
+| `:asyncify` | Opt-in, or `tur build` suggests it when it sees a blocking loop | Link `-sASYNCIFY`; existing `while` loop yields. | A fixed ~16 ms wait **added to** frame time: measured 59.5 fps at ~0 ms of work, 40.0 fps at 8 ms (callback holds 60.0 at both). Binary +21.7% on a minimal program. |
 
 ---
 
@@ -710,21 +783,35 @@ follow-on rather than a gate.
   `:lazy-assets` opt-out.
 - Validate with the `tur-tidal` + `tur-scscm` "compile a tune to text" demo.
 
-### Phase W1.5 -- raylib spike: is the browser story real?
+### Phase W1.5 -- raylib spike: DONE 2026-09-30
 
-The cheapest possible end-to-end probe, before W2 commits. Three questions,
-each of which would reshape W2 if the answer is no:
+The probe ran outside the Turmeric toolchain (raw emcc against raylib 5.5, so
+nothing here waited on W0/W1). **The browser story is real.** Full results in
+[section 12](#12-resolved-by-measurement-2026-09-30); what W2 needs to know:
 
-1. Does `emcmake` + `-DPLATFORM=Web` build raylib 5.5 through the existing
-   `:cmake-deps` path at all? **Known risk:** `pkg.c:4007` passes no
-   `-DPLATFORM`, and it also suppresses `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`
-   on the wasm arm (`if (!wasm && ...)`), so a dependency with a low
-   `cmake_minimum_required` floor may abort the configure under emcmake in a
-   way it does not natively.
-2. Does a triangle render? (canvas + GLES3 + `USE_GLFW=3`)
-3. Does `raudio` produce sound after a gesture, with `ccall` exported?
+1. **Does raylib 5.5 build for web?** Yes. `emcmake cmake -DPLATFORM=Web` then
+   `cmake --build` -> `libraylib.a`, 4.5 MB, exit 0, clean under CMake 4.3.3
+   with no policy flag. **`-DPLATFORM=Web` is mandatory** -- without it the
+   configure dies on `Could NOT find X11`, so W0's `:cmake-options`
+   passthrough is a prerequisite, not a nicety.
+2. **Does a triangle render?** Yes -- 800x600 canvas, `Platform backend: WEB
+   (HTML5)`, **60.0 fps** in Chromium, zero errors. Confirmed on both GL
+   paths: ES2/WebGL1 and ES3/WebGL2. ES3 is the pick (6.9).
+3. **`raudio`?** The module loads (`raudio:.... loaded (optional)`) on every
+   variant. **Sound was not driven to output** -- that needs the gesture gate
+   from 6.6 and is the one W1.5 question left for W2, now with the
+   `ccall,HEAPF32` export requirement already pinned down (section 12, extra
+   finding 5).
 
-Ship the answers as a fixture, not prose.
+One bug fell out and is filed:
+[wasm-arm-suppresses-cmake-policy-min](../../reported/wasm-arm-suppresses-cmake-policy-min.md).
+raylib itself is immune (its floor is exactly 3.5), so W2 is not blocked on
+the fix -- but the second cmake dep will be.
+
+**Still worth doing as a fixture:** all of the above was measured by hand.
+W2 should land the ES3-vs-ES2 context assertion and the 60 fps floor as
+something CI can run, because both are the kind of thing a toolchain bump
+breaks silently.
 
 ### Phase W2 -- raylib: canvas, loop, input, audio
 
@@ -733,8 +820,10 @@ Ship the answers as a fixture, not prose.
   shim, and `with-web-game-loop` (6.3).
 - **`tests/fixtures/region-escape-via-main-loop`**, and `raylib/web` joins the
   hooked-store set in CLAUDE.md -- same change, per the strict rule.
-- `-sASYNCIFY` mode A behind `:main-loop :asyncify`, with the ~30 fps cost
-  documented at the point of use.
+- `-sASYNCIFY` mode A behind `:main-loop :asyncify`, with its measured cost
+  documented at the point of use: a fixed ~16 ms added to frame time, which is
+  free at low frame work and ~40 fps by 8 ms of it (section 12, extra finding
+  3).
 - Canvas sizing/HiDPI (6.4), key capture (6.5), audio unlock overlay (6.6),
   loading indicator (6.9).
 - Port one `raygui` example both ways -- macro swap and Asyncify -- as the
@@ -796,10 +885,14 @@ Carried from the 2026-05-23 list, with three reversals marked.
    GitHub Pages cannot serve, and the app target exists to be droppable on a
    static host. `:threads true` opts in and keeps the `_headers` template.
    Reasoning in 6.8.
-3. **Memory -- REVERSED.** Was unsettled, with the REPL's
-   `-sALLOW_MEMORY_GROWTH=1` as the implied default. Now a **fixed heap**
-   (`:heap`, default 128 MB): upstream raylib marks growth "NOT RECOMMENDED",
-   and growth causes frame-time spikes on load. Reasoning in 6.8.
+3. **Memory -- AMENDED (reversed, then softened on evidence).** Was
+   unsettled, with the REPL's `-sALLOW_MEMORY_GROWTH=1` as the implied
+   default. A previous revision flipped that to a hard **fixed heap** on
+   upstream's "NOT RECOMMENDED". Now: **prefer** a fixed `:heap` (default
+   128 MB) where the working set is known, **allow growth** where it is not --
+   a working raylib web game uses growth for exactly that reason, and the
+   spike measured 60 fps with it on. If growth is on, exporting `HEAPF32` is
+   not optional. Reasoning in 6.8.
 4. **File-system surface.** MEMFS by default, lost on tab close; `:persist
    true` for IDBFS + `FS.syncfs`. No NODEFS in browser builds. *(Unchanged.)*
 5. **`*args*`.** From `?arg=foo&arg=bar`, with a `turi_wasm_set_args` escape
@@ -824,32 +917,237 @@ Carried from the 2026-05-23 list, with three reversals marked.
 
 ---
 
-## 12. Open questions
+## 12. Resolved by measurement (2026-09-30)
 
-Genuinely unresolved, as against the resolved list above.
+Every question this plan opened is now answered against a real toolchain on
+the development machine -- **emcc 5.0.5-git, CMake 4.3.3, raylib 5.5, Chromium
+via Playwright**. Raw logs and the spike sources are disposable; the numbers
+and mechanisms are below. Two answers **corrected this plan**, one found a
+**bug now filed**, and the end-to-end spike (phase W1.5) is **done**: raylib
+renders in a browser at 60 fps.
 
-1. **Does raylib 5.5's CMake autodetect Emscripten?** If it sets
-   `PLATFORM=Web` on its own under `emcmake`, the `:cmake-options` plumbing in
-   W0 is a no-op for raylib and only matters for other deps. W1.5 answers
-   this; do not assume either way.
-2. **`CMAKE_POLICY_VERSION_MINIMUM` on the wasm arm.** `pkg.c:4007` applies
-   the escape hatch only when `!wasm`. Deliberate, or an oversight that will
-   surface as a configure abort the first time a low-floor dep is built for
-   web? Worth settling in W1.5 while a real configure is in hand.
-3. **Asyncify + `-pthread` together.** Both are individually supported;
-   together they are known-awkward. With threads now off by default the
-   combination may never arise -- but `:threads true` plus `:asyncify` is
-   expressible in the manifest, so either it works or the tool should refuse
-   it.
-4. **GLES2 fallback.** Is ES2 worth carrying for old mobile, or is WebGL2 the
-   floor? Decide from whatever telemetry the Try Turmeric site can offer,
-   rather than guessing.
-5. **Is `with-web-game-loop` a `raylib/web` export or an `ecs-raylib`
-   change?** The macro it twins lives in `ecs-raylib`, but the web loop is a
-   raylib concern and non-ECS games need it too. Leaning `raylib/web`, with
-   `ecs-raylib` re-exporting.
+### Q1. Does raylib's CMake autodetect Emscripten? **No -- and it fails loudly.**
 
----
+Answered twice over. By reading: `CMakeOptions.txt:5` is
+`enum_option(PLATFORM "Desktop;Web;Android;Raspberry Pi;DRM;SDL" ...)`, and
+`cmake/EnumOption.cmake` takes `list(GET ${var}_VALUES 0 default)` -- so
+**`PLATFORM` defaults to `Desktop`**. There is no `EMSCRIPTEN` / `Emscripten`
+test anywhere in raylib's `cmake/` tree or either `CMakeLists.txt`.
+
+By running it, which is the part that matters:
+
+```sh
+emcmake cmake -S <raylib-5.5> -B out -DBUILD_EXAMPLES=OFF   # no -DPLATFORM
+# => exit 1
+# CMake Error at .../FindPackageHandleStandardArgs.cmake:290 (message):
+#   Could NOT find X11 (missing: X11_X11_LIB)
+# Call Stack: src/external/glfw/src/CMakeLists.txt:181 (find_package)
+```
+
+So the `:cmake-options` passthrough in W0 is **load-bearing, not a no-op** --
+the hedge in the previous revision was wrong. Without `-DPLATFORM=Web`,
+raylib takes the Desktop branch, builds its bundled GLFW, and that GLFW looks
+for **X11**.
+
+**The failure message names neither Emscripten nor `PLATFORM`.** A user
+building a raylib spice for wasm today is told to install X11, which is a
+dead end. W0 should detect this shape and say what it means, because nobody
+will guess it.
+
+Independently corroborated: `terminal-est/build-web/CMakeCache.txt` on this
+machine -- a working raylib web build configured *by emcmake* -- records
+`PLATFORM:STRING=Desktop`, and its `CMakeLists.txt` carries an explicit
+`if(EMSCRIPTEN) set(RAYLIB_PLATFORM "Web")` with the comment *"'Desktop' is
+raylib's default, so the native build is unchanged by naming it."*
+
+With the flag, both halves are clean:
+
+```sh
+emcmake cmake -S <raylib-5.5> -B out -DPLATFORM=Web ...  # exit 0
+cmake --build out -j8                                    # exit 0 -> libraylib.a, 4.5 MB
+```
+
+and the bundled GLFW is never added (0 mentions of x11/glfw in the log),
+because `PLATFORM=Web` uses the Emscripten GLFW port instead.
+
+### Q2. `CMAKE_POLICY_VERSION_MINIMUM` on the wasm arm: **a real bug. Filed.**
+
+Not deliberate. `src/compiler/pkg.c:4023` guards the flag with `!wasm`, so a
+`:cmake-deps` entry with a pre-3.5 floor builds natively and dies for wasm.
+Measured with a three-line project at `cmake_minimum_required(VERSION 3.2)`:
+
+| Arm | Flag | Exit | Message |
+|---|---|---|---|
+| native | passed (pkg.c does) | 0 | -- |
+| wasm | suppressed (pkg.c does) | **1** | `Compatibility with CMake < 3.5 has been removed from CMake.` |
+| wasm | passed | 0 | -- |
+
+raylib dodges it because its own floor is *exactly* `3.5`, the lowest CMake 4
+still accepts -- which is why this has never been hit. The second cmake dep
+finds it; `hiredis` is named in pkg.c's own comment as the motivating case.
+
+Filed as
+[docs/reported/wasm-arm-suppresses-cmake-policy-min.md](../../reported/wasm-arm-suppresses-cmake-policy-min.md).
+Fix is dropping the `!wasm` conjunct: the `cmake_major_version() >= 4` test
+already handles the CMake 3.x noise the comment was guarding against, and it
+is arm-independent.
+
+### Q3. Asyncify + `-pthread` together: **they link. No refusal needed.**
+
+```sh
+emcc t.c -sASYNCIFY          -o a.js   # ok, 45,762 B wasm
+emcc t.c -sASYNCIFY -pthread -o b.js   # ok, 112,502 B wasm
+```
+
+No error, no warning. "Known-awkward" is not borne out at the link level, so
+the tool should **not** refuse the combination. It stays an odd thing to want
+(threads are off by default per 6.8, and the frame loop is single-threaded
+either way), but that is the user's call, not a validation error.
+
+### Q4. GLES2 vs GLES3: **ES3/WebGL2 is the right floor, and the mismatch failure is vicious.**
+
+Both build and both run. The difference is measured, not theoretical:
+
+| | raylib `GRAPHICS` | Context reported | NPOT textures |
+|---|---|---|---|
+| ES2 (raylib's Web **default**) | `GRAPHICS_API_OPENGL_ES2` | `OpenGL ES 2.0 (WebGL 1.0)`, GLSL ES 1.00 | `WARNING: GL: NPOT textures extension not found, limited NPOT support (no-mipmaps, no-repeat)` |
+| ES3 + `-sMAX_WEBGL_VERSION=2` | `GRAPHICS_API_OPENGL_ES3` | `OpenGL ES 3.0 (WebGL 2.0)`, GLSL ES 3.00 | `INFO: GL: NPOT textures extension detected, full NPOT textures supported` |
+
+ES2's NPOT restriction is a real constraint on a real game -- no mipmaps and
+no repeat on any texture whose dimensions are not powers of two -- and ES3
+also ran with **zero warnings** where ES2 logged one. That decides it: **ES3
++ WebGL2 is the v0 floor**, `OPENGL_VERSION="ES 3.0"` via raylib's own
+enum_option. (raylib's Web branch defaults `GRAPHICS` to ES2 when nothing
+sets it, so this must be named explicitly.)
+
+The important finding is the **mismatch** failure. The GL version is set in
+**two places that do not know about each other** -- raylib's `OPENGL_VERSION`
+at configure time and emcc's `MAX_WEBGL_VERSION` at link time. Linking an
+ES3-compiled raylib *without* `-sMAX_WEBGL_VERSION=2` links clean, then at
+runtime:
+
+```
+INFO:  > Version: OpenGL ES 2.0 (WebGL 1.0 ...)      <- silently a WebGL1 context
+WARNING: SHADER: [ID 3] Compile error: '' : unsupported shader version 300
+TypeError: Failed to execute 'attachShader' on 'WebGLRenderingContext':
+           parameter 2 is not of type 'WebGLShader'.
+```
+
+A JS `TypeError` about `attachShader`, with nothing saying "you asked for
+WebGL2 and did not get it." **So `:web` must carry one `:gl` key that derives
+both knobs**, and the tool must never let a user set them separately. That is
+a concrete change to section 4, and it is the single best argument in this
+document for the manifest owning the flag composition rather than documenting
+it.
+
+### Q5. Where does `with-web-game-loop` live? **`raylib/web`, and it is now clearly its own thing.**
+
+Still a judgment call rather than a measurement, but the measurements settled
+it. The web loop is not `with-game-loop` with a different registration call:
+it must also **drop `set-target-fps`** (6.1, and Q-extra below), which
+`ecs-raylib/loop` calls unconditionally. A macro that differs in its body,
+not just its tail, is its own macro. It goes in `raylib/web`, with
+`ecs-raylib` re-exporting for ECS users.
+
+### Extra findings the spike produced
+
+Not questions this plan asked, and all three change the guidance.
+
+**1. `set-target-fps` is actively harmful on web, and `ecs-raylib` calls it.**
+raylib's `SetTargetFPS` *sleeps* to hit a rate, and sleeping is the one thing
+that must not happen on the thread servicing the page. Pass `0` to
+`emscripten_set_main_loop*` instead, which asks for `requestAnimationFrame`
+-- it matches the display and stops entirely when the tab is hidden.
+`ecs-raylib/loop`'s `with-game-loop` emits `(set-target-fps ~fps)`
+unconditionally, so its web twin must not.
+
+**2. `simulate_infinite_loop = 1` is correct, and section 6.2's advice to
+pass `0` was wrong in its reasoning.** The previous revision warned that `1`
+means nothing after the call runs. True, and that is the point: on the web
+there is no window-close event and closing the tab reclaims the GL context,
+textures and heap in one go, so the teardown is unreachable *and* unnecessary.
+What matters is the part that advice got backwards -- **main's stack frame is
+abandoned in both modes**, so `-sEXIT_RUNTIME=0` plus `0` does not save it.
+A working C++ raylib web build on this machine states it directly:
+
+> `emscripten_set_main_loop_arg()` does not return, it unwinds out of `main()`
+> and lets the browser call `run_frame()` from the event loop afterwards.
+> **Anything left on main's stack would be dangling by the first frame.**
+> Static storage sidesteps that.
+
+That is [6.2](#62-the-callback-boundary-and-the-region-note-it-requires)'s
+requirement reached independently, in C++, for the same reason. It is the
+strongest available evidence that the `TUR_REGION_NOTE` on the frame closure
+is load-bearing and not defensive: a language with no regions at all still had
+to move that state to static storage to survive the first frame.
+
+Use `emscripten_set_main_loop_arg` (not the plain form) and pass the `^fat`
+closure handle as the `void *arg`, which removes the file-scope static the
+trampoline would otherwise need. The region note is still required -- the
+handle is retained by Emscripten across the bracket either way.
+
+**3. Asyncify's cost is a fixed additive wait, not a flat frame-rate cap.**
+The previous revision said "~30 fps" from the upstream wiki. Measured, that
+is wrong in both directions. Same program, both modes, 2-second rolling
+average in Chromium:
+
+| frame work | `:callback` | `:asyncify` |
+|---|---|---|
+| ~0 ms (one triangle) | 60.0 fps | 59.5 fps |
+| +8 ms busy-work | 60.0 fps | **40.0 fps** |
+
+The additive model predicts `1000/(8+16) = 41.7`; measured 40.0. So the wiki's
+*mechanism* is right and its headline is misleading: the fixed ~16 ms wait is
+**free when the frame has slack** (at zero work it coincides with one vsync,
+giving ~60 fps) and costs roughly a third of the frame rate once real work
+reaches 8 ms. Binary cost was **+21.7%** (140,371 -> 170,770 bytes), not the
+"~2x" the wiki warns of -- though that ratio grows with how much code Asyncify
+must instrument, so a real game will sit above it.
+
+Revised guidance, which is *more* favorable to Asyncify than this plan was:
+it is a genuinely usable mode for a game with frame time to spare, not merely
+a triage step. `:callback` stays the default because it has no such ceiling.
+
+**4. `-sGL_ENABLE_GET_PROC_ADDRESS` is conditional, not mandatory.** A
+working C++ build on this machine notes that without it "raylib 5.5 links and
+then dies at `InitWindow()`." That did **not** reproduce on the minimal ES2
+spike, which ran clean at 61 fps without the flag. So it is needed on some
+feature path (custom shaders / extension loading) and not by every program.
+Include it -- it is free insurance -- but do not document it as required, and
+do not let its absence be the first suspect for an `InitWindow` failure.
+
+**5. `-sEXPORTED_RUNTIME_METHODS` needs `HEAPF32` for audio, not just
+`ccall`.** Section 7 has `ccall` from the upstream wiki. The real-world note
+is that miniaudio -- what raylib's `raudio` is built on -- reaches the heap as
+`Module.HEAPF32.buffer` from inside its `ScriptProcessorNode` callback, and
+Emscripten no longer hangs heap views off `Module` by default. Without it the
+read is `undefined.buffer`, a `TypeError` thrown out of the audio callback.
+Naming it is also what makes `updateMemoryViews()` re-publish the view after
+each heap growth. Export **both**.
+
+Note how that interacts with 6.6: it "only bites once the AudioContext is
+actually running", so it hides until someone taps to unlock audio -- which is
+why it looked like a mobile-Safari bug.
+
+**6. Memory growth: reversal 3 was too strong.** 6.8 argued for a fixed heap
+on upstream's "NOT RECOMMENDED". But the working game build on this machine
+*does* use `-sALLOW_MEMORY_GROWTH=1`, with a good reason: a texture cache
+sized by what the asset manifest names is not known at link time. Softened:
+prefer a fixed `:heap` when the working set is known, allow growth when it is
+not, and if growth is on, **export the heap views you rely on** (finding 5)
+so they survive it. The spike used growth and measured 60 fps, so the
+frame-time cost is not visible at this scale.
+
+### What remains genuinely open
+
+One item, and it is a product question rather than a technical one:
+
+- **Is dropping pre-WebGL2 devices acceptable for v0?** Q4 settles that ES3 is
+  technically better; it does not settle the audience. WebGL2 has been in
+  every evergreen desktop and mobile browser for years, so the exposure is old
+  Android and pre-2021 iOS. Decide from the Try Turmeric site's own numbers if
+  they exist, and note that ES2 remains a one-key fallback either way
+  (`:web #map{:gl :es2}`), so this is reversible and not worth blocking on.
 
 ## 13. Relationship to existing work
 
