@@ -7640,6 +7640,23 @@ static void emit_letraw(CE *ce, const CTerm *t) {
                 bridged_ok = true;
             }
         }
+        /* The other direction: a binder the lowering typed from an erasing
+         * `(:: x :int)` it then PEELED off the value (cps_bind), so a typed
+         * pointer -- `tur_adt_Cons__int *` from a spec'd call -- lands in an
+         * `int64_t`.  The direct emitter's EX_ASCRIBE casts it; this delegated
+         * path assigned it raw, a -Wint-conversion under -Werror.  An explicit
+         * `(:: node :int)` argument to a CPS callee hit it, and the implicit
+         * erasure a `:heap` node takes into any `:int` parameter (elab_call.c,
+         * security-audit WP5) made it common.  Keyed on the RECORDED C type of
+         * the value in hand, so it fires only for a pointer. */
+        if (!bridged_ok && rhs && bct && strcmp(bct, "int64_t") == 0 &&
+            emit_str_is_bare_ident(rhs)) {
+            const char *rct = emit_localvar_lookup_ctype(rhs);
+            if (rct && strchr(rct, '*')) {
+                ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs);
+                bridged_ok = true;
+            }
+        }
         if (!bridged_ok)
             ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
     }
