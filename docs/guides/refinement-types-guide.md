@@ -741,8 +741,8 @@ silent under strict mode. `TUR_REFINE_STATS=1` prints a line of its own:
 `refine: invariant: 4 proven, 0 unproven, 0 loop(s) declined`.
 
 **What is declined, not approximated.** A loop whose effect on its own
-variables the analysis cannot see is reported (`TUR-W0372`, "is not analysed
-statically: <reason>") and keeps both checks:
+variables the analysis cannot see is reported (`TUR-W0372`, `is not analysed statically: <reason>`) and keeps
+both checks:
 
 - an assignment through a place (`(set! (.f s) v)`) or to an atom;
 - an early exit (`return`, `?`, a captured continuation) -- `(not c)` would
