@@ -22,6 +22,7 @@
 #endif
 
 #include "platform_proc.h"
+#include "tur_argcheck.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -246,6 +247,55 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         s->ref      = form_str_dup(map_get_kw(val, "ref"));
         s->path     = form_str_dup(map_get_kw(val, "path"));
         s->subdir   = form_str_dup(map_get_kw(val, "subdir"));
+        /* WP2 (D-5, D-6): `name` and `:ref` are joined into the directory
+         * `tur fetch` CREATES -- `spices/<name>-<ref>` -- and `:ref` is also
+         * handed to git as a positional argument.  Neither was checked, so a
+         * transitive manifest could choose a write location outside `spices/`
+         * with a `..`, or hand git an option with a leading `-`.  A spice name
+         * is an identifier and a git ref has git's own rules; both are path
+         * segments here, which is the tightest thing that is also true. */
+        if (!tur_path_segment_ok(s->name)) {
+            diag_emit(DIAG_ERROR, key->span,
+                "build.tur: spice name '%s' is not a usable directory name -- "
+                "letters, digits, '.', '_', '-' and '+' only, not starting "
+                "with '-' or '.'", s->name ? s->name : "");
+            return false;
+        }
+        if (s->ref && !tur_git_ref_ok(s->ref)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :ref '%s' -- a ref "
+                "may hold letters, digits, '.', '_', '-', '+' and '/', must "
+                "not start with '-', '.' or '/', and must not contain '..'",
+                s->name, s->ref);
+            return false;
+        }
+        if (s->url && !tur_url_ok(s->url)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :url '%s' -- it must "
+                "not start with '-' or contain whitespace or a character the "
+                "shell would read as syntax", s->name, s->url);
+            return false;
+        }
+        /* `:subdir` names a directory INSIDE the fetched repo, so it is
+         * contained.  `:path`, by contrast, is documented as a sibling or
+         * monorepo pointer and legitimately climbs (`../leaf`,
+         * `../../turmeric-spices/spices/zlib`) -- it is a place we READ, never
+         * a place we create, so it gets shell-safety and no containment. */
+        if (s->subdir && !tur_rel_path_ok(s->subdir)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :subdir '%s' -- it "
+                "must be a relative path inside the fetched repository (no "
+                "'..', no leading '/', no shell metacharacters)",
+                s->name, s->subdir);
+            return false;
+        }
+        if (s->path && (!tur_arg_is_shell_safe(s->path) || s->path[0] == '-')) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :path '%s' -- it must "
+                "not start with '-' or contain a character the shell would "
+                "read as syntax", s->name, s->path);
+            return false;
+        }
         const Form *opt_f = map_get_kw(val, "optional");
         s->optional = form_bool_val(opt_f);
         /* global-spice-library-consumption: `#{:global true}` resolves through
@@ -330,6 +380,49 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         d->cmake_name = form_str_dup(map_get_kw(val, "cmake-name"));
         d->prefer_system  = form_bool_val(map_get_kw(val, "prefer-system"));
         d->cmake_version  = form_str_dup(map_get_kw(val, "cmake-version"));
+        /* WP2 (D-9): every one of these is written into the generated
+         * cmake/CMakeLists.txt, which cmake then runs.  The name and
+         * cmake-name land in bare positions (`FetchContent_Declare(<name>`,
+         * `find_package(<cmake-name>`) where even quoting would not save them,
+         * so they must be identifiers; the url and ref are quoted at the write
+         * site and need only be free of `$`, `"` and `;`. */
+        if (!tur_cmake_ident_ok(d->name)) {
+            diag_emit(DIAG_ERROR, key->span,
+                "build.tur: cmake-dep name '%s' must be a cmake identifier "
+                "(letters, digits, '_' and '-')", d->name ? d->name : "");
+            return false;
+        }
+        if (d->cmake_name && !tur_cmake_ident_ok(d->cmake_name)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :cmake-name '%s' must be a cmake "
+                "identifier", d->name, d->cmake_name);
+            return false;
+        }
+        if (d->cmake_version && !tur_cmake_value_ok(d->cmake_version)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :cmake-version '%s' is not a "
+                "usable version string", d->name, d->cmake_version);
+            return false;
+        }
+        if (d->url && !tur_url_ok(d->url)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :url '%s' must not start with '-' "
+                "or contain whitespace or a character cmake or the shell would "
+                "read as syntax", d->name, d->url);
+            return false;
+        }
+        if (d->ref && !tur_git_ref_ok(d->ref)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :ref '%s' is not a usable git ref",
+                d->name, d->ref);
+            return false;
+        }
+        if (d->path && !tur_arg_is_shell_safe(d->path)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :path '%s' contains a character "
+                "cmake or the shell would read as syntax", d->name, d->path);
+            return false;
+        }
         parse_str_vec(map_get_kw(val, "targets"), &d->targets, &d->n_targets);
         /* :link-libs overrides the -l name derived from the target name; the
          * empty list is a meaningful value ("link nothing"), so record key
@@ -406,6 +499,61 @@ static bool parse_experiments(const Form *f, char ***out, int *n_out) {
  * DIAG_ERROR carrying that entry's span. Valid entries are stored verbatim
  * (as written in build.tur) so the build can re-resolve them relative to the
  * manifest dir. */
+/* WP2 (D-1): a `:build-opts` entry that reaches the link line.
+ *
+ * `:link-libs` entries become `-l<name>`; `:link-flags` entries are spliced in
+ * VERBATIM, which is documented (pkg.h) as the only way to spell
+ * `-framework Cocoa` -- so one entry may be several space-separated tokens and
+ * each is checked on its own.  Before this, a transitive spice could put
+ * `-lfoo; touch pwned` in either and the shell ran it while building a project
+ * that merely depended on that spice. */
+static bool link_entry_tokens_ok(const char *s) {
+    if (!s || !*s) return false;
+    const char *prev = NULL;
+    char prev_buf[256];
+    for (const char *q = s; *q; ) {
+        while (*q == ' ') q++;
+        if (!*q) break;
+        const char *t = q;
+        while (*q && *q != ' ') q++;
+        size_t n = (size_t)(q - t);
+        char tok[1024];
+        if (n >= sizeof(tok)) return false;
+        memcpy(tok, t, n);
+        tok[n] = '\0';
+        if (!tur_link_token_ok(tok, prev)) return false;
+        snprintf(prev_buf, sizeof(prev_buf), "%s", tok);
+        prev = prev_buf;
+    }
+    return true;
+}
+
+/* Grammar-check a parsed `:link-libs` / `:link-flags` vector in place, after
+ * parse_str_vec has filled it.  Reports through diag so the manifest read
+ * fails the way every other bad slot does; `span` is the :build-opts map's,
+ * which is the closest span parse_str_vec leaves us. */
+static bool check_link_vec(char **vec, int n, const char *what,
+                           bool bare_lib_names, Span span) {
+    bool ok = true;
+    for (int i = 0; i < n; i++) {
+        if (!vec[i]) continue;
+        bool good = bare_lib_names
+            ? (vec[i][0] != '-' && tur_link_value_ok(vec[i]))
+            : link_entry_tokens_ok(vec[i]);
+        if (!good) {
+            diag_emit(DIAG_ERROR, span,
+                "build.tur: %s entry '%s' is not a link token this build will "
+                "pass to the C compiler.\n"
+                "  Allowed: -l<name>, -L<dir>, -I<dir>, -D<key>[=<val>], "
+                "-framework <name>, -Wl,<...>, a source or object path, or a "
+                "bare toolchain flag -- and nothing the shell reads as syntax.",
+                what, vec[i]);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
                              const char *what, bool require_c_ext,
                              char ***out, int *n_out) {
@@ -439,6 +587,18 @@ static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
             diag_emit(DIAG_ERROR, entry->span,
                       "build.tur: %s entry '%s' must be a relative path "
                       "(absolute paths are not allowed)", what, p);
+            ok = false;
+        }
+        /* WP2 (D-1, D-5): the entry is joined onto the manifest's directory
+         * and then spliced into the cc command string, so it has to be both
+         * CONTAINED (no `..` climbing out of the spice) and free of anything
+         * the shell reads as syntax.  The absolute-path check above was the
+         * only guard, and `../../etc` passed it. */
+        if (ok && !tur_rel_path_ok(p)) {
+            diag_emit(DIAG_ERROR, entry->span,
+                      "build.tur: %s entry '%s' must stay inside the spice "
+                      "directory and contain no shell metacharacters "
+                      "(no '..', no backslash, no ; & | ` $ quotes)", what, p);
             ok = false;
         }
         if (ok && require_c_ext) {
@@ -805,9 +965,28 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
              * manifest. A non-empty list makes this manifest a workspace
              * root; the resolver auto-links sibling members. */
             parse_str_vec(vf, &out->members, &out->n_members);
+            /* WP2 (D-5): a member path is resolved against the workspace root
+             * and then built, so it has to stay inside the workspace. */
+            for (int mi = 0; mi < out->n_members; mi++) {
+                if (out->members[mi] && !tur_rel_path_ok(out->members[mi]))
+                    diag_emit(DIAG_ERROR, vf->span,
+                        "build.tur: :members entry '%s' must be a relative "
+                        "path inside the workspace (no '..', no leading '/', "
+                        "no shell metacharacters)", out->members[mi]);
+            }
         } else if (strcmp(kw, "build-dir") == 0) {
             /* build-output-directory-plan: relative path for build artifacts. */
             out->build_dir = form_str_dup(vf);
+            /* WP2 (D-5): "relative path" was a comment, not a rule -- an
+             * absolute or climbing :build-dir chose where the build WROTE. */
+            if (out->build_dir && !tur_rel_path_ok(out->build_dir)) {
+                diag_emit(DIAG_ERROR, vf->span,
+                    "build.tur: :build-dir '%s' must be a relative path inside "
+                    "the project (no '..', no leading '/', no shell "
+                    "metacharacters)", out->build_dir);
+                free(out->build_dir);
+                out->build_dir = NULL;
+            }
         } else if (strcmp(kw, "entry") == 0) {
             /* Entry-point module for project-mode `tur run`, relative to the
              * manifest dir. Existence is checked by the caller (main.c), which
@@ -884,6 +1063,12 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
                 parse_str_vec(map_get_kw(vf, "link-flags"),
                               &out->link_flags, &out->n_link_flags);
+                check_link_vec(out->link_libs, out->n_link_libs,
+                               ":link-libs", true, vf->span);
+                check_link_vec(out->link_flags, out->n_link_flags,
+                               ":link-flags", false, vf->span);
+                check_link_vec(out->c_flags, out->n_c_flags,
+                               ":c-flags", false, vf->span);
                 out->no_stdlib = form_bool_val(nf);
                 /* spices-c-sources-plan: validate vendored sources/includes
                  * against the manifest directory (the dir holding build.tur). */
@@ -2046,7 +2231,12 @@ char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
         /* Fetch and checkout the desired ref */
         buf_puts(&cmd, "git -C ");
         ok = pkg_cmd_arg(&cmd, dest_dir) && ok;
-        buf_puts(&cmd, " fetch --depth 1 origin ");
+        /* WP2 (D-6): `--` before the positional ref.  pkg_cmd_arg already
+         * shell-quotes it, so `a; id` was never a shell injection -- but git
+         * reads a quoted `--upload-pack=<cmd>` as an OPTION all the same, and
+         * a ref comes out of a transitive manifest.  The clone branch above
+         * always had its `--`; this one did not. */
+        buf_puts(&cmd, " fetch --depth 1 origin -- ");
         ok = pkg_cmd_arg(&cmd, ref ? ref : "HEAD") && ok;
         buf_puts(&cmd, " 2>&1 && git -C ");
         ok = pkg_cmd_arg(&cmd, dest_dir) && ok;
@@ -3209,6 +3399,27 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
  * Returns a heap-allocated array of `char *` (caller frees each entry and the
  * array) and sets *out_n; returns NULL with *out_n = 0 when `project_dir` is
  * not part of any workspace. */
+/* WP2 (D-9): one `:options` pair on its way into a generated
+ * `set(<key> "<val>" CACHE BOOL "" FORCE)` line.  The key is unquotable (it is
+ * a cmake variable name) and the value is documented as a BOOL, so both are
+ * narrow; a pair that fails is skipped with a diagnostic rather than written,
+ * because a cmake dep configured without one of its options fails visibly
+ * while a `$\{...}` in a value does not. */
+static bool cmake_opt_ok(const PkgCmakeDep *d, const PkgCmakeOpt *o) {
+    if (!tur_cmake_ident_ok(o->key)) {
+        fprintf(stderr, "spice: cmake-dep '%s': skipping :options key '%s' -- "
+                        "not a cmake identifier\n", d->name, o->key ? o->key : "");
+        return false;
+    }
+    if (!tur_cmake_value_ok(o->val)) {
+        fprintf(stderr, "spice: cmake-dep '%s': skipping :options value for "
+                        "'%s' -- '%s' contains a character cmake would read as "
+                        "syntax\n", d->name, o->key, o->val ? o->val : "");
+        return false;
+    }
+    return true;
+}
+
 static char **collect_workspace_sibling_dirs(const char *project_dir,
                                              int *out_n) {
     *out_n = 0;
@@ -3540,11 +3751,12 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             fprintf(f, "endif()\n");
             fprintf(f, "if (NOT %s_FOUND)\n", cn);
             fprintf(f, "    FetchContent_Declare(%s\n", d->name);
-            if (d->url) fprintf(f, "      GIT_REPOSITORY %s\n", d->url);
-            if (d->ref) fprintf(f, "      GIT_TAG        %s\n", d->ref);
+            if (d->url) fprintf(f, "      GIT_REPOSITORY \"%s\"\n", d->url);
+            if (d->ref) fprintf(f, "      GIT_TAG        \"%s\"\n", d->ref);
             fprintf(f, "    )\n");
             for (int j = 0; j < d->n_opts; j++) {
-                fprintf(f, "    set(%s %s CACHE BOOL \"\" FORCE)\n",
+                if (!cmake_opt_ok(d, &d->opts[j])) continue;
+                fprintf(f, "    set(%s \"%s\" CACHE BOOL \"\" FORCE)\n",
                         d->opts[j].key, d->opts[j].val);
             }
             fprintf(f, "    FetchContent_MakeAvailable(%s)\n", d->name);
@@ -3558,11 +3770,12 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             fprintf(f, "endif()\n\n");
         } else {
             fprintf(f, "FetchContent_Declare(%s\n", d->name);
-            if (d->url) fprintf(f, "  GIT_REPOSITORY %s\n", d->url);
-            if (d->ref) fprintf(f, "  GIT_TAG        %s\n", d->ref);
+            if (d->url) fprintf(f, "  GIT_REPOSITORY \"%s\"\n", d->url);
+            if (d->ref) fprintf(f, "  GIT_TAG        \"%s\"\n", d->ref);
             fprintf(f, ")\n");
             for (int j = 0; j < d->n_opts; j++) {
-                fprintf(f, "set(%s %s CACHE BOOL \"\" FORCE)\n",
+                if (!cmake_opt_ok(d, &d->opts[j])) continue;
+                fprintf(f, "set(%s \"%s\" CACHE BOOL \"\" FORCE)\n",
                         d->opts[j].key, d->opts[j].val);
             }
             fprintf(f, "FetchContent_MakeAvailable(%s)\n", d->name);
@@ -4115,25 +4328,49 @@ static void append_link_flag_token(Buf *buf, const char *tok) {
         buf_printf(buf, " -l%s", tok);      /* bare library name */
 }
 
+/* WP2 (D-1): one entry of cmake's spice-deps-manifest.json, on its way into a
+ * shell command string.
+ *
+ * Unlike a manifest's `:link-flags`, these are PATHS and library names that
+ * cmake computed on this machine, not text a manifest author typed -- so the
+ * check is for shell syntax only, not for shape, and a path with a space is
+ * left alone (it is already broken by the space-joined contract, and narrowing
+ * it here would reject working machines for no security gain).  A token that
+ * fails is dropped with a diagnostic rather than silently spliced: the link
+ * error that follows names the missing library, which is a better outcome than
+ * running whatever the token said. */
+static bool cmake_manifest_token_ok(const char *tok, const char *what) {
+    if (!tok || !*tok) return false;
+    if (tur_arg_is_shell_safe(tok)) return true;
+    fprintf(stderr,
+            "spice: dropping %s '%s' from cmake/spice-deps-manifest.json -- it "
+            "contains a character the shell would read as syntax\n", what, tok);
+    return false;
+}
+
 void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
     for (int i = 0; i < m->n_entries; i++) {
         const PkgCmakeManifestEntry *e = &m->entries[i];
         for (int j = 0; j < e->n_include_dirs; j++) {
-            if (e->include_dirs[j] && e->include_dirs[j][0])
+            if (e->include_dirs[j] && e->include_dirs[j][0] &&
+                cmake_manifest_token_ok(e->include_dirs[j], "include dir"))
                 buf_printf(buf, " -I%s", e->include_dirs[j]);
         }
         for (int j = 0; j < e->n_link_dirs; j++) {
-            if (e->link_dirs[j] && e->link_dirs[j][0])
+            if (e->link_dirs[j] && e->link_dirs[j][0] &&
+                cmake_manifest_token_ok(e->link_dirs[j], "link dir"))
                 buf_printf(buf, " -L%s", e->link_dirs[j]);
         }
         for (int j = 0; j < e->n_link_libs; j++) {
-            if (e->link_libs[j] && e->link_libs[j][0])
+            if (e->link_libs[j] && e->link_libs[j][0] &&
+                cmake_manifest_token_ok(e->link_libs[j], "link lib"))
                 buf_printf(buf, " -l%s", e->link_libs[j]);
         }
         /* After link_libs: a dep's own artifact must precede the transitive
          * libraries it depends on for static archive resolution. */
         for (int j = 0; j < e->n_link_flags; j++)
-            append_link_flag_token(buf, e->link_flags[j]);
+            if (cmake_manifest_token_ok(e->link_flags[j], "link flag"))
+                append_link_flag_token(buf, e->link_flags[j]);
     }
 }
 

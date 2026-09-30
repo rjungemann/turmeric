@@ -1,0 +1,6 @@
+;;; D-5: a workspace `:members` entry is resolved against the workspace root
+;;; and then built; it has to stay inside the workspace.
+(defpackage sec-bad-members
+  :name "sec-bad-members"
+  :modules [main]
+  :members ["../../../etc"])

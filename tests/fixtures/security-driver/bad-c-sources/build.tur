@@ -1,0 +1,9 @@
+;;; D-1/D-5: a vendored `:c-sources` path is joined onto the spice directory
+;;; and then handed to cc.  The absolute-path guard was the only one, so `..`
+;;; climbed out of the spice and a quote ended the argument.
+(defpackage sec-bad-c-sources
+  :name "sec-bad-c-sources"
+  :modules [main]
+  :build-opts #map{
+    :c-sources ["../../../tmp/evil.c"]
+  })

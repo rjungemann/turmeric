@@ -1,0 +1,9 @@
+;;; D-9: `:url`, `:ref` and every `:options` pair are interpolated into the
+;;; generated cmake/CMakeLists.txt, which cmake then runs.
+(defpackage sec-bad-cmake-ref
+  :name "sec-bad-cmake-ref"
+  :modules [main]
+  :cmake-deps #map{
+    "evil" #map{:url "https://example.invalid/x.git"
+                :ref "v1\")\nexecute_process(COMMAND touch PWNED"}
+  })
