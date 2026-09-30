@@ -423,26 +423,27 @@ else
 fi
 
 # An assignment nested 5000 parentheses deep used to recurse the expression
-# evaluator off the C stack while the file was only being parsed.  It is now a
-# parse error ("nested too deeply") -- an ordinary exit, not a signal.
+# evaluator off the C stack.  It is now an evaluation error ("nested too
+# deeply") -- an ordinary exit, not a signal.  Assignments are forced on first
+# use (WP2, D-2), so the recipe reads x: `--list` alone never evaluates it.
 {
     printf 'x := '
     printf '(%.0s' $(seq 5000)
     printf '"a"'
     printf ')%.0s' $(seq 5000)
-    printf '\nt:\n\t@echo t\n'
+    printf '\nt:\n\t@echo {{x}}\n'
 } > "$WORK/Justfile"
 rc=0
-out=$( cd "$WORK" && timeout 10 "$TUR_BIN" run --list 2>&1 </dev/null ) || rc=$?
+out=$( cd "$WORK" && timeout 10 "$TUR_BIN" run t 2>&1 </dev/null ) || rc=$?
 if [ "$rc" -ge 124 ] || grep -q "AddressSanitizer" <<< "$out"; then
-    echo "FAIL: --list on 5000-deep parentheses -- exit $rc"
+    echo "FAIL: 5000-deep parentheses -- exit $rc"
     FAIL=$((FAIL + 1))
 elif ! grep -q "nested too deeply" <<< "$out"; then
-    echo "FAIL: --list on 5000-deep parentheses -- no 'nested too deeply' diagnostic"
+    echo "FAIL: 5000-deep parentheses -- no 'nested too deeply' diagnostic"
     echo "  output: $out"
     FAIL=$((FAIL + 1))
 else
-    echo "PASS: --list on 5000-deep parentheses is a parse error"
+    echo "PASS: 5000-deep parentheses is an evaluation error"
     PASS=$((PASS + 1))
 fi
 
