@@ -49,9 +49,12 @@ concurrency:
   group: fuzz
   cancel-in-progress: false
 
+# `issues: write` is gone with the `gh issue create` steps it existed for
+# (section 7 question 8): findings go to Sentry now, so this workflow's token
+# needs nothing beyond reading the tree. Both jobs re-declare `contents: read`
+# locally as well -- a top-level block is easy to widen by accident.
 permissions:
   contents: read
-  issues: write
 
 jobs:
   fuzz:
@@ -122,8 +125,55 @@ jobs:
             echo "No findings at seed $SEED."
           fi
 
-      - name: Upload findings
+      # A finding goes to Sentry, not to a public issue.
+      #
+      # The issue was the right instinct -- a red X on a scheduled workflow is
+      # a signal people stop reading, and four nights of findings once reached
+      # nobody because of a missing label (the reason that step created it with
+      # --force). But an issue is a public, indexed, notifying record of an
+      # un-triaged compiler defect, and Sentry does the same job privately AND
+      # groups: the same crash shape found on five nights is one Sentry issue
+      # with a count of five, where `gh issue create` opened five.
+      #
+      # One event per harness, so each groups on its own shape rather than on
+      # the night they happened to share.
+      - name: Report findings to Sentry
+        id: report
         if: steps.run.outputs.failed != ''
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SEED: ${{ steps.seed.outputs.seed }}
+          FAILED: ${{ steps.run.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          rc=0
+          for h in $FAILED; do
+            # Each harness saves its findings under fuzz-findings/<h>/; tar the
+            # directory so the generated programs and their shape tags travel
+            # with the event as one attachment.
+            tarball=""
+            if [ -d "fuzz-findings/$h" ]; then
+              tarball="fuzz-findings/$h-findings.tar.gz"
+              tar -czf "$tarball" -C fuzz-findings "$h" || tarball=""
+            fi
+            python3 tools/ci/sentry-report.py \
+              --kind fuzz-search \
+              --target "$h" \
+              --title "Fuzz search: $h found a defect" \
+              --fingerprint fuzz-search "$h" \
+              --seed "$SEED" \
+              --run-url "$RUN_URL" \
+              --note "Nightly fuzz search. Reproduce: python3 tests/$h-fuzz-src.py --tur ./build/tur --n 400 --seed $SEED. If it is a real defect, file it under docs/reported/, add a row to the harness's known_bug_slug so the shape stops drowning later runs, pin it in KNOWN_PROBES, and append the seed to tests/fuzz-seed-corpus.txt so every smoke run replays it. If it is a generator bug (a GEN_REJECT the generator claims is legal), fix the generator." \
+              ${tarball:+--attach "$tarball"} || rc=$?
+          done
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Never lose a finding: an unconfigured or unreachable Sentry falls back
+      # to the artifact. Loudly -- this is the one path that reintroduces
+      # public disclosure, and it is meant to be fixed, not lived with.
+      - name: Fallback -- upload findings because Sentry did not take them
+        if: steps.run.outputs.failed != '' && steps.report.outputs.rc != '0'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-findings-${{ steps.seed.outputs.seed }}
@@ -131,58 +181,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # An issue rather than a failed check: nothing here gates a merge, and a
-      # red X on a scheduled workflow is the kind of signal people stop reading.
-      - name: Open an issue for the findings
+      - name: Fail on findings
         if: steps.run.outputs.failed != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT_RC: ${{ steps.report.outputs.rc }}
           SEED: ${{ steps.seed.outputs.seed }}
-          FAILED: ${{ steps.run.outputs.failed }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        # The `fuzz` label is created here rather than assumed.  It never
-        # existed, so from the first run (2026-09-13) until this was fixed every
-        # `gh issue create --label fuzz` died with "could not add label: 'fuzz'
-        # not found": four nights of findings reached no issue, the seed corpus
-        # stayed empty, and the only trace was a red X on a scheduled workflow
-        # -- the signal this step exists to avoid.  `--force` makes the create
-        # idempotent.  If labelling still fails, file the issue without it: a
-        # finding with no label beats no finding.
         run: |
-          gh label create fuzz --force --color D93F0B \
-            --description "Nightly fuzz search finding" || true
-          BODY="$(cat <<EOF
-          The nightly fuzz search found something.
-
-          - **Seed:** \`$SEED\`
-          - **Harnesses with findings:** \`$FAILED\`
-          - **Run:** $RUN_URL
-
-          The generated programs and their shape tags are attached to that run
-          as the \`fuzz-findings-$SEED\` artifact. Each finding is already
-          auto-bisected to the failing leg, so it reads as
-          \`wrapper=res route=fat_hof,gid scalar=float\` rather than a blob.
-
-          To reproduce locally:
-
-          \`\`\`sh
-          python3 tests/<harness>-fuzz-src.py --tur ./build/tur --n 400 --seed $SEED
-          \`\`\`
-
-          If this is a real defect: file it under \`docs/reported/\`, add a row
-          to the harness's \`known_bug_slug\` so the shape stops drowning later
-          runs, pin it in \`KNOWN_PROBES\`, and **append the seed to
-          \`tests/fuzz-seed-corpus.txt\`** so every smoke run replays it from
-          now on.
-
-          If it is a generator bug (a \`GEN_REJECT\` the generator claims is
-          legal), fix the generator -- those never fail the run and are
-          reported for exactly this triage.
-          EOF
-          )"
-          TITLE="Fuzz: findings at seed $SEED ($FAILED)"
-          gh issue create --title "$TITLE" --label fuzz --body "$BODY" ||
-            gh issue create --title "$TITLE" --body "$BODY"
+          {
+            echo "## Fuzz search found something (seed \`$SEED\`)"
+            echo
+            if [ "$REPORT_RC" = "0" ]; then
+              echo "Details were sent to Sentry."
+            else
+              echo "**The findings could not be sent to Sentry!** They are attached"
+              echo "to this run instead, which is PUBLIC. Set the \`SENTRY_DSN\`"
+              echo "secret, or triage and delete that artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$REPORT_RC" != "0" ]; then
+            echo "::error::fuzz search found something, and Sentry did not take it (rc=$REPORT_RC) -- see the PUBLIC fallback artifact"
+          else
+            echo "::error::fuzz search found something at seed $SEED -- details are in Sentry"
+          fi
+          exit 1
 
   fuzz-parsers:
     name: Fuzz parsers (libFuzzer)
@@ -228,8 +249,55 @@ jobs:
             echo "failed=$(tr '\n' ' ' < fuzz-findings/parsers/FAILED | sed 's/ *$//')" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload findings
+      # A finding goes to Sentry and NOWHERE ELSE.
+      #
+      # This job used to name the failing targets in the step summary, repeat
+      # them in an ::error:: annotation, and upload the reproducers as an
+      # artifact -- then call that "triaged privately" because it did not open
+      # an issue.  On a public repo none of those are private: the run page is
+      # readable signed out and the artifact is downloadable by any signed-in
+      # user, so a crash in a parser that takes untrusted bytes was public from
+      # the moment the nightly run finished.  Section 2g of
+      # docs/upcoming/security-audit-plan.md has the measurement; question 8
+      # was the decision, and this is it.
+      #
+      # So: the target names, the sanitizer report and the reproducer go to
+      # Sentry, the public log says only that something failed, and there is no
+      # artifact.  Grouping is on target + crash type + frame, so the same
+      # defect found on five consecutive nights is one Sentry issue with a
+      # count of five rather than five identical reports.
+      - name: Report findings to Sentry
+        id: report
         if: steps.run.outputs.failed != ''
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          FAILED: ${{ steps.run.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          rc=0
+          for t in $FAILED; do
+            # The newest artifact libFuzzer wrote for this target. -artifact_prefix
+            # puts them in <findings>/<target>/, named crash-<sha1> (or oom-/timeout-).
+            repro="$(ls -t "fuzz-findings/parsers/$t/"* 2>/dev/null | head -n1 || true)"
+            python3 tools/ci/sentry-report.py \
+              --kind fuzz-parser \
+              --target "$t" \
+              --fingerprint fuzz-parser "$t" '{{ default }}' \
+              --tag surface=untrusted-input \
+              --run-url "$RUN_URL" \
+              --note "Parser fuzz finding. Reproduce: build-fuzz/fuzz/$t <attached reproducer> (tests/fuzz/README.md). Fix with the reproducer added to tests/fuzz/seeds/$t/. Triage privately -- SECURITY.md." \
+              --log "fuzz-findings/parsers/$t.log" \
+              ${repro:+--attach "$repro"} || rc=$?
+          done
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Losing a memory-safety finding is worse than publishing one, so an
+      # unreachable or unconfigured Sentry falls back to the artifact rather
+      # than dropping the only copy.  Loudly: this is the one path that
+      # reintroduces public disclosure, and it should be fixed, not lived with.
+      - name: Fallback -- upload findings because Sentry did not take them
+        if: steps.run.outputs.failed != '' && steps.report.outputs.rc != '0'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-parser-findings-${{ github.run_id }}
@@ -237,27 +305,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # Unlike the search job above, a finding here does NOT open an issue.
-      # These parsers take untrusted bytes, so a crash is a potential
-      # vulnerability, and an auto-filed public issue naming the parser and
-      # linking the reproducer would be public disclosure.  The job fails
-      # instead: GitHub notifies the maintainers of a failed scheduled run,
-      # who triage it privately (SECURITY.md) before anything is filed.
       - name: Fail on findings
         if: steps.run.outputs.failed != ''
         env:
-          FAILED: ${{ steps.run.outputs.failed }}
+          REPORT_RC: ${{ steps.report.outputs.rc }}
         run: |
+          # Deliberately says nothing about WHICH target or why -- that is the
+          # detail this job exists to keep out of a public log.
           {
             echo "## Parser fuzzing found something"
             echo
-            echo "Targets: \`$FAILED\`. The reproducers and logs are in this run's"
-            echo "\`fuzz-parser-findings\` artifact (kept 7 days)."
-            echo
-            echo "Triage privately first (SECURITY.md): these parsers take untrusted"
-            echo "input. Reproduce with \`build-fuzz/fuzz/<target> <reproducer>\`"
-            echo "(tests/fuzz/README.md); fix with the reproducer added to"
-            echo "\`tests/fuzz/seeds/<target>/\`."
+            if [ "$REPORT_RC" = "0" ]; then
+              echo "Details, including the reproducer, were sent to Sentry."
+              echo "Nothing is published here: these parsers take untrusted bytes,"
+              echo "so a finding is triaged privately first (SECURITY.md)."
+            else
+              echo "**The findings could not be sent to Sentry"'!'"** They are attached"
+              echo "to this run as \`fuzz-parser-findings\` instead, which is PUBLIC."
+              echo "Set the \`SENTRY_DSN\` secret, or triage and delete that artifact."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error::parser fuzzing found something in: $FAILED"
+          if [ "$REPORT_RC" != "0" ]; then
+            echo "::error::parser fuzzing found something, and Sentry did not take it (rc=$REPORT_RC) -- see the PUBLIC fallback artifact"
+          else
+            echo "::error::parser fuzzing found something -- details are in Sentry"
+          fi
           exit 1

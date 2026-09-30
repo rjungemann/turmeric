@@ -1665,14 +1665,16 @@ checklist, not a gate.
    report, or retired with a one-line reason in this plan.
 3. `tests/fuzz/` targets run nightly under ASan and flag crashes. **Met by
    WP4.** The job fails rather than filing a public issue.
-   **Corrected by WP7 (section 2g):** this used to end "so that a finding in
-   an untrusted-input parser is triaged privately", which the mechanism does
-   not deliver. On a public repository the scheduled run is world-readable the
-   moment it finishes -- the step summary names the failing targets, the
-   `::error::` annotation repeats them, and the findings artifact is
-   downloadable -- so not filing an issue withholds a title and a
-   notification, not the finding. Private triage of parser findings would need
-   the search not to run in public; see section 7, question 8.
+   **Corrected, then made true, by WP7.** The line used to end "so that a
+   finding in an untrusted-input parser is triaged privately", which the
+   mechanism did not deliver: on a public repository the scheduled run is
+   world-readable the moment it finishes, so the step summary naming the
+   failing targets, the `::error::` repeating them, and the downloadable
+   findings artifact were all public -- not filing an issue withheld a title
+   and a notification, not the finding (section 2g has the measurement).
+   **Since 2026-09-30 it holds**: findings go to Sentry and nothing else, the
+   artifacts are not uploaded, and the summary says only that something
+   failed. See section 7 question 8 for the decision and its cost.
 4. The generated sandbox test pins every native's capability.
 5. Release assets are attested and the installer verifies a checksum.
    **Met by WP7 (2026-09-30):** `actions/attest-build-provenance` signs every
@@ -1743,17 +1745,37 @@ checklist, not a gate.
 7. **Who** runs the audit -- one person over four weeks, or the packages
    handed out? WP2 and WP3 want someone who knows the driver and the
    interpreter respectively; WP4 and WP7 do not.
-8. **Is private triage of fuzz findings worth what it costs?** Raised by WP7
-   (section 2g). Today's arrangement gets the label but not the property: on a
-   public repo the nightly run's summary, error annotations and findings
-   artifact are readable as soon as it finishes, so declining to file an issue
-   withholds a notification rather than a finding. Three ways out, and this is
-   the author's call because they differ in cost, not in correctness:
-   - **Accept it.** Say plainly that fuzz findings are public on discovery,
-     drop the asymmetry, and let the parser job file an issue like the other
-     two so findings stop going unnoticed (the failure mode `fuzz.yml:145-152`
-     already records from experience).
-   - **Make it real.** Run the parser search in a private mirror and notify
-     the maintainer out of band. Genuinely private, and the most work.
-   - **Leave it.** Keep the split as partial mitigation, now that section 6
-     item 3 states its limit instead of overclaiming.
+8. ~~**Is private triage of fuzz findings worth what it costs?**~~
+   **ANSWERED 2026-09-30 -- the "make it real" option, via Sentry rather than a
+   private mirror.** The fuzz search, the libFuzzer parser targets and the TSan
+   run now report to Sentry and to nothing else: `gh issue create` is gone from
+   both workflows (and with it `issues: write`), the findings artifacts are no
+   longer uploaded, and the job summaries say only that something failed.
+   Details -- target names, the sanitizer report, and the reproducer as an
+   attachment -- go to a place only the maintainers can read.
+
+   Three things that made this cheaper than the private-mirror option the
+   original question costed:
+
+   - **No new dependency.** `tools/ci/sentry-report.py` is stdlib-only and
+     speaks Sentry's envelope endpoint over plain HTTPS -- no SDK to pin, no
+     marketplace action, no `curl | bash`, which is what C-5 and C-7 just
+     finished removing.
+   - **Grouping is a real gain, not just a privacy tax.** Events fingerprint on
+     target + crash type + first non-sanitizer frame, so a standing defect is
+     one Sentry issue with a count instead of one GitHub issue per night. The
+     seed and run URL are context, never grouping -- putting them in the
+     fingerprint would reproduce exactly the noise this replaces.
+   - **A finding is never dropped to protect privacy.** An unconfigured or
+     unreachable Sentry falls back to the public artifact and says so loudly in
+     the summary. Losing a memory-safety finding is worse than publishing one.
+     `sentry-report.py` exits 2 for "no DSN" and 1 for "send failed" precisely
+     so the workflows can tell a misconfigured repo from a bad night.
+
+   **The cost, recorded because it is a real one:** reproducers for un-triaged
+   crashes now live at a third party. That is in the security guide's T4
+   section rather than left implicit, with the note that unsetting `SENTRY_DSN`
+   opts out -- at the price of the public fallback.
+
+   Needs one repository secret, `SENTRY_DSN`. Without it the workflows behave
+   as they did before this change, minus the GitHub issue.

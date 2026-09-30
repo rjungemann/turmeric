@@ -281,62 +281,105 @@ site.
 **Installing a release should get you the bytes CI built, verifiably. A spice
 pinned in `tur.lock` should not change under a rebuild without a diagnostic.**
 
-**Status today: neither half is kept.**
+**Status today: the installer half is kept. The lockfile half detects a change
+but cannot yet pin against one.**
 
-### The installer builds `main` (C-1, open, high)
+### Installing
 
-The advertised install path --
-`curl -sSf https://turmeric-lang.com/install | sh` -- runs
-`brew install --HEAD`, and the Homebrew formula is `head`-only: no `url`, no
-`sha256`. So it compiles whatever `main` is at that moment. A bad afternoon on
-`main` reaches every new install, and there is no checksum anywhere in the path.
+`curl -sSf https://turmeric-lang.com/install | sh` installs the version manager
+(`tvm`) and then the latest **release**. The release tarball is checked against
+that release's `sha256sums.txt` before it is unpacked, and the install **stops**
+if that check cannot be made -- a missing sums file, a missing row for your
+platform's asset, or no `sha256` tool on the system are all refusals, not
+skips. `--insecure` is the single opt-out, and it does not apply to a checksum
+*mismatch*: a check that ran and said no is not a check that could not run.
 
-Release assets *do* exist, with a `sha256sums.txt`, but nothing installs from
-them except `tvm`. If you want a verified install today, use `tvm` or download
-a release tarball and check it by hand, as the
-[installation guide](releases-and-installation-guide.md) describes.
+`tvm` fetches itself at the release's tag rather than from `main`, so the
+bootstrap does not reintroduce what it removes. That is the same trust root as
+the release, not a stronger one -- whoever can move a tag can move the assets.
 
-### `tvm`'s checksum check can be skipped silently (C-2, open, medium)
+Release assets carry [build provenance](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations),
+signed through Sigstore with a short-lived certificate minted from the release
+job's OIDC token, so there is no long-lived key to lose:
 
-`tvm install` verifies a downloaded asset against the release's
-`sha256sums.txt`, but the check has four paths that skip it, and only one of
-them says so:
+```sh
+gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+```
 
-| Condition | What happens |
-| --- | --- |
-| `sha256sums.txt` missing, unreachable or empty | skipped, **silently** |
-| the asset has no row in that file | skipped, **silently** |
-| no `sha256` tool on the system | skipped, with a log line |
-| an explicit `--from` source | skipped |
+That is the check worth running, because `sha256sums.txt` is served from the
+same origin as the assets: on its own it proves the bytes did not change in
+transit, not who produced them. Tags are annotated rather than signed, which is
+a recorded decision -- the attestation is what protects a downloader, and it
+needs no key anyone has to hold.
 
-It should fail closed. Note also that the sums file is fetched from the same
-origin as the asset, which makes this an integrity check, not an authenticity
-one -- and that release assets are currently unsigned, with no build
-provenance attestation (C-4).
+**`brew install --HEAD rjungemann/turmeric/turmeric` builds whatever `main` is
+at that moment and verifies no checksum.** That is the supported way to track
+development and the wrong way to install the compiler. The Homebrew formula is
+`--HEAD`-only by design; it is not a pinned channel.
 
-### `tur.lock` is trust-on-first-use (C-3, open, medium)
+### `tur.lock` detects drift; it does not yet pin against it
 
-The hash in `tur.lock` is recomputed and **overwritten on every fetch**, so it
-records what you last downloaded rather than what you agreed to. It can
-therefore catch a local edit to `spices/` after a fetch; it cannot catch
-upstream changing under you.
+`tur fetch` compares a freshly fetched tree against the hash `tur.lock`
+recorded and **fails** when they differ, naming both hashes and pointing at
+`tur fetch --update` as the deliberate way to accept the change. A refused
+fetch leaves the recorded hash alone, so the failure does not evaporate on the
+next run. `tur run`, `tur build` and `tur audit` all re-hash the trees they are
+about to use, so an edit made to `spices/` after a fetch is caught by whichever
+you reach for.
 
-The single comparison in the tree runs in `tur run` only -- `tur build` does not
-check -- and it is skipped when the dependency directory is absent (that path
-fetches and rewrites the hash) and when the recorded hash predates the current
-algorithm.
+What it still cannot do is **check out the commit it recorded**. A clone tracks
+the branch or tag named in `:ref`; `:resolved` is recorded but never used to
+check out, so a branch-shaped `:ref` re-fetches to wherever that branch now
+points and you are asked to approve the change rather than held to the commit
+you locked. Tracked as
+[lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/reported/lock-tracks-ref-not-resolved-commit.md).
 
-`tur audit` lists origins; it does not verify them, and says so.
-
-So: **pin `:ref` to a tag rather than a branch, and read a new spice before you
-add it.** A `:cmake-deps` entry is a trust decision equivalent to running build
+So: **prefer a tag over a branch for `:ref`, and read a new spice before you add
+it.** A `:cmake-deps` entry is a trust decision equivalent to running build
 scripts from that repository.
 
 ### Workflows
 
-No workflow action is pinned to a commit SHA, `ci.yml` has no top-level
-`permissions:` block, and several toolchain installs float (C-5, C-6). This
-matters because the release pipeline is what T4's first promise depends on.
+Every workflow action is pinned to a full commit SHA with its version as a
+trailing comment, and Dependabot keeps those pins current -- a pinned action
+otherwise never moves, including past the fix for its own vulnerability.
+`ci.yml` and `release.yml` declare `permissions: contents: read` at the top and
+raise it per job; the repository's default workflow token is read-only as well,
+so the declaration is defense in depth rather than the only lock. Toolchain
+installs are pinned: an exact Emscripten SDK version, and `pip` requirements
+with hashes under `--require-hashes`.
+
+The `turmeric-spices` checkout in CI is deliberately **not** pinned. It is the
+same owner under the same account, inside the trust boundary `main` already
+draws, and a hand-maintained SHA in this repo is a pin that goes stale and then
+gets bumped blind.
+
+### Where a fuzz or TSan finding goes
+
+The nightly fuzz search, the libFuzzer parser targets and the TSan run all
+report findings to **Sentry**, and to nothing else: no public artifact, and the
+workflow log says only that something failed. This is deliberate. These jobs
+run on a public repository, where a run page is readable signed out and an
+artifact is downloadable by any signed-in user, so the previous arrangement --
+an auto-filed GitHub issue, plus target names in the step summary, plus the
+reproducers uploaded as an artifact -- published un-triaged memory-safety
+findings the moment a scheduled run finished.
+
+Two consequences worth stating plainly:
+
+- **Reproducers for un-triaged crashes are sent to a third party.** Sentry is
+  the custodian of that data. If that is not an acceptable dependency for your
+  fork, unset the `SENTRY_DSN` secret -- but read the next point first.
+- **A finding is never dropped to protect privacy.** If Sentry is
+  unconfigured or unreachable, the workflows fall back to uploading the
+  findings as a public artifact and say so loudly in the job summary. Losing a
+  memory-safety finding is worse than publishing one; the fallback is meant to
+  be fixed, not lived with.
+
+Findings group on target plus crash type plus the first non-sanitizer frame, so
+the same defect found on consecutive nights is one Sentry issue with a count
+rather than one report per night. The seed and the run URL travel as context,
+never as part of the grouping key.
 
 ---
 
