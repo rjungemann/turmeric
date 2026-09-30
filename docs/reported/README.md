@@ -43,7 +43,7 @@ in the same change.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-sandbox-handles-are-forgeable-integers](turi-sandbox-handles-are-forgeable-integers.md) | high | S-5, filed by WP3: a sandboxed or macro-time `(vec-get 4096 0)` reads address 4096 -- interpreter handles are bare integers the natives cast back unchecked -- and `panic` / some native error paths `_exit` the host. Not a capability; the directions are a per-env handle registry plus turning host exits into errors under a restricted env |
+| [turi-sandbox-handles-are-forgeable-integers](turi-sandbox-handles-are-forgeable-integers.md) | high | S-5, filed by WP3, narrowed the same day: a sandboxed or macro-time `(vec-get 4096 0)` reads address 4096. Interpreter handles are bare integers that 204+ natives cast back unchecked. The host-exit half (`panic` and native error paths ending the host) is fixed. Direction: a per-native handle-kind column in `native_caps.c` plus a provenance set per restricted env |
 
 ## Representation gaps (filed 2026-09-09, extended 2026-09-10)
 

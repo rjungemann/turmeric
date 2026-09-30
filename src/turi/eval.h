@@ -410,6 +410,14 @@ bool turi_value_is_native(TuriValue v);
  * with the standard message + double-panic guard).  Used by native functions
  * such as result-must / option-must instead of _exit(1).  Does not return. */
 void turi_runtime_panic(TuriEnv *env, const char *msg);
+
+/* security-audit-plan S-5: call immediately before any exit()/_exit()/abort()
+ * a native makes on the program's behalf (an out-of-bounds index, a failed
+ * contract).  In an env that may not end the host (no TURI_CAP_PROC) it does
+ * not return: turi_eval stops the program and returns TURI_ERROR
+ * "panic: <msg>".  Otherwise it returns and the caller exits as before, so
+ * unrestricted output is unchanged. */
+void turi_host_exit_guard(TuriEnv *env, const char *msg);
 /* r7rs-lang-plan R8: the value an identity question should compare.  A widen
  * to `any` of a payload that cannot answer for its own type (a Vec, a Map, an
  * opaque) wraps it in a FRESH one-field box each time, so two widens of one

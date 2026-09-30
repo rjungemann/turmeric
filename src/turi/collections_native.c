@@ -1268,6 +1268,7 @@ static TuriValue native_vec_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
     int64_t  i = a[1].as_int;
     if (!v || i < 0 || i >= v[1]) {
+        turi_host_exit_guard(env, "vec index out of bounds");
         fprintf(stderr, "vec index out of bounds\n");
         fflush(stderr);
         _exit(1);

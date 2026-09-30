@@ -110,7 +110,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | S-2 | medium -- **FIXED in WP3** | `extern-c` "known overrides" (`printf`, `printf_s`, `getenv`) skip the FFI cap check the thunk path enforces, and `printf`'s format string is program-controlled (`src/turi/eval.c:360-421`). | |
 | S-3 | low (re-graded by WP3: needs `TURI_CAP_INLINE_C`) -- **FIXED in WP3** | The inline-C emulator's snprintf pattern hands the program's format string to `snprintf` with every argument coerced to `long long` -- a `%s` in the body dereferences an integer (`src/turi/eval.c:5532-5535`). | |
 | S-4 | info -- **documented in WP1/WP3** | Try Turmeric's wasm env is `CAP_ALL` by design (`src/web/wasm_glue.c:159-162`); `tests/turi/sandbox-eval.c:37-88` covers only println/async/inline-C. | The security guide records the posture as intentional; the sandbox test now covers every classified native. Section 7 Q4 stays the author's. |
-| S-5 | high (under T3; under T1 for `tur check`) -- **OPEN**, found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` is a wild read and the setters a wild write. `panic` and some native error paths `_exit` the host. **verified** under ASan. Not a capability; see section 2b. | [`docs/reported/turi-sandbox-handles-are-forgeable-integers.md`](../reported/turi-sandbox-handles-are-forgeable-integers.md) |
+| S-5 | high (under T3; under T1 for `tur check`) -- **OPEN** (host-exit half **FIXED** 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` is a wild read and the setters a wild write. At least 204 of the 656 natives do the cast in their own body. **verified** under ASan. Not a capability; see section 2b. The second half as filed -- `panic` and native error paths ending the host -- is fixed: a restricted env's `turi_eval`/`turi_call` return `TURI_ERROR "panic: <msg>"` instead. | [`docs/reported/turi-sandbox-handles-are-forgeable-integers.md`](../reported/turi-sandbox-handles-are-forgeable-integers.md) |
 | S-6 | medium -- **FIXED in WP3**, found by WP3 | `(load "path")` in a sandboxed env read the file and echoed its first token in the unbound-symbol diagnostic: `load` expansion (`src/compiler/elab_toplevel.c`, `load_expand_forms`) had no gate while `import` did. | |
 | S-7 | high -- **FIXED in WP3**, found by WP3 | `r7rs-eval-c-eval__`/`-load__` evaluate text in the process-global embedded R7RS env (`src/turi/r7rs_embed.c`), which is an ordinary `CAP_ALL` env, so any sandbox reached every capability through it. | |
 
@@ -325,7 +325,8 @@ covers them all, which is what made the choke point cheap.
 ### Findings the survey did not have
 
 - **S-5 (high, open)** -- handles are forgeable integers; see the row. The
-  capability check is sound and this is underneath it. Gating the collection
+  capability check is sound and this is underneath it. Its host-exit half was
+  fixed in a follow-up the same day. Gating the collection
   natives behind `TURI_CAP_UNSAFE` would make a sandbox without vectors, which
   is not a sandbox anyone can use, so WP3 filed it rather than paper over it.
 - **S-6** -- sandboxed `load`. Fixed.
@@ -480,11 +481,15 @@ Research first; section 2b has the PoCs and the inventory. What landed:
   the sandboxing guide's claims match the table. The T3 promise is still not
   made, because of S-5, which is filed in `docs/reported/` and indexed.
 
-**Left for others deliberately:** S-5 (a handle registry or tagged handles, and
-turning host exits into errors under a restricted env -- the report has the
-directions); making the embedded R7RS env inherit its caller's capabilities
-instead of requiring all of them; and whether the language server should pass
-`--no-proc-macros` by default, which is a T1 product decision for the author.
+**Left for others deliberately:** S-5's forged-handle half (a per-native
+handle-kind column plus a provenance set per restricted env, or tagged handles;
+the report has the measured scope and the design). Its host-exit half landed
+in the same PR as a follow-up. Also left: making the embedded R7RS env inherit
+its caller's capabilities instead of requiring all of them.
+
+**Decided by the author 2026-09-30:** the language server does **not** pass
+`--no-proc-macros` by default for now; the question stays open for
+reconsideration.
 
 ### WP4 -- Deserializers, parsers, and the fuzz harnesses (5-6 days)
 

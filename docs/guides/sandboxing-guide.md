@@ -289,6 +289,20 @@ Step-fuel exhaustion also surfaces as `TURI_ERROR`:
 sandbox error: eval: step fuel exhausted
 ```
 
+So does a panic. An environment without `TURI_CAP_PROC` may not end your
+process, so a panic nothing in the script catches -- `(panic ...)`, an
+out-of-bounds `vec-get`, a failed contract -- stops the script and comes back
+from `turi_eval` or `turi_call` as an error, and the environment stays
+usable:
+
+```
+sandbox error: panic: vec index out of bounds
+```
+
+A `catch-unwind` inside the script still catches first. An environment that
+holds `TURI_CAP_PROC` keeps the compiled program's behaviour: print the panic
+and exit.
+
 ---
 
 ## Full Example -- Sandboxed Formula Evaluator

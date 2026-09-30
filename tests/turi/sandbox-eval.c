@@ -1,6 +1,6 @@
-/* Sandbox eval test harness (SB0; security-audit-plan WP3).
+/* Sandbox eval test harness (SB0; security-audit-plan WP3, S-5).
  *
- * Three parts:
+ * Four parts (the fourth, host exit, is further down):
  *
  *   1. Fixtures.  Each file in tests/fixtures/sandbox/ is evaluated in a fresh
  *      turi_env_new_sandboxed() env and must fail FOR ITS STATED REASON: the
@@ -230,6 +230,60 @@ static void check_pure_still_works(void) {
     turi_env_free(env);
 }
 
+/* ---- part 4: host exit (S-5's second half) ------------------------------
+ * A restricted env may not end the host process.  Every panic path that
+ * would exit() or abort() -- an uncaught panic, a native's own
+ * out-of-bounds exit, a failed contract -- comes back as TURI_ERROR
+ * "panic: <msg>", the env stays usable, and catch-unwind still catches. */
+
+static void expect_panic_error(TuriEnv *env, const char *what, const char *src,
+                               const char *want) {
+    TuriValue r = turi_eval(env, src);
+    if (r.tag == TURI_ERROR && r.as_error && strstr(r.as_error, want))
+        pass(what, r.as_error);
+    else {
+        char msg[256];
+        snprintf(msg, sizeof msg, "wanted TURI_ERROR containing \"%s\", got tag %d (%s)",
+                 want, r.tag, r.tag == TURI_ERROR && r.as_error ? r.as_error : "-");
+        fail(what, msg);
+    }
+}
+
+static void check_host_exit_is_an_error(void) {
+    TuriEnv *env = turi_env_new_sandboxed();
+    expect_panic_error(env, "host-exit/panic", "(panic \"x\")", "panic: x");
+    expect_panic_error(env, "host-exit/vec-oob",
+                       "(let [v (vec-new)] (vec-get v 5))",
+                       "panic: vec index out of bounds");
+    expect_panic_error(env, "host-exit/contract",
+                       "(tur-contract-check false \"contract broke\")",
+                       "panic: contract broke");
+
+    /* The env is still usable after each of those. */
+    TuriValue after = turi_eval(env, "(+ 1 2)");
+    if (after.tag == TURI_INT && after.as_int == 3)
+        pass("host-exit/env-survives", "(+ 1 2) => 3 after three panics");
+    else
+        fail("host-exit/env-survives", "env unusable after a caught host exit");
+
+    /* User catch-unwind is untouched: it catches before the pad is reached. */
+    TuriValue caught = turi_eval(env,
+        "(err? (catch-unwind (fn [] : int (panic \"inner\"))))");
+    if (caught.tag == TURI_BOOL && caught.as_bool)
+        pass("host-exit/catch-unwind-still-catches", NULL);
+    else
+        fail("host-exit/catch-unwind-still-catches", "catch-unwind no longer caught the panic");
+
+    /* The turi_call entry point (how the macro env calls a defmacro*) too. */
+    TuriValue fn = turi_eval(env, "(fn [] : int (panic \"via call\"))");
+    TuriValue r = turi_call(env, fn, NULL, 0);
+    if (r.tag == TURI_ERROR && r.as_error && strstr(r.as_error, "panic: via call"))
+        pass("host-exit/turi-call", r.as_error);
+    else
+        fail("host-exit/turi-call", "a panic through turi_call did not come back as an error");
+    turi_env_free(env);
+}
+
 /* Re-enable async; I/O must still be denied. */
 static void run_mixed_caps_test(void) {
     TuriEnv *env = turi_env_new_sandboxed();
@@ -315,6 +369,7 @@ int main(void) {
     check_grant_admits();
     check_explicit_override();
     check_pure_still_works();
+    check_host_exit_is_an_error();
 
     run_mixed_caps_test();
     run_api_smoke_tests();

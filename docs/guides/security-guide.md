@@ -210,10 +210,14 @@ constructor. So sandboxed text can forge one:
 ```
 
 That is a wild read, and the setters make it a wild write, so an adversary
-who can guess an address has the host process. Separately, `panic` and a few
-natives' error paths call `_exit`, so sandboxed text can end the host process.
-Neither needs a capability; both are properties of the interpreter's value
-model rather than of any one native.
+who can guess an address has the host process. It needs no capability. It is a
+property of the interpreter's value model rather than of any one native.
+
+A panic, by contrast, no longer ends the host. In an environment without
+`TURI_CAP_PROC`, a panic that nothing catches, and the error exits of natives
+like an out-of-bounds `vec-get`, come back to the embedder as a `TURI_ERROR`
+reading `panic: <msg>`, and the environment stays usable. A panicking
+`defmacro*` is an ordinary expansion diagnostic.
 
 Until S-5 is fixed, **do not treat `Env/new-sandboxed` as a boundary against
 hostile code.** It is now a sound boundary against *careless* code -- a plug-in

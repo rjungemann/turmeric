@@ -2604,6 +2604,23 @@ static inline void panic_fill_cstr_payload(TuriEnv *env, const char *s) {
     env->catch_panic_line  = 0;
 }
 
+/* security-audit-plan S-5: every place a panic would end the process calls
+ * this first.  In an env that may not end the host (turi_eval installs
+ * env->host_exit_jmp when the env lacks TURI_CAP_PROC) it lands on turi_eval's
+ * pad, which returns TURI_ERROR "panic: <msg>" to the embedder; otherwise it
+ * returns and the caller exits exactly as before.  `msg`, when non-NULL,
+ * replaces the stashed message (the double-panic paths have none of their
+ * own). */
+static void host_exit_unwind(TuriEnv *env, const char *msg) {
+    if (!env || !env->host_exit_jmp) return;
+    if (msg) panic_fill_cstr_payload(env, msg);
+    longjmp(*env->host_exit_jmp, 1);
+}
+
+void turi_host_exit_guard(TuriEnv *env, const char *msg) {
+    host_exit_unwind(env, msg ? msg : "(no message)");
+}
+
 /* Phase R2: shared interpreter panic entry point.  Mirrors the EX_PANIC eval
  * case so native functions (result-must, option-must, option-expect, ...) raise
  * a *catchable* panic -- recoverable by catch-unwind and carrying the standard
@@ -2622,6 +2639,7 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     const char *s = msg ? msg : "(no message)";
     if (env->panicking || g_firing_panic_defer) {
         /* Double panic: a defer (or a panic during unwinding) panicked again. */
+        host_exit_unwind(env, "double panic");
         fprintf(stderr, "double panic: aborting\n");
         fflush(stderr);
         fflush(stdout);
@@ -2636,6 +2654,9 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
             return;                 /* raise signal; the driver unwinds to DK_CATCH_UNWIND */
         longjmp(*cb->jmp, 1);       /* setjmp boundary: unwind the C stack to it */
     }
+    /* No catch boundary took it (or no-unwind forbids catching): the process
+     * would end here.  A host that denied TURI_CAP_PROC gets an error back. */
+    host_exit_unwind(env, s);
     env->panicking = true;
     if (env->in_no_unwind) {
         fprintf(stderr, "panic (no unwind): %s\n", s);
@@ -11910,6 +11931,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue pv = eval_expr(env, frame, e->as.panic_with_.payload);
         if (turi_is_error(pv) || env_signaled(env)) return pv;
         if (env->panicking || g_firing_panic_defer) {
+            host_exit_unwind(env, "double panic");
             fprintf(stderr, "double panic: aborting\n");
             fflush(stderr);
             fflush(stdout);
@@ -11930,6 +11952,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (cb->is_driver) return pv;   /* raise signal; driver unwinds */
             longjmp(*cb->jmp, 1);
         }
+        host_exit_unwind(env, "typed panic");
         env->panicking = true;
         fprintf(stderr, "panic at\n");
         fflush(stderr);
@@ -12052,6 +12075,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 if (outer->is_driver) return env->catch_panic_value;
                 longjmp(*outer->jmp, 1);
             }
+            host_exit_unwind(env, NULL);
             fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
             fflush(stderr);
             fire_defers_to_mark_by_scope(env, NULL, NULL);
@@ -14226,6 +14250,107 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     collsweep_after_rewind(env, *result);
 }
 
+/* Run program items [0, n_fsd) then [start, total): the imported module
+ * bodies, then this turn's new forms.  Stops at the first error or uncaught
+ * throw. */
+static TuriValue eval_toplevel_items(TuriEnv *env, Expr *prog, uint32_t n_fsd,
+                                     uint32_t start, uint32_t total) {
+    TuriValue last = turi_nil();
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t lo = pass == 0 ? 0 : start;
+        uint32_t hi = pass == 0 ? n_fsd : total;
+        for (uint32_t i = lo; i < hi; i++) {
+            last = eval_expr(env, NULL, prog->as.program.items[i]);
+            if (env->returning) {
+                last = env->return_value;
+                env->returning = false;
+            }
+            if (env->throwing) {
+                env->throwing = false;
+                return turi_error("uncaught exception");
+            }
+            if (turi_is_error(last)) return last;
+        }
+    }
+    return last;
+}
+
+/* security-audit-plan S-5: an env that may not end the host process (no
+ * TURI_CAP_PROC -- turi_env_new_sandboxed, the macro env) gets a landing pad
+ * for every panic path that would otherwise exit() or abort(): an uncaught
+ * panic, a panic under no-unwind, a double panic, and a native's own
+ * out-of-bounds or failed-contract exit (turi_host_exit_guard).  The program
+ * stops and turi_eval returns TURI_ERROR "panic: <msg>"; the embedder decides
+ * what happens next.  User catch-unwind is untouched -- the pad is reached only
+ * where the process would have ended.  The program's pending defers are
+ * dropped, not run: it has been stopped, not unwound, and a defer that
+ * panicked again would have nowhere left to go.  A separate function so the
+ * setjmp frame holds only the saved state below.
+ *
+ * `nested_ok`: reuse a pad already installed further out instead of pushing
+ * one (turi_call from a higher-order native mid-program), so the common path
+ * pays no setjmp. */
+typedef TuriValue (*HostGuardedFn)(TuriEnv *env, void *ctx);
+
+static TuriValue host_guarded_run(TuriEnv *env, HostGuardedFn run, void *ctx,
+                                  bool nested_ok) {
+    if ((env->caps & TURI_CAP_PROC) || (nested_ok && env->host_exit_jmp))
+        return run(env, ctx);
+    struct {
+        jmp_buf            pad;
+        jmp_buf           *host_jmp;
+        jmp_buf           *catch_jmp;
+        void              *handlers;
+        void              *defers;
+        const char        *module;
+        bool               no_unwind;
+        TuriCatchBoundary *catch_stack;
+    } *volatile g = calloc(1, sizeof *g);
+    if (!g) return turi_error("eval: out of memory");
+    g->host_jmp    = env->host_exit_jmp;
+    g->catch_jmp   = env->catch_jmp;
+    g->handlers    = env->handler_stack;
+    g->defers      = env->defer_stack;
+    g->module      = env->current_module;
+    g->no_unwind   = env->in_no_unwind;
+    g->catch_stack = g_catch_stack;
+    env->host_exit_jmp = &g->pad;
+    TuriValue r;
+    if (setjmp(g->pad) == 0) {
+        r = run(env, ctx);
+    } else {
+        env->catch_jmp      = g->catch_jmp;
+        env->handler_stack  = g->handlers;
+        env->defer_stack    = g->defers;
+        env->current_module = g->module;
+        env->in_no_unwind   = g->no_unwind;
+        env->panicking      = false;
+        env->returning      = false;
+        env->throwing       = false;
+        g_catch_stack       = g->catch_stack;
+        g_firing_panic_defer = false;
+        r = turi_errorf("panic: %s", env->catch_panic_msg);
+    }
+    env->host_exit_jmp = g->host_jmp;
+    free(g);
+    return r;
+}
+
+typedef struct { Expr *prog; uint32_t n_fsd, start, total; } ToplevelRun;
+
+static TuriValue toplevel_run(TuriEnv *env, void *ctx) {
+    ToplevelRun *t = (ToplevelRun *)ctx;
+    return eval_toplevel_items(env, t->prog, t->n_fsd, t->start, t->total);
+}
+
+/* turi_eval's evaluation phase: always the innermost pad, so a nested
+ * turi_eval (from a native) unwinds to its own caller's cleanup. */
+static TuriValue eval_toplevel_guarded(TuriEnv *env, Expr *prog, uint32_t n_fsd,
+                                       uint32_t start, uint32_t total) {
+    ToplevelRun t = { prog, n_fsd, start, total };
+    return host_guarded_run(env, toplevel_run, &t, false);
+}
+
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                  char *out_type_tag, size_t tag_cap) {
     if (!env || !src) return turi_error("turi_eval: null argument");
@@ -14610,22 +14735,6 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     uint32_t total = prog->as.program.n;
     uint32_t n_fsd = actual_n_fsd;
 
-#define EVAL_TOPLEVEL_RANGE(lo, hi) do {                                      \
-    for (uint32_t _i = (lo); _i < (hi); _i++) {                              \
-        last = eval_expr(env, NULL, prog->as.program.items[_i]);             \
-        if (env->returning) {                                                 \
-            last = env->return_value;                                         \
-            env->returning = false;                                           \
-        }                                                                     \
-        if (env->throwing) {                                                  \
-            env->throwing = false;                                            \
-            last = turi_error("uncaught exception");                          \
-            goto eval_done;                                                   \
-        }                                                                     \
-        if (turi_is_error(last)) goto eval_done;                             \
-    }                                                                         \
-} while (0)
-
     TuriValue last = turi_nil();
     /* The already-run tail of the program is n_fsd file-scope defs followed by
      * prior_prog non-fsd program items from earlier evals.  Skip exactly that
@@ -14635,10 +14744,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * items, so none of them have run before -- the already-run prefix is zero.
      * On the whole-program path the cumulative count applies, as before. */
     uint32_t prior_prog = use_incr_elab ? 0u : env->prior_prog_items;
-    EVAL_TOPLEVEL_RANGE(0, n_fsd);                   /* imported module bodies */
-    EVAL_TOPLEVEL_RANGE(n_fsd + prior_prog, total);  /* new user forms         */
-eval_done:;
-#undef EVAL_TOPLEVEL_RANGE
+    /* Imported module bodies [0, n_fsd), then the new user forms. */
+    last = eval_toplevel_guarded(env, prog, n_fsd, n_fsd + prior_prog, total);
 
     /* 8. Update accumulated state only on success.
      * Store nforms (parsed count) rather than total so the n_fsd formula
@@ -14757,10 +14864,23 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
  * turi_call: directly invoke a closure value
  * ---------------------------------------------------------------------- */
 
+typedef struct { TuriClosure *cl; TuriValue *args; uint32_t n; } CallRun;
+
+static TuriValue call_run(TuriEnv *env, void *ctx) {
+    CallRun *c = (CallRun *)ctx;
+    return eval_apply(env, c->cl, c->args, c->n);
+}
+
 TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args) {
     if (!env) return turi_error("turi_call: null env");
     if (fn.tag != TURI_CLOSURE || !fn.as_closure)
         return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
+    /* S-5: an embedder (or the macro env) calling straight into a restricted
+     * env gets the same host-exit pad turi_eval installs. */
+    if (!(env->caps & TURI_CAP_PROC) && !env->host_exit_jmp) {
+        CallRun c = { fn.as_closure, args, n_args };
+        return host_guarded_run(env, call_run, &c, true);
+    }
     return eval_apply(env, fn.as_closure, args, n_args);
 }
 

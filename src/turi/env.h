@@ -427,6 +427,11 @@ typedef struct TuriEnv {
     int          n_include_dirs;
     /* Phase R2: catch-unwind support — setjmp boundary for interpreter panic handling */
     jmp_buf     *catch_jmp;           /* active catch-unwind jmp_buf, or NULL */
+    /* security-audit-plan S-5: while turi_eval runs a program in an env that
+     * may not end the host (no TURI_CAP_PROC), the landing pad every panic
+     * path jumps to instead of exit()/abort() -- including the uncatchable
+     * ones (no-unwind, double panic).  NULL otherwise. */
+    jmp_buf     *host_exit_jmp;
     char         catch_panic_msg[512]; /* copy of panic message when longjmp fires */
     /* Phase TI5: typed panic payload carried across the catch boundary so that
      * catch-panic-of can filter by type and the panic-payload-* accessors can
