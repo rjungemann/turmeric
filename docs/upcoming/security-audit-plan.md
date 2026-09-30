@@ -1557,7 +1557,25 @@ Section 2f has the repro and the deviations. What landed:
 **Left for others deliberately:** pinning mermaid's exact version (WP7), and
 fixing Share (filed).
 
-### WP7 -- Supply chain, release, CI (3 days)
+### WP7 -- Supply chain, release, CI (3 days) -- DONE 2026-09-30
+
+Verification pass in section 2g; it re-graded three rows and found two the
+survey did not have, so read that before this list. What landed:
+
+| Row | Outcome |
+| --- | --- |
+| C-1 | **Fixed.** `/install` bootstraps `tvm` (the plan's "or, better") and installs a checksum-verified release; works on Linux, which it never did. `--HEAD` stays as the documented opt-in, so `Formula/turmeric.rb` is unchanged. Answers section 7 question 5. |
+| C-2 | **Fixed.** All three refusals plus `--insecure`; `--from` warns. A mismatch is deliberately not `--insecure`-able. |
+| C-3 | **Mostly fixed.** Drift is detected, `tur build` and `tur audit` verify, and a *third* defect turned up: `tur fetch` was a no-op on a fresh clone. Checking out `:resolved` is filed as [lock-tracks-ref-not-resolved-commit](../reported/lock-tracks-ref-not-resolved-commit.md) -- see the commit for why it was not half-landed. The guide half was already done by WP1. |
+| C-4 | **Fixed.** Sigstore keyless attestation on every asset. Tag signing deliberately not switched on, with the reason recorded in all three `cut-*-release` commands; answers section 7 question 6. |
+| C-5 | **Fixed**, except the `turmeric-spices` clone, which is a recorded deliberate non-pin (same owner, inside the trust boundary; see 2g). 56 actions SHA-pinned, emsdk and pip pinned, both top-level `permissions` blocks added -- the last as defense in depth, not the over-grant the survey described. |
+| C-6 | **Injection half was already fixed** by WP4. The `issues: write` half is a design decision, not a patch: see 2g and section 7 question 8. |
+| C-7 | **Closed as accepted.** MIR was already SHA-pinned; the two `curl \| bash` are developer-facing, in `.devcontainer/`, on no user's install path. Dependabot watches both Dockerfiles now. |
+| C-8 | **Fixed.** `dependabot.yml` and a CodeQL workflow; the committed files and the two missing docs were already handled by WP1. Repo settings had moved -- three of the four the survey named are on; only Dependabot security updates is still off (owner action, not a patch). |
+
+Two things WP7 added that were not in the list: **the tvm suites ran nowhere
+automatic** before tvm became the install path (a new `tvm` CI job runs both on
+Linux and macOS), and the mermaid pin WP6 handed over in section 2f.
 
 - **Installer (C-1):** make `/install` fetch the latest *release* tarball
   and verify `sha256sums.txt` against a value pinned *in the script* for
@@ -1584,7 +1602,11 @@ fixing Share (filed).
   `version:` on `setup-emsdk`. Add `.github/dependabot.yml` for actions,
   npm (`web/`), and pip; add a CodeQL workflow for C and JavaScript.
 - **Exit:** every action SHA-pinned; release assets carry attestations; the
-  installer verifies a checksum; the lock check has a fixture.
+  installer verifies a checksum; the lock check has a fixture. **All four met**
+  -- 56 of 56 pinned, `actions/attest-build-provenance` on every asset,
+  `tvm/tests/install-script.sh` (11 assertions) driving the Worker's real
+  `/install` route, and `tests/run-lock-integrity.sh` (11 assertions, 6 of
+  which fail against the pre-fix binary).
 
 ### WP8 -- Effects as a stated boundary (1 day, decision-heavy)
 
@@ -1602,7 +1624,7 @@ fixing Share (filed).
 
 | Week | Packages | Why this order |
 | --- | --- | --- |
-| 1 | WP1, WP7 (installer, tvm, workflow pins, permissions), WP4 (M-3 LSP framing; M-1 bounds checks) | The cheapest changes with the largest blast radius: what a user installs, what CI can do with its token, and the two overflows a reporter would demo first. |
+| 1 | WP1, ~~WP7~~ **done 2026-09-30, all eight C rows**, WP4 (M-3 LSP framing; M-1 bounds checks) | The cheapest changes with the largest blast radius: what a user installs, what CI can do with its token, and the two overflows a reporter would demo first. WP7 came in larger than "installer, tvm, workflow pins, permissions": the lock work (C-3) turned up a third defect of its own, and two of the eight rows were already closed by WP1's collateral. |
 | 2 | ~~WP2 (D-1, D-2, D-5, D-6)~~ **done 2026-09-29, all nine D rows**, WP3 (S-1 choke point) | The compiler-driver injection class and the sandbox bypass. Both are one design change each plus a sweep. WP2 came in as one header plus a sweep, as predicted; the sweep was the larger half. |
 | 3 | WP4 (harnesses, JSON, httpd), WP5 (**done** 2026-09-30) | The fuzz targets need WP4's fixes landed to seed sensibly; region hooks and integer checks are independent. |
 | 4 | WP6, WP8, WP2/WP3 remainder, re-grade section 2 | Web hardening, the effects decision, and closing the long tail. |
@@ -1650,6 +1672,10 @@ checklist, not a gate.
    the search not to run in public; see section 7, question 8.
 4. The generated sandbox test pins every native's capability.
 5. Release assets are attested and the installer verifies a checksum.
+   **Met by WP7 (2026-09-30):** `actions/attest-build-provenance` signs every
+   asset through Sigstore keyless, and `/install` installs a checksum-verified
+   release through `tvm`, which fails closed. Both covered by
+   `tvm/tests/install-script.sh`.
 6. Every workflow action is SHA-pinned with least-privilege permissions.
 
 ## 7. Open questions for the author
