@@ -90,11 +90,14 @@ enforced for every native function as well as the builtins (T3): a
 `defmacro*` body that calls `process/spawn`, deletes a file or reads the
 environment gets a diagnostic, and nothing runs.
 
-It is still not a boundary against a hostile tree, for the reason T3 gives: a
-`defmacro*` body can forge a handle and read or write an arbitrary address in
-the compiler's process (S-5). When that is fixed, a genuinely
-capability-denied macro environment will be a *better* story than Rust's, and
-this guide will promise it.
+It is still not a full boundary against a hostile tree, for the reason T3 gives:
+the native handle-forgery channel is now closed in the macro env too (the
+provenance registry turns on when its capabilities are dropped), but a
+`defmacro*` body can still launder an integer into a pointer through an erasing
+ascription in the interpreter's value model and read or write an arbitrary
+address in the compiler's process (S-5, value-model channel). When that is
+closed too, a genuinely capability-denied macro environment will be a *better*
+story than Rust's, and this guide will promise it.
 
 Until then there is an opt-out. The global flag `--no-proc-macros` refuses
 every `defmacro*` with a diagnostic, so no macro-time code runs -- what
@@ -207,18 +210,35 @@ classes and the rows that are not pure. `load` and `import` are refused
 outright, and the `extern-c` overrides for `printf`, `getenv` and `exit` need
 FFI like every other `extern-c`.
 
-**Status today: memory safety is not kept (S-5, open, high).** Most natives
-take a collection, string or continuation handle as a bare integer and cast it
-to a pointer, and nothing checks that the integer came from the matching
-constructor. So sandboxed text can forge one:
+**Status today: the native handle-forgery channel is closed; the value-model
+channel is not yet (S-5, partly fixed, still open, high).** Most natives take a
+collection, string or continuation handle as a bare integer and cast it to a
+pointer. In a restricted env a per-env **handle-provenance registry** now
+stands between the text and every native's cast: a native that mints a handle
+records it (keyed by handle kind), and a consumer native is refused unless its
+handle argument is a live handle of the matching kind. So the forgery that
+needed no capability -- and every sibling of it -- is now refused rather than a
+wild read/write:
 
 ```
-(vec-get 4096 0)   ; reads address 4096
+(vec-get 4096 0)   ; => error: not a live handle of the expected kind (S-5)
 ```
 
-That is a wild read, and the setters make it a wild write, so an adversary
-who can guess an address has the host process. It needs no capability. It is a
-property of the interpreter's value model rather than of any one native.
+Kind confusion (a real Vec replayed where a HAMT is expected, a count replayed
+as a handle) and use-after-free are refused the same way, while a genuinely
+minted vector, map, HAMT or string still round-trips. The registry, the
+per-native handle-signature column it reads (`src/turi/native_caps.c`), and the
+one dispatch hook are described in
+[the S-5 report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md).
+
+What is **not** yet closed is the narrower *value-model* channel: an erasing
+ascription on a type variable, and continuation resume, still launder a caller
+integer into a pointer WITHOUT passing through the native dispatch (the retag
+happens in the interpreter's own value model, e.g. `(:: x A)` in a generic body
+followed by a call or field read, and the CEK driver's continuation fold). The
+registry does not see those, because a bare `:int` in the value model carries no
+kind to check against. Closing them is the "tagged handles" route (direction 2
+in the report).
 
 A panic, by contrast, no longer ends the host. In an environment without
 `TURI_CAP_PROC`, a panic that nothing catches, and the error exits of natives
@@ -226,10 +246,12 @@ like an out-of-bounds `vec-get`, come back to the embedder as a `TURI_ERROR`
 reading `panic: <msg>`, and the environment stays usable. A panicking
 `defmacro*` is an ordinary expansion diagnostic.
 
-Until S-5 is fixed, **do not treat `Env/new-sandboxed` as a boundary against
-hostile code.** It is now a sound boundary against *careless* code -- a plug-in
-cannot open a file, spawn a process, or read the environment, however it
-spells the call -- but not against code written to corrupt memory.
+Until the value-model channel is closed too, **do not treat
+`Env/new-sandboxed` as a full boundary against hostile code.** It is a sound
+boundary against *careless* code -- a plug-in cannot open a file, spawn a
+process, read the environment, or forge a collection/string handle from an
+integer, however it spells the call -- but a program written to launder an
+integer through an erasing ascription can still corrupt memory.
 
 ### Try Turmeric
 

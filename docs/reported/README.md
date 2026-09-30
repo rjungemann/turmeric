@@ -43,7 +43,7 @@ in the same change.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-sandbox-handles-are-forgeable-integers](turi-sandbox-handles-are-forgeable-integers.md) | high | S-5, filed by WP3, narrowed the same day: a sandboxed or macro-time `(vec-get 4096 0)` reads address 4096. Interpreter handles are bare integers that 204+ natives cast back unchecked. The host-exit half (`panic` and native error paths ending the host) is fixed. Direction: a per-native handle-kind column in `native_caps.c` plus a provenance set per restricted env |
+| [turi-sandbox-handles-are-forgeable-integers](turi-sandbox-handles-are-forgeable-integers.md) | high | S-5, filed by WP3, narrowed twice. The native handle-forgery channel is now **fixed** (direction 1): a per-restricted-env handle-provenance registry plus a per-native handle-kind column in `native_caps.c` refuse `(vec-get 4096 0)`, kind confusion and use-after-free while real handles round-trip. The host-exit half is fixed. **Still open:** the value-model channel -- an erasing ascription on a type variable, and continuation resume, launder an integer to a pointer without passing through the native dispatch (direction 2, tagged handles) |
 | [httpd-residual-request-hardening](httpd-residual-request-hardening.md) | low-medium | WP4's httpd read-through: quadratic header scan, async writes that park forever, no default in-flight cap, a rate limiter that fails open when full, silently-empty oversize request fields, and a Basic-auth doc example that leaks username validity. None is memory corruption; each needs a small fix or a default chosen |
 
 ## Representation gaps (filed 2026-09-09, extended 2026-09-10)

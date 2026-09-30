@@ -284,6 +284,111 @@ const TuriNativeCapRow *turi_native_cap_find(const char *name);
 /* Render `caps` as a comma-separated list ("fs,proc") into buf; returns buf. */
 const char *turi_caps_describe(TuriCaps caps, char *buf, size_t n);
 
+/* -------------------------------------------------------------------------
+ * security-audit-plan S-5: handle provenance.
+ *
+ * The tree-walking interpreter carries every collection / string / iterator /
+ * symbol / cons / continuation handle as a bare TURI_INT holding a raw pointer,
+ * and a native casts it straight back with no check that the integer came from
+ * the matching constructor.  In a capability-restricted env (a sandbox, the
+ * compile-time macro env) that is a forgeable wild read/write -- `(vec-get 4096
+ * 0)` reads address 4096 with no capability at all.
+ *
+ * The fix is a per-restricted-env provenance set (docs/reported direction 1):
+ * a native that MINTS a handle records (kind, pointer); a native that CONSUMES
+ * one is refused unless the pointer is a live entry of the matching kind; a
+ * native that FREES one removes it.  The KIND key is what keeps a count or a
+ * different handle from being replayed as a vec -- `(vec-get (vec-len v) 0)` is
+ * refused because a vec-len result is not a VEC handle.
+ *
+ * Every distinct interpreter handle representation is a kind.  Handles that
+ * share a heap layout (Set and Map are both the {void* hamt} box) share a kind;
+ * confusion within one layout is harmless, confusion across layouts is refused.
+ * TURI_HK_GENERIC is the catch-all for a pointer handle with no more specific
+ * kind (and the kind the caps-drop global seed uses, since it cannot recover a
+ * global int's true kind): a forged arbitrary integer is still refused by every
+ * kind, and GENERIC never satisfies a native that wants a specific kind. */
+typedef enum TuriHandleKind {
+    TURI_HK_NONE = 0,   /* not a handle: a scalar/count/key/opaque word */
+    TURI_HK_VEC,        /* native Vec box: int64_t[4] {data,len,cap,track} */
+    TURI_HK_SETMAP,     /* Set/Map box: void*[2] {hamt, track} */
+    TURI_HK_HAMT,       /* raw Hamt* (map-hamt result; tur_hamt_* args) */
+    TURI_HK_HAMT_ITER,  /* HamtIter* */
+    TURI_HK_HAMT_TRANS, /* HamtTransient* */
+    TURI_HK_STRING,     /* owned String / StringBuilder (tur_string.c) */
+    TURI_HK_SBUF,       /* tur_sb string builder */
+    TURI_HK_SLICE,      /* tur_slice (owned slice, tur_string.c) */
+    TURI_HK_SLICEBOX,   /* slice-* box: int64_t[2] {data, len} */
+    TURI_HK_CONS,       /* tur/list malloc'd { head, tail } cons cell */
+    TURI_HK_SEQCELL,    /* seq cons/pair/option cell (same shape, distinct API) */
+    TURI_HK_CONT,       /* TuriCont* / escape boundary (continuation) */
+    TURI_HK_SYM,        /* interned Symbol* carried as :Sym */
+    TURI_HK_JSON,       /* json node handle */
+    TURI_HK_GENARR,     /* gen-arr generic-array handle */
+    TURI_HK_GRID,       /* TuriGridRep* */
+    TURI_HK_MUTMAP,     /* TurMmWrap* mutable map */
+    TURI_HK_BTCELL,     /* backtracking / logic-var cell (bt-*, g-*) */
+    TURI_HK_FUTURE,     /* WkFutureCell* */
+    TURI_HK_CHAN,       /* WkChan* (chan-*, schan-*, async-chan-*) */
+    TURI_HK_MUTEX,      /* pthread_mutex_t* */
+    TURI_HK_BYTES,      /* bytes-* int64-prefixed buffer */
+    TURI_HK_REACTOR,    /* epoll/kqueue reactor handle */
+    TURI_HK_CMP,        /* carrier comparator C fn-ptr (mk-cmp / keyeq) */
+    TURI_HK_GENERIC,    /* a pointer handle with no more specific kind */
+    TURI_HK__COUNT
+} TuriHandleKind;
+
+/* Flags on a native's handle signature. */
+enum {
+    TURI_HSIG_MINT = 1u << 0,  /* result is a freshly-minted handle -> register */
+    TURI_HSIG_FREE = 1u << 1,  /* the handle args are freed -> unregister */
+};
+
+/* How many leading argument positions a handle signature describes.  A handle
+ * argument past this is vanishingly rare (no interpreter native derefs one);
+ * the guard treats such positions as non-handles. */
+#define TURI_HSIG_MAX_ARGS 4
+
+/* One row of the handle-signature table: which leading args are pointer handles
+ * (and of what kind), what kind the result is, and mint/free behaviour. */
+typedef struct TuriNativeHandleRow {
+    const char    *name;
+    uint8_t        arg[TURI_HSIG_MAX_ARGS];  /* TuriHandleKind per arg, 0 = none */
+    uint8_t        result;                   /* TuriHandleKind of result, 0 = none */
+    uint8_t        flags;                    /* TURI_HSIG_MINT | TURI_HSIG_FREE */
+} TuriNativeHandleRow;
+
+/* The whole handle-signature table (sorted by name), and a binary-search find.
+ * A name with no row consumes/produces no handles. */
+const TuriNativeHandleRow *turi_native_handle_table(size_t *n_out);
+const TuriNativeHandleRow *turi_native_handle_find(const char *name);
+
+/* Guard: before a provenance-tracked native runs, verify each of its handle
+ * arguments is a live handle of the declared kind.  Returns true and sets *out
+ * to a refusal error when a forged handle is found; false to let the call
+ * proceed. */
+bool turi_prov_guard_native(TuriEnv *env, const TuriNativeHandleRow *sig,
+                            const TuriValue *args, uint32_t n, TuriValue *out);
+
+/* Track: after the native ran, register a freshly-minted handle result and
+ * forget freed handle arguments, per the signature. */
+void turi_prov_track_native(TuriEnv *env, const TuriNativeHandleRow *sig,
+                            const TuriValue *args, uint32_t n, TuriValue result);
+
+/* Low-level registry ops (also used by the cont-builtin guard and the caps-drop
+ * global seed).  register/forget are no-ops when provenance is off. */
+void turi_prov_register(TuriEnv *env, TuriHandleKind kind, const void *ptr);
+void turi_prov_forget(TuriEnv *env, const void *ptr);   /* all kinds for ptr */
+bool turi_prov_check(TuriEnv *env, TuriHandleKind kind, const void *ptr);
+
+/* Turn provenance tracking on for a restricted env, seeding it from the current
+ * globals (their pointer-carrying values become GENERIC handles) so a handle
+ * minted before the caps dropped is not mistaken for a forgery.  Idempotent. */
+void turi_prov_enable_and_seed(TuriEnv *env);
+
+/* Release the provenance registry (called from turi_env_free). */
+void turi_prov_free(TuriEnv *env);
+
 /* Like turi_env_register_native, but also records the Turmeric type the
  * native's TuriValue result carries at runtime (`ret`).  Without this, the
  * elaborator types every interpreter-mode native call -- and any defn wrapping

@@ -326,6 +326,18 @@ typedef struct TuriEnv {
     EnvBinding *globals;         /* Global name→TuriValue map (linked list) */
     bool        sandboxed;       /* Deprecated alias: true when caps == TURI_CAP_NONE */
     TuriCaps    caps;            /* SB4: capability bitmask (TURI_CAP_ALL = unrestricted) */
+    /* security-audit-plan S-5 (turi-sandbox-handles-are-forgeable-integers):
+     * handle-provenance registry.  When `provenance_on` is set (a sandboxed or
+     * macro env), the native dispatch records every interpreter handle a
+     * constructor-classified native mints -- keyed by handle kind and pointer --
+     * and refuses a later native call whose handle argument is not a live entry
+     * of the right kind.  This closes the "handles are bare integers a native
+     * casts to a pointer" forgery in a restricted env without gating collections
+     * behind a capability.  `prov` is an open-addressing {kind, ptr} set; NULL
+     * until the first mint (lazily allocated).  See src/turi/native_caps.c for
+     * the per-native handle-signature column the dispatch reads. */
+    bool        provenance_on;
+    void       *prov;            /* TuriProvSet* (defined in eval.c); NULL = empty */
     /* Return-signal state: set by EX_RETURN, cleared by function application */
     bool        returning;
     TuriValue   return_value;

@@ -131,6 +131,12 @@ struct TuriClosure {
      * or by turi_env_register_native_caps; checked in eval_apply_driven. */
     TuriCaps        native_caps;
     const char     *native_cap_name;
+    /* security-audit-plan S-5: the native's handle signature (which args are
+     * pointer handles and of what kind, whether the result is a minted handle),
+     * or NULL for a native that touches no handles.  Stamped at registration
+     * from native_caps.c's handle table; read by the provenance guard in
+     * eval_apply_driven only when the env has provenance tracking on. */
+    const TuriNativeHandleRow *native_handle;
     /* EX_CLOSURE closures have a synthetic __env_p first param for codegen;
      * the interpreter skips it and uses the captured frame instead. */
     bool            skip_env_param;
@@ -178,6 +184,9 @@ static void register_native_with_caps(TuriEnv *env, const char *name,
     cl->native_ud       = ud;
     cl->native_caps     = required;
     cl->native_cap_name = required ? cap_name : NULL;
+    /* security-audit-plan S-5: stamp the handle signature (or NULL) so the
+     * provenance guard in eval_apply_driven needs no per-call name lookup. */
+    cl->native_handle   = name ? turi_native_handle_find(name) : NULL;
     turi_env_set(env, name, turi_closure(cl));
 }
 
@@ -214,6 +223,177 @@ static TuriValue native_caps_denied(TuriEnv *env, const TuriClosure *cl) {
                        "environment does not hold",
                        cl->native_cap_name ? cl->native_cap_name : "<native>",
                        need);
+}
+
+/* =========================================================================
+ * security-audit-plan S-5: handle-provenance registry
+ *
+ * A per-restricted-env open-addressing set of live interpreter handles, keyed
+ * by (kind, pointer).  A constructor-classified native registers its minted
+ * handle here; a consumer native's handle argument is checked against it; a
+ * destructor forgets it.  Only touched when env->provenance_on -- an
+ * unrestricted embedder pays nothing.  See eval.h for the model and the kinds.
+ * ========================================================================= */
+
+typedef struct { const void *ptr; uint8_t kind; } TuriProvEnt;
+typedef struct TuriProvSet {
+    TuriProvEnt *ents;   /* open-addressing table; ptr==NULL is an empty slot */
+    size_t       cap;    /* power of two */
+    size_t       count;  /* live entries */
+} TuriProvSet;
+
+static size_t prov_hash(const void *p) {
+    uintptr_t x = (uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (size_t)x;
+}
+
+static void prov_grow(TuriProvSet *s) {
+    size_t ncap = s->cap ? s->cap * 2 : 64;
+    TuriProvEnt *ne = (TuriProvEnt *)calloc(ncap, sizeof(TuriProvEnt));
+    if (!ne) return;   /* OOM: leave the set as-is (registration best-effort) */
+    for (size_t i = 0; i < s->cap; i++) {
+        if (!s->ents[i].ptr) continue;
+        size_t h = prov_hash(s->ents[i].ptr) & (ncap - 1);
+        while (ne[h].ptr) h = (h + 1) & (ncap - 1);
+        ne[h] = s->ents[i];
+    }
+    free(s->ents);
+    s->ents = ne;
+    s->cap  = ncap;
+}
+
+void turi_prov_register(TuriEnv *env, TuriHandleKind kind, const void *ptr) {
+    if (!env || !env->provenance_on || !ptr || kind == TURI_HK_NONE) return;
+    TuriProvSet *s = (TuriProvSet *)env->prov;
+    if (!s) {
+        s = (TuriProvSet *)calloc(1, sizeof(TuriProvSet));
+        if (!s) return;
+        env->prov = s;
+    }
+    if ((s->count + 1) * 2 >= s->cap) prov_grow(s);
+    if (!s->cap) return;   /* grow failed under OOM */
+    size_t mask = s->cap - 1;
+    size_t h = prov_hash(ptr) & mask;
+    while (s->ents[h].ptr) {
+        if (s->ents[h].ptr == ptr && s->ents[h].kind == (uint8_t)kind) return;
+        h = (h + 1) & mask;
+    }
+    s->ents[h].ptr  = ptr;
+    s->ents[h].kind = (uint8_t)kind;
+    s->count++;
+}
+
+bool turi_prov_check(TuriEnv *env, TuriHandleKind kind, const void *ptr) {
+    if (!env || !env->provenance_on) return true;   /* not enforcing */
+    if (!ptr) return true;                           /* NULL / nil handle is fine */
+    TuriProvSet *s = (TuriProvSet *)env->prov;
+    if (!s || !s->cap) return false;
+    size_t mask = s->cap - 1;
+    size_t h = prov_hash(ptr) & mask;
+    while (s->ents[h].ptr) {
+        if (s->ents[h].ptr == ptr && s->ents[h].kind == (uint8_t)kind) return true;
+        h = (h + 1) & mask;
+    }
+    return false;
+}
+
+/* Forget every entry for `ptr` (all kinds).  Uses backward-shift deletion to
+ * keep the open-addressing probe chains intact. */
+void turi_prov_forget(TuriEnv *env, const void *ptr) {
+    if (!env || !env->provenance_on || !ptr) return;
+    TuriProvSet *s = (TuriProvSet *)env->prov;
+    if (!s || !s->cap) return;
+    size_t mask = s->cap - 1;
+    for (;;) {
+        size_t h = prov_hash(ptr) & mask;
+        while (s->ents[h].ptr && s->ents[h].ptr != ptr) h = (h + 1) & mask;
+        if (!s->ents[h].ptr) return;   /* no (more) entries for ptr */
+        /* Remove slot h, then re-cluster the following run. */
+        s->ents[h].ptr = NULL; s->ents[h].kind = 0; s->count--;
+        size_t j = h;
+        for (;;) {
+            j = (j + 1) & mask;
+            if (!s->ents[j].ptr) break;
+            size_t k = prov_hash(s->ents[j].ptr) & mask;
+            /* Slot j can move into the hole at h iff h is in [k, j) cyclically. */
+            bool movable = (h <= j) ? (k <= h || k > j) : (k <= h && k > j);
+            if (movable) { s->ents[h] = s->ents[j]; s->ents[j].ptr = NULL;
+                           s->ents[j].kind = 0; h = j; }
+        }
+        /* Loop again in case ptr was registered under several kinds. */
+    }
+}
+
+/* The pointer an int64-carried handle argument holds.  A TURI_CSTR value is a
+ * real string pointer produced by the reader / interpreter (never forged from
+ * an attacker integer), so it needs no provenance and returns NULL "trusted".
+ * Only a TURI_INT carrier is a forgeable pointer to be checked. */
+static const void *prov_arg_ptr(TuriValue v) {
+    if (v.tag == TURI_CSTR) return NULL;
+    if (v.tag == TURI_INT)  return (const void *)(intptr_t)v.as_int;
+    return NULL;   /* a properly-tagged struct/closure/etc. is not a bare carrier */
+}
+
+bool turi_prov_guard_native(TuriEnv *env, const TuriNativeHandleRow *sig,
+                            const TuriValue *args, uint32_t n, TuriValue *out) {
+    uint32_t lim = n < TURI_HSIG_MAX_ARGS ? n : TURI_HSIG_MAX_ARGS;
+    for (uint32_t i = 0; i < lim; i++) {
+        TuriHandleKind k = (TuriHandleKind)sig->arg[i];
+        if (k == TURI_HK_NONE) continue;
+        const void *p = prov_arg_ptr(args[i]);
+        if (!p) continue;   /* NULL/nil or a trusted cstr carrier */
+        if (!turi_prov_check(env, k, p)) {
+            *out = turi_errorf(
+                "eval: '%s' arg %u is not a live handle of the expected kind -- "
+                "a sandboxed handle cannot be forged from an integer (S-5)",
+                sig->name, (unsigned)i + 1);
+            return true;
+        }
+    }
+    return false;
+}
+
+void turi_prov_track_native(TuriEnv *env, const TuriNativeHandleRow *sig,
+                            const TuriValue *args, uint32_t n, TuriValue result) {
+    if (sig->flags & TURI_HSIG_FREE) {
+        uint32_t lim = n < TURI_HSIG_MAX_ARGS ? n : TURI_HSIG_MAX_ARGS;
+        for (uint32_t i = 0; i < lim; i++) {
+            if (sig->arg[i] == TURI_HK_NONE) continue;
+            const void *p = prov_arg_ptr(args[i]);
+            if (p) turi_prov_forget(env, p);
+        }
+    }
+    if ((sig->flags & TURI_HSIG_MINT) && sig->result != TURI_HK_NONE) {
+        const void *p = NULL;
+        if (result.tag == TURI_INT)       p = (const void *)(intptr_t)result.as_int;
+        else if (result.tag == TURI_CSTR) p = NULL;   /* cstr result is trusted */
+        if (p) turi_prov_register(env, (TuriHandleKind)sig->result, p);
+    }
+}
+
+/* Release the provenance registry at env teardown (called from turi_env_free). */
+void turi_prov_free(TuriEnv *env) {
+    if (!env || !env->prov) return;
+    TuriProvSet *s = (TuriProvSet *)env->prov;
+    free(s->ents);
+    free(s);
+    env->prov = NULL;
+}
+
+void turi_prov_enable_and_seed(TuriEnv *env) {
+    if (!env || env->provenance_on) return;
+    env->provenance_on = true;
+    /* A handle minted before the caps dropped (a preload / pre-restriction
+     * global) is not a forgery.  Its true kind is unrecoverable from a bare
+     * int, so register every pointer-carrying global as GENERIC -- enough to
+     * pass a GENERIC-typed consumer, while a specific-kind consumer (vec/hamt/
+     * ...) still refuses it, and a forged integer is refused by every kind. */
+    for (EnvBinding *b = env->globals; b; b = b->next) {
+        if (b->value.tag == TURI_INT && b->value.as_int)
+            turi_prov_register(env, TURI_HK_GENERIC,
+                               (const void *)(intptr_t)b->value.as_int);
+    }
 }
 
 /* Typed variant: install the native exactly as turi_env_register_native does,
@@ -10075,6 +10255,14 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
      * a HOF native re-entering evaluation, and the inline-C override below. */
     if (cl->native) {
         if (cl->native_caps & ~env->caps) return native_caps_denied(env, cl);
+        if (env->provenance_on && cl->native_handle) {
+            TuriValue pv;
+            if (turi_prov_guard_native(env, cl->native_handle, args, n_args, &pv))
+                return pv;
+            TuriValue rv = cl->native(env, args, n_args, cl->native_ud);
+            turi_prov_track_native(env, cl->native_handle, args, n_args, rv);
+            return rv;
+        }
         return cl->native(env, args, n_args, cl->native_ud);
     }
 
@@ -16171,6 +16359,12 @@ void turi_env_allow(TuriEnv *env, TuriCaps cap) {
 void turi_env_deny(TuriEnv *env, TuriCaps cap) {
     if (!env) return;
     env->caps &= ~cap;
+    /* security-audit-plan S-5: an env that has become capability-restricted
+     * (the macro env denies TURI_CAP_ALL after its stdlib preload) turns on
+     * handle-provenance tracking and seeds it from the globals the preload
+     * built, so a forged integer handle is refused from here on. */
+    if (env->caps != TURI_CAP_ALL)
+        turi_prov_enable_and_seed(env);
 }
 
 bool turi_env_has_cap(TuriEnv *env, TuriCaps cap) {

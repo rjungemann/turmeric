@@ -284,6 +284,104 @@ static void check_host_exit_is_an_error(void) {
     turi_env_free(env);
 }
 
+/* ---- part 5: handle forgery (S-5) ---------------------------------------
+ * A restricted env carries every collection / string / iterator / symbol /
+ * cons handle as a bare int64 a native casts back to a pointer.  The
+ * provenance registry refuses a handle argument that was not minted by a
+ * constructor of the matching kind, so a raw integer cannot be forged into a
+ * wild read/write -- while a genuinely-minted handle still round-trips. */
+
+static void expect_forgery_refused(TuriEnv *env, const char *what, const char *src) {
+    TuriValue r = turi_eval(env, src);
+    if (r.tag == TURI_ERROR && r.as_error && strstr(r.as_error, "not a live handle"))
+        pass(what, NULL);
+    else {
+        char msg[256];
+        snprintf(msg, sizeof msg, "forged handle was NOT refused (tag %d: %s)",
+                 r.tag, r.tag == TURI_ERROR && r.as_error ? r.as_error : "-");
+        fail(what, msg);
+    }
+}
+
+static void check_handle_forgery_refused(void) {
+    TuriEnv *env = turi_env_new_sandboxed();
+    if (!env) { fail("forgery", "env alloc"); return; }
+    /* The report's headline repro and its siblings: a raw integer as a handle. */
+    expect_forgery_refused(env, "forgery/vec-get",     "(vec-get 4096 0)");
+    expect_forgery_refused(env, "forgery/vec-len",     "(vec-len 4096)");
+    expect_forgery_refused(env, "forgery/vec-set",     "(vec-set! 4096 0 9)");
+    expect_forgery_refused(env, "forgery/hamt-count",  "(tur_hamt_count 4096)");
+    expect_forgery_refused(env, "forgery/hamt-get",    "(tur_hamt_get 4096 1 1)");
+    expect_forgery_refused(env, "forgery/string-len",  "(tur_string_len 4096)");
+    expect_forgery_refused(env, "forgery/sym",         "(sym->str 4096)");
+    expect_forgery_refused(env, "forgery/list-head",   "(head 4096)");
+    expect_forgery_refused(env, "forgery/list-tail",   "(tail 4096)");
+    /* Kind confusion: a real Vec handle replayed where a HAMT is expected. */
+    expect_forgery_refused(env, "forgery/kind-confusion",
+                           "(let [v (vec-new)] (vec-push! v 5) (tur_hamt_count v))");
+    /* Use-after-free: the freed vec's pointer is forgotten. */
+    expect_forgery_refused(env, "forgery/use-after-free",
+                           "(let [v (vec-new)] (vec-free v) (vec-len v))");
+    turi_env_free(env);
+}
+
+static void check_handles_still_round_trip(void) {
+    TuriEnv *env = turi_env_new_sandboxed();
+    if (!env) { fail("handles-ok", "env alloc"); return; }
+    struct { const char *what; const char *src; int64_t want; } cases[] = {
+        { "handles-ok/vec",    "(let [v (vec-new)] (vec-push! v 7) (vec-get v 0))", 7 },
+        { "handles-ok/vec-len","(vec-len (vec-new))",                                0 },
+        { "handles-ok/hamt",   "(tur_hamt_count (tur_hamt_set (tur_hamt_new) 42 100 200))", 1 },
+        { "handles-ok/hamt-get","(tur_hamt_get (tur_hamt_set (tur_hamt_new) 42 100 200) 42 100)", 200 },
+        { "handles-ok/string", "(tur_string_len (tur_string_from_cstr \"hello\"))",  5 },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        TuriValue r = turi_eval(env, cases[i].src);
+        if (r.tag == TURI_INT && r.as_int == cases[i].want) pass(cases[i].what, NULL);
+        else {
+            char msg[256];
+            snprintf(msg, sizeof msg, "a live handle was wrongly refused (tag %d: %s)",
+                     r.tag, r.tag == TURI_ERROR && r.as_error ? r.as_error : "-");
+            fail(cases[i].what, msg);
+        }
+    }
+    /* A cstr literal is a trusted reader pointer, not a forgeable integer. */
+    TuriValue s = turi_eval(env, "(str-concat \"a\" \"b\")");
+    if (s.tag == TURI_CSTR && s.as_cstr && strcmp(s.as_cstr, "ab") == 0)
+        pass("handles-ok/cstr-literal-trusted", NULL);
+    else
+        fail("handles-ok/cstr-literal-trusted", "a cstr literal was refused");
+    turi_env_free(env);
+}
+
+/* The handle-signature table must stay sorted (it is binary-searched), and
+ * every handle-taking native must still carry a cap row -- so a native cannot
+ * lose its classification and slip a handle argument past the guard. */
+static void check_handle_table(void) {
+    size_t n = 0;
+    const TuriNativeHandleRow *t = turi_native_handle_table(&n);
+    for (size_t i = 1; i < n; i++) {
+        if (strcmp(t[i - 1].name, t[i].name) >= 0) {
+            char msg[256];
+            snprintf(msg, sizeof msg, "handle rows out of order: '%s' then '%s'",
+                     t[i - 1].name, t[i].name);
+            fail("handle-table/sorted", msg);
+            return;
+        }
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!turi_native_cap_find(t[i].name)) {
+            char msg[256];
+            snprintf(msg, sizeof msg, "handle native '%s' has no cap row", t[i].name);
+            fail("handle-table/cap-row", msg);
+            return;
+        }
+    }
+    char detail[64];
+    snprintf(detail, sizeof detail, "%zu handle rows", n);
+    pass("handle-table", detail);
+}
+
 /* Re-enable async; I/O must still be denied. */
 static void run_mixed_caps_test(void) {
     TuriEnv *env = turi_env_new_sandboxed();
@@ -370,6 +468,10 @@ int main(void) {
     check_explicit_override();
     check_pure_still_works();
     check_host_exit_is_an_error();
+
+    check_handle_forgery_refused();
+    check_handles_still_round_trip();
+    check_handle_table();
 
     run_mixed_caps_test();
     run_api_smoke_tests();
