@@ -5858,3 +5858,76 @@ bool reader_type_is_implemented(ReaderType type) {
             return false;
     }
 }
+
+/* repl-continuation-counter-misreads-reader-syntax: how open `src` is, lexed
+ * the way the reader lexes it -- the question a REPL asks before deciding
+ * whether the lines typed so far are a whole form yet.
+ *
+ * The REPL used to answer it with a per-line bracket count that knew only `"`
+ * strings and `;` comments, so a ```c body's brackets and semicolons were read
+ * as Lisp (`for (i = 0; ...)` left the prompt open for good), a string's
+ * brackets on its second line were structure, and so were those inside a
+ * `#| |#` comment or a `#\(` literal.  This walks the WHOLE accumulated input
+ * once, with the reader's lexemes:
+ *
+ *   - `"..."` strings, backslash escapes included, across lines;
+ *   - ```c ... ``` fences (opaque up to the next ```, as read_cblock reads);
+ *   - `#| ... |#` block comments, NESTED (skip_block_comment counts depth);
+ *   - `;` line comments, and `#;` as a datum-comment prefix (every dialect --
+ *     skip_ws_and_comments does not gate it on Scheme), whose `;` is not one;
+ *   - `#\c` character literals, and Scheme's `|delimited symbols|`, via
+ *     sweet_lexeme_end, the helper the sweet preprocessor already shares.
+ *
+ * Returns the count of brackets left open (negative when over-closed).  Input
+ * that ends inside a string, fence or block comment is never complete: that
+ * returns at least 1 and sets *in_lexeme, so the caller can also tell that a
+ * blank line typed there is content rather than a request to cancel.
+ * Reader macros (#use-reader-macros) are not modelled; their brackets count
+ * as brackets. */
+int reader_open_depth(const char *src, size_t len, ReaderType rt,
+                      bool *in_lexeme) {
+    bool scheme = (rt == READER_R7RS || rt == READER_R7RS_SWEET);
+    int  depth = 0;
+    int  block = 0;               /* #| |# nesting */
+    bool in_str = false, in_cb = false;
+    size_t i = 0;
+    while (i < len) {
+        char c = src[i];
+        if (in_cb) {
+            if (sweet_at_fence(src, i, len)) { in_cb = false; i += 3; }
+            else i++;
+            continue;
+        }
+        if (in_str) {
+            if (c == '\\' && i + 1 < len) { i += 2; continue; }
+            if (c == '"') in_str = false;
+            i++;
+            continue;
+        }
+        if (block > 0) {
+            if (c == '#' && i + 1 < len && src[i + 1] == '|') { block++; i += 2; continue; }
+            if (c == '|' && i + 1 < len && src[i + 1] == '#') { block--; i += 2; continue; }
+            i++;
+            continue;
+        }
+        if (sweet_at_fence(src, i, len)) { in_cb = true; i += 3; continue; }
+        if (c == '"') { in_str = true; i++; continue; }
+        if (c == '#' && i + 1 < len && src[i + 1] == '|') { block = 1; i += 2; continue; }
+        if (c == '#' && i + 1 < len && src[i + 1] == ';') { i += 2; continue; }
+        {
+            size_t k = sweet_lexeme_end(src, i, len, scheme);
+            if (k != i) { i = k; continue; }
+        }
+        if (c == ';') {
+            while (i < len && src[i] != '\n') i++;
+            continue;
+        }
+        if (c == '(' || c == '[' || c == '{') depth++;
+        else if (c == ')' || c == ']' || c == '}') depth--;
+        i++;
+    }
+    bool open_lexeme = in_str || in_cb || block > 0;
+    if (in_lexeme) *in_lexeme = open_lexeme;
+    if (open_lexeme && depth < 1) return 1;
+    return depth;
+}

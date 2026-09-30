@@ -5917,7 +5917,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* Allow forward-declared bindings from pass 1 to be redefined */
         /* Forward declarations have TY_FN type (from pass 1) */
         if (existing->type.kind == TY_FN && existing->is_global) {
-            /* This is a forward declaration - proceed with the real definition */
+            /* This is a forward declaration - proceed with the real definition.
+             *
+             * duplicate-defn-in-one-file-reaches-the-c-compiler: unless another
+             * defn form in this same file already claimed it.  Pass 1 declares
+             * a name once, so a second `(defn f ...)` lands on the binding the
+             * FIRST one filled in -- same shape, TY_FN + global -- and used to
+             * be taken for a forward declaration too: `check` passed, turi ran
+             * the later body, and cc met two C functions named `f`.  Mirrors
+             * elab_def's rule: an earlier REPL/playground turn's defn is
+             * replaced (PS4, elab_prior_turn_global); a duplicate within one
+             * turn or one file is an error.  Scoped to one file on purpose --
+             * a name from an import, an extern-c or a native stub has no claim
+             * and keeps the old behaviour -- and to user code: a stdlib load
+             * keeps its own rules (MF3 above). */
+            const Span *claim = &existing->defn_claim;
+            if (!e->in_stdlib_load && claim->line != 0 &&
+                claim->file_id == call->span.file_id &&
+                (claim->off_start != call->span.off_start ||
+                 claim->off_end != call->span.off_end) &&
+                !elab_prior_turn_global(e, existing)) {
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "defn: '%s' is already defined",
+                          name_f->as.sym->name);
+                diag_emit(DIAG_NOTE, *claim, "'%s' was first defined here",
+                          name_f->as.sym->name);
+                return NULL;
+            }
+            existing->defn_claim = call->span;
         } else {
             diag_emit(DIAG_ERROR, name_f->span,
                       "defn: '%s' is already defined", name_f->as.sym->name);

@@ -424,6 +424,15 @@ struct Binding {
      * written above the def can name it; elab_def fills this binding in
      * when it reaches the def (elab_pre_declare_any_mut_def). */
     bool          is_forward_def;
+    /* duplicate-defn-in-one-file-reaches-the-c-compiler: the span of the
+     * `(defn ...)` form Pass 2 elaborated into this (Pass-1 forward-declared)
+     * binding; line 0 = not claimed yet.  A second defn of the name from a
+     * DIFFERENT form in the same file is then a redefinition, which elab_defn
+     * reports, instead of both updating this binding and two C functions of
+     * one name reaching cc.  Compared by span rather than Form pointer so one
+     * source form elaborated twice (speculative deferral, a macro expansion
+     * carrying its call site's span) is still recognised as itself. */
+    Span          defn_claim;
     /* KB-021: true when this binding's emitted C value is a *by-value* concrete
      * carrier-ABI aggregate (e.g. a `Tuple2__int__int`/`Cons__int` local or
      * parameter) rather than the int64_t carrier.  Carrier-ABI types have two
