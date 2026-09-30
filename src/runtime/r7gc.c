@@ -206,6 +206,8 @@ typedef struct tur_gc_thread {
      * parked thread's registers were never seen (parked-snapshot-unaligned). */
     jmp_buf        regs __attribute__((aligned(16)));      /* its callee-saved registers, spilled at the park */
     jmp_buf        sig_regs __attribute__((aligned(16)));  /* the same, spilled by the stop handler */
+    uintptr_t      regs_fp;      /* the frame pointer at the park, as a plain word (TUR_GC_FP) */
+    uintptr_t      sig_fp;       /* the same, in the stop handler */
     void         **tls_roots;    /* addresses of its TUR_THREAD_LOCAL variables */
     size_t        *tls_sizes;
     size_t         n_tls, cap_tls;
@@ -293,6 +295,25 @@ static void tur_rt_tls_roots(void (*add)(void *p, size_t n));
 
 #define TUR_GC_LOAD(p)     __atomic_load_n((p), __ATOMIC_SEQ_CST)
 #define TUR_GC_STORE(p, v) __atomic_store_n((p), (v), __ATOMIC_SEQ_CST)
+
+/* The frame pointer, read as a plain word.  Every register spill below is a
+ * setjmp, and glibc's x86-64 setjmp stores rbp (with rsp and rip)
+ * POINTER-MANGLED -- xor'd with a per-process secret and rotated -- so a root
+ * a function kept in rbp across a park was never in the words the scan read.
+ * At -O2 rbp is an ordinary callee-saved register, and the wrapper that
+ * parks saves only what it uses itself, so the caller's rbp stays in rbp
+ * through the park: main's freshly made FiberBlock, held in rbp across the
+ * contended scheduler lock inside spawn, was freed with its stack under a
+ * torture collection, and the queue then carried a dangling block
+ * (docs/archive/r7rs-gc-torture-fiber-thread-cases-crash.md).  The other
+ * ports keep the frame pointer plain (aarch64 mangles lr and sp only), and
+ * the stop handler's kernel frame carries every register besides; this read
+ * closes the x86-64 park and the collector's own spill, and costs one move. */
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#  define TUR_GC_FP(out) __asm__ volatile ("movq %%rbp, %0" : "=r"(out))
+#else
+#  define TUR_GC_FP(out) ((out) = 0)
+#endif
 
 static void *tur_gc_os(size_t n) {
     void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -847,8 +868,15 @@ TUR_GC_NOASAN static void tur_gc_scan_stack(tur_gc_thread *t, unsigned char *sp)
             uintptr_t end = start + pg->size;
             tur_gc_mark_word(start);
             if ((uintptr_t)sp < end) tur_gc_scan(sp, end - (uintptr_t)sp);
+            sp = t->os_sp;
+        } else if (sp > t->os_sp) {
+            /* On its own stack with os_sp still set: the instants between
+             * tur_gc_fiber_enter and the resume's swapcontext, or between
+             * that swapcontext's return and tur_gc_fiber_leave.  The signal
+             * frame the kernel built below sp holds the registers; keep
+             * the scan from sp, which is below os_sp then. */
+            sp = t->os_sp;
         }
-        sp = t->os_sp;
     }
     if (t->stack_base && sp < t->stack_base) tur_gc_scan(sp, (size_t)(t->stack_base - sp));
 }
@@ -878,8 +906,10 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
     tur_gc_state *G = tur_gc_G;
     jmp_buf regs __attribute__((aligned(16)));   /* aligned for the scan, as in the record */
     setjmp(regs);                       /* callee-saved registers, onto this frame */
+    uintptr_t fp; TUR_GC_FP(fp);        /* rbp unmangled (TUR_GC_FP) */
     volatile unsigned char here = 0;
     tur_gc_scan((const void *)&regs, sizeof regs);
+    tur_gc_mark_word(fp);
     tur_gc_thread *self = tur_gc_self;
     for (tur_gc_thread *t = G->threads; t; t = t->next) {
         if (t == self) {
@@ -896,11 +926,13 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
         } else if (t->stop_state == 2) {
             /* Parked: its registers and stack are as it left them. */
             tur_gc_scan((const void *)&t->regs, sizeof t->regs);
+            tur_gc_mark_word(t->regs_fp);
             tur_gc_scan_stack(t, t->stack_sp);
         } else if (t->stop_state == 1) {
             /* Stopped by the signal: the handler's spill, and the stack from
              * the handler's frame, which has the kernel's register save above it. */
             tur_gc_scan((const void *)&t->sig_regs, sizeof t->sig_regs);
+            tur_gc_mark_word(t->sig_fp);
             tur_gc_scan_stack(t, t->sig_sp);
         }
         /* (stop_state 0 on a started, live thread: its tid was gone to
@@ -955,6 +987,7 @@ static void tur_gc_stop_handler(int sig) {
         TUR_GC_STORE(&t->in_stop, 1);
 #endif
         setjmp(t->sig_regs);
+        TUR_GC_FP(t->sig_fp);
         volatile unsigned char here = 0;
         t->sig_sp = (unsigned char *)&here;
         t->gc_intr = 1;
@@ -1180,6 +1213,7 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_park_at(tur_gc_thread
         tur_gc_thread *tpk_ = TUR_GC_SELF_FRESH();                          \
         if (tpk_ && tpk_->park_depth++ == 0) {                              \
             setjmp(tpk_->regs);         /* callee-saved registers */        \
+            TUR_GC_FP(tpk_->regs_fp);   /* rbp unmangled (TUR_GC_FP) */      \
             tur_gc_park_at(tpk_);                                           \
         }                                                                   \
     } while (0)
