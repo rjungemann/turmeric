@@ -283,7 +283,10 @@
 ;;;         the chunks as the next request would desync the connection)
 ;;; Pure over its input: no socket, which is what the fuzz target relies on.
 
-(defn httpd-parse-head [c : ptr<void> buf : ptr<void> total : int out : ptr<void>] : int
+(defn httpd-parse-head [c : ptr<void>
+                        buf : ptr<void>
+                        total : int
+                        out : ptr<void>] : int
   ```c
   HttpdConn *conn = (HttpdConn *)c;
   char *bp = (char *)buf;

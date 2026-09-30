@@ -694,9 +694,7 @@
   (if (= stamp 0)
     0
     (let [blob (image/read-image-file path stamp)]
-      (if (image/bytes-null? blob)
-        0
-        (do (image/free-bytes blob) 1)))))
+      (if (image/bytes-null? blob) 0 (do (image/free-bytes blob) 1)))))
 
 ;;; image/blob-globals -- the globals section inside a read blob (internal).
 ;;;
