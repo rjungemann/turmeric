@@ -39,8 +39,9 @@ trap 'rm -rf "$WORK"; [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null' EXIT
 # Port 0 so the OS picks a free one -- never a fixed port.
 # ------------------------------------------------------------------ #
 cat > "$WORK/stub.py" <<'PY'
-import http.server, sys, threading
+import http.server, socketserver, sys
 OUT = sys.argv[1]
+
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", "0"))
@@ -53,17 +54,51 @@ class H(http.server.BaseHTTPRequestHandler):
                 f.write(f"{k}: {v}\n")
         self.send_response(200); self.end_headers(); self.wfile.write(b'{"id":"x"}')
     def log_message(self, *a): pass
-srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+
+class Server(http.server.HTTPServer):
+    # socketserver's server_bind() calls socket.getfqdn() -- a reverse-DNS
+    # lookup on the bound address. It is free on a developer box and can block
+    # on a CI runner with no resolver for its own loopback, which would delay
+    # the port file below past the wait window and surface as the useless
+    # "could not start the stub server". Nothing here needs the name.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+srv = Server(("127.0.0.1", 0), H)
+# Written AFTER bind and before serve_forever, so its presence means the port
+# is actually accepting.
 with open(OUT + "/port", "w") as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
 PY
 
-python3 "$WORK/stub.py" "$WORK" &
+# stderr is captured, not discarded: when this failed on a macOS CI runner the
+# only output was "could not start the stub server", which says nothing about
+# why. 30 s rather than 5: this test runs inside a 159-test ctest batch, and
+# interpreter startup under that load is not the 0.2 s it takes idle.
+python3 "$WORK/stub.py" "$WORK" 2>"$WORK/stub.err" &
 SRV_PID=$!
-for _ in $(seq 1 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
+i=0
+while [ "$i" -lt 300 ]; do
+  [ -s "$WORK/port" ] && break
+  # If the child is gone, waiting the full 30 s tells us nothing new.
+  kill -0 "$SRV_PID" 2>/dev/null || break
+  sleep 0.1
+  i=$((i + 1))
+done
 PORT="$(cat "$WORK/port" 2>/dev/null)"
-[ -n "$PORT" ] || { echo "FAIL could not start the stub server"; exit 1; }
+if [ -z "$PORT" ]; then
+  echo "FAIL could not start the stub server (waited $((i / 10))s)"
+  if kill -0 "$SRV_PID" 2>/dev/null; then
+    echo "  the stub is still running but wrote no port file"
+  else
+    echo "  the stub exited; its stderr:"
+  fi
+  sed 's/^/    /' "$WORK/stub.err" 2>/dev/null
+  python3 -c "import sys; print('    python3:', sys.version.replace(chr(10),' '))"
+  exit 1
+fi
 
 # A representative ASan report and a reproducer with bytes that would break a
 # naive shell-built JSON writer: quotes, a backslash, a newline, and a NUL.
