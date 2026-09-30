@@ -1,348 +1,876 @@
 # Emscripten Spice Support + Web-App Scaffold Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-23
+> **Status:** Draft Plan (revised)
+> **Last Updated:** 2026-09-30
 > **Type:** Tooling / Web Platform
+> **Driving goal of this revision:** ship a raylib game written in Turmeric
+> that runs in a browser, and pin down the browser integration points that
+> the first draft left undefined.
 
 ---
 
-## Overview
+## Revision note (2026-09-30)
 
-Today, `just wasm` builds a single artifact -- the `try.turmeric-lang.com` REPL
-(`src/web/wasm_glue.c`). The compiler can already invoke `emcmake` for cmake
-dependencies when `tur build --target wasm` is passed (see
-`src/compiler/pkg.c:1375`), but that path is not exercised by any spice and
-there is no end-user workflow for shipping a Turmeric *application* (as opposed
-to the REPL) to the browser.
+The 2026-05-23 draft has drifted from the tree and carried an internal
+contradiction. What changed here:
+
+- **Fixed stale references.** The `emcmake` branch is `src/compiler/pkg.c:4007`
+  (was cited as `pkg.c:1375`); the target parameter is declared at
+  `src/compiler/pkg.h:420`.
+- **Dropped `--target web`.** `tur build --target wasm` already exists
+  (`src/main.c:12821`) and *hard-rejects* any other target value. A second,
+  near-synonymous target name is a trap. One target (`wasm`), with the `:web`
+  manifest block deciding whether a browser shell is emitted.
+- **Fixed the manifest syntax.** The draft wrote `:web #{...}` and once
+  `#fx{:canvas}`. `#{...}` is not map syntax -- maps are `#map{...}`, which is
+  what every real `build.tur` uses. `#fx{...}` is an effect row.
+- **Resolved the "unmodified" contradiction.** Goals promised raylib programs
+  "run unmodified"; the main-loop section then said the native `while` form
+  "gets a clear migration error." Both cannot hold. Resolution is two modes
+  with a measured tradeoff -- see [Frame loop](#61-the-frame-loop-two-modes).
+- **Corrected the raylib API names.** The draft's goal mentioned
+  `window-should-close?` and `swap-buffers`. raylib exports
+  `window-should-close` (returns `:bool`, no `?`) and `end-drawing`;
+  `swap-buffers` is an **opengl** spice function. The two APIs were conflated.
+- **Added the section this plan was missing:**
+  [Browser integration points](#6-browser-integration-points), including the
+  callback boundary, which the repo's own Region Store Hooks STRICT RULE makes
+  a correctness requirement rather than a detail.
+- **Reversed three "resolved" decisions** (threads, memory growth, audio
+  unlock) on evidence -- flagged inline in
+  [Amended decisions](#11-amended-decisions).
+- **Re-sequenced the phases raylib-first.** raylib is the forcing function
+  that exercises canvas, audio, input, assets and the frame loop at once;
+  OpenGL falls out of it nearly free rather than gating it.
+
+---
+
+## 1. Overview
+
+Today `just wasm` builds exactly one artifact: the `try.turmeric-lang.com`
+REPL. That is an **interpreter** compiled to WASM (`src/web/wasm_glue.c`,
+linked by the `tur_wasm` custom target at `src/CMakeLists.txt:1914`), driven
+from JS through `turi_wasm_eval`.
+
+`tur build --target wasm <file.tur>` also already exists and takes a different
+path: it compiles the user's program to C and links it with `emcc` instead of
+`cc` (`src/main.c:3492`). That is the **AOT application** path, and it is the
+one this plan is about. It works today only in the most literal sense -- it
+produces a `.js` + `.wasm` pair with none of the things a browser application
+needs: no shell page, no canvas, no `-sMODULARIZE`, no asset packaging, no
+GL flags, and no frame loop.
 
 This plan lays out:
 
 1. A **per-spice compatibility matrix** for Emscripten, so users know which
    `turmeric-spices` work in the browser today, which need work, and which
    never will.
-2. A **v0 web-app scaffold** -- one command that produces a Vite project with a
-   single page, a WASM module containing the user's Turmeric program, and (when
-   needed) a `<canvas>` wired to a graphical/audio spice such as Raylib or
-   OpenGL.
-3. The **`:web` manifest key** in `build.tur` that lets spice authors declare
-   whether they need a canvas / audio context / file system, and the build
-   tooling that consumes it.
+2. The **`:web` manifest key** that lets spice authors and app authors declare
+   browser needs, and the build tooling that consumes it.
+3. The **browser integration points** -- the frame loop, the callback
+   boundary, canvas sizing, input capture, audio unlocking, assets, memory and
+   startup -- specified concretely enough to implement.
+4. A **v0 web-app scaffold**: one command producing a deployable static site
+   that runs a Turmeric raylib game in the browser.
 
 The goal is that a user with a `build.tur` and no web knowledge can run
-`tur new-web my-game` or `tur build --target web` and get a deployable static
-site that runs their Turmeric program in the browser.
+`tur new-web my-game` and get a deployable static site.
+
+### Relationship to the existing Emscripten tutorial
+
+[docs/guides/web-emscripten-tutorial.md](../../guides/web-emscripten-tutorial.md)
+covers the **interpreter-embedding** path end to end: build the REPL module,
+call `turi_wasm_eval` from a page, COOP/COEP, deploying. It has no coverage of
+the AOT path, canvas, graphics or frame loops -- checked, and there is no
+overlap to reconcile. This plan is the sibling document for the AOT app path,
+and W6 below adds the corresponding guide.
 
 ---
 
-## Goals / Non-Goals
+## 2. Goals / Non-Goals
 
 ### Goals (v0)
 
-- One opinionated path: **Vite + a single `index.html` + single `<canvas>`**.
-- `tur build --target web` produces `web-dist/` (static, deployable to GH
-  Pages, Netlify, Cloudflare Pages).
-- Raylib programs run unmodified: `init-window`, the main render loop, and
-  `swap-buffers` work, integrated with `emscripten_set_main_loop`.
-- OpenGL programs run unmodified through the GLFW Emscripten shim
-  (`-sUSE_GLFW=3` + WebGL2).
-- Pure-Turmeric and inline-C-only spices "just work" with no per-spice
-  changes.
-- `tur add` of an unsupported spice (e.g. `tur-postgres`) emits a clear error
-  at configure time, not a confusing link error.
+- One opinionated path: **Vite + a single `index.html` + one `<canvas>`**.
+- `tur build --target wasm` on a project with a `:web` block produces a
+  static, deployable `web-dist/` (GH Pages, Netlify, Cloudflare Pages).
+- **A raylib program that renders and takes input runs in the browser.**
+  Programs written in the existing blocking style (`while (not
+  (window-should-close)) ... (end-drawing)`) run *without source changes* in
+  compatibility mode, at a documented frame-rate cost; a one-line change moves
+  them to the full-speed callback mode. Both modes are supported; neither is
+  an error.
+- OpenGL programs run through the GLFW Emscripten shim (`-sUSE_GLFW=3` +
+  WebGL2).
+- Pure-Turmeric and inline-C-only spices work with no per-spice changes.
+- A spice that cannot work in a browser fails at **configure** time with the
+  spice named, not at link time with an undefined symbol.
 
 ### Non-Goals (v0)
 
-- Hot-reload of `.tur` source in the browser (the existing REPL does that;
-  apps recompile from CLI).
-- React/Vue/Svelte integration; the scaffold is plain HTML + a single
-  `<canvas>`/`<pre>` mount point.
+- Hot-reload of `.tur` source in the browser (the REPL does that; apps
+  recompile from the CLI).
+- React/Vue/Svelte integration.
 - Multi-page apps, routing, SSR.
-- Bundling shaders, fonts, images out of the box -- v0 ships static-asset
-  passthrough only.
-- Worker-based off-main-thread execution (the REPL uses pthreads; apps will
-  start single-threaded on the main loop).
-- WebGPU / WebRTC / WebTransport bindings.
+- Shader/font/image *transformation* pipelines. v0 passes static assets
+  through unchanged.
+- Off-main-thread execution. See
+  [Memory and threads](#68-memory-and-threads) -- for the app target this is
+  now an explicit non-goal, not merely deferred.
+- WebGPU / WebRTC / WebTransport.
 
 ---
 
-## Per-Spice Emscripten Compatibility Matrix
+## 3. Verified state of the toolchain
 
-| Spice | Tier | Browser status | Notes |
-|-------|------|----------------|-------|
-| `tur-test`     | 1 pure | ✅ works | No I/O. |
-| `tur-math`     | 1 pure | ✅ works | No I/O. |
-| `tur-c-dsl`    | 1 pure | ✅ works | Compile-time codegen; runtime is a no-op. |
-| `tur-glsl`     | 1 pure | ✅ works | Same as above; output is shader text. |
-| `tur-scscm`    | 1 inline-C | ⚠️ partial | String compiler works. OSC client needs WebSocket bridge (out of scope for v0). |
-| `tur-tidal`    | 1 inline-C | ✅ works | Pure string transformation. |
-| `tur-opengl`   | 2 cmake | ✅ via shim | GLFW Emscripten port; restrict to OpenGL ES 3.0 subset (WebGL2). |
-| `tur-raylib`   | 2 cmake | ✅ first-class | Raylib 5.5 has `PLATFORM_WEB`; main loop must be driven by Emscripten. |
-| `tur-sqlite`   | 2 cmake | ✅ via MEMFS/IDBFS | Use MEMFS by default; IDBFS opt-in via `:web :persist true`. |
-| `tur-png`      | 3 cmake | ✅ works | libpng + zlib both compile clean under emcc. |
-| `tur-plutovg`  | 3 cmake | ✅ works | No platform deps; canvas needed only to display the surface. |
-| `tur-json`     | 3 cmake | ✅ works | yyjson is portable C. |
-| `tur-regex`    | 3 cmake | ✅ works | PCRE2 has Emscripten support upstream. |
-| `tur-http`     | 3 cmake | ⚠️ remap | mbedTLS won't reach the network; remap to `fetch()` via `EM_JS`. v0: stub it with a clear error. |
-| `tur-wav`      | 3 cmake | ✅ works | Pure decode/encode; no audio output by itself. |
-| `tur-osc`      | 3 cmake | ❌ | UDP not available in browsers; would need WebSocket-OSC bridge. |
-| `tur-rtaudio`  | 3 cmake | ❌→🔬 | Replace backend with Web Audio (`AudioWorklet`); large effort, defer past v0. |
-| `tur-rtmidi`   | 3 cmake | ❌→🔬 | Replace backend with Web MIDI; smaller than rtaudio but defer. |
-| `tur-postgres` | 3 cmake | ❌ | libpq has no browser story. Hard-error in `tur build --target web`. |
-| `tur-valkey`   | 3 cmake | ❌ | TCP client -- same as above. |
+Everything in this section was checked against the tree on 2026-09-30. It
+matters because the first draft's plan-of-record cited a line that had moved
+by ~2600 lines and a subcommand that does not exist.
 
-Legend: ✅ works as-is or with the listed shim. ⚠️ runtime errors / partial.
-❌ never works in browser. 🔬 has a research-grade path that's out of v0.
+| Claim | Where | State |
+|---|---|---|
+| `--target wasm` accepted by `tur build` | `src/main.c:12821` | Exists. Any other value is a hard error: `unknown target '%s' (supported: wasm)`. |
+| wasm builds swap `cc` for `emcc` | `src/main.c:3492`-`3507` | Exists. |
+| wasm default flags | `src/main.c` (`cc_flags`) | `-O2 -std=c99 -Wall -fno-strict-aliasing -s WASM=1`. Nothing else -- no MODULARIZE, no shell, no GL. |
+| `:cmake-deps` configured through `emcmake` | `src/compiler/pkg.c:4007` | Exists: `emcmake cmake -S ...`. **Does not pass `-DPLATFORM=Web`** -- see W2 risk below. |
+| `target` parameter on the cmake build | `src/compiler/pkg.h:420` | `NULL` for native, `"wasm"` for Emscripten. |
+| `--shared` and `--target` mutually exclusive | `src/main.c:12846` | Yes. |
+| `:build-opts :c-sources` / `:c-includes` | `collect_build_aux`, `src/main.c:3544` | Exists. Vendored `.c` files compile as extra TUs and link in. This is where the frame-loop trampoline goes. |
+| REPL asset packaging | `src/CMakeLists.txt` `tur_wasm` | Uses `--embed-file`, **not** `--preload-file`. The draft asserted `--preload-file`; that is the right choice for *app* assets but is not what the REPL does, so it is a new mechanism, not an existing one. |
+| REPL link flags | `src/CMakeLists.txt` `tur_wasm` | `-sMODULARIZE=1 -sALLOW_MEMORY_GROWTH=1 -sALLOW_TABLE_GROWTH=1 -pthread -sEXIT_RUNTIME=0 -sSTACK_SIZE=16777216 -sINITIAL_MEMORY=67108864 -sEXPORT_NAME=TurmericModule`. Reusable as a starting point, but see the reversals -- `-pthread` and `ALLOW_MEMORY_GROWTH` are the wrong defaults for a game. |
+| `^fat` callbacks reach inline C as `int64_t` | `docs/guides/c-integration-guide.md:889` | Dispatch with `TUR_APPLY*`. This is the frame-callback mechanism. |
+
+### raylib spice, as it actually is
+
+`raylib/build.tur` declares `:name "tur-raylib"`, `:version "0.3.0"`, and a
+single `:cmake-deps` entry pinning `raysan5/raylib` at `5.5` with
+`:targets ["raylib"]` and `BUILD_SHARED_LIBS=OFF`, `BUILD_EXAMPLES=OFF`,
+`BUILD_GAMES=OFF`. There is no `:web` block and no `PLATFORM` option.
+
+`raylib/core` exports `init-window close-window begin-drawing end-drawing
+begin-mode-3d end-mode-3d clear-background set-target-fps get-frame-time
+window-should-close`. The `raylib__*.c` / `.h` files at the spice root are
+`/* generated by tur (phase 2) */` but committed -- **not** a place to add
+hand-written C.
+
+`ecs-raylib/loop` already ships the boilerplate wrapper this plan needs a web
+twin of:
+
+```turmeric
+(defmacro with-game-loop [w title width height fps body]
+  `(do
+     (init-window ~width ~height ~title)
+     (set-target-fps ~fps)
+     (while (not (window-should-close))
+       (let [dt (get-frame-time)]
+         (begin-drawing)
+         (clear-background (raywhite))
+         ~body
+         (end-drawing)))
+     (close-window)))
+```
+
+That macro is the single most useful asset in the tree for this work: it is
+the shape almost every raylib program in `turmeric-spices` takes, and it is
+already a *callback-shaped* abstraction in disguise. See
+[State hoisting](#63-state-hoisting-the-real-porting-cost).
 
 ---
 
-## The `:web` Key in `build.tur`
+## 4. The `:web` key in `build.tur`
 
-Spice authors and app authors describe their browser needs declaratively in
-`build.tur`. The build tool reads this when `--target web` is passed and
-configures the scaffold accordingly.
+App authors and spice authors describe browser needs declaratively. Read when
+`--target wasm` is passed.
 
 ```turmeric
 (defpackage my-game
   :name    "my-game"
   :version "0.1.0"
-  :spices  #{
-    "raylib" #{:url    "https://github.com/rjungemann/turmeric-spices"
-               :ref    "raylib-v0.1.0"
-               :subdir "spices/raylib"}
+  :spices #map{
+    "raylib" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "raylib-v0.3.0"
+                  :subdir "spices/raylib"}
   }
-  :web #{
-    :canvas        true              ; mount a <canvas id="canvas">
-    :canvas-size   [800 600]
-    :audio         true              ; wire up Emscripten Web Audio output
-    :persist       false             ; IDBFS for tur-sqlite, opt-in
-    :main-loop     :raylib           ; :raylib | :emscripten | :none
-    :title         "My Game"
-    :lazy-assets   ["assets/music/long-track.ogg"]  ; opt-in fetch-on-demand
-    ;; :threads true is the default; opt out only for static-hosting reasons
+  :web #map{
+    :canvas       true               ; mount a <canvas id="canvas">
+    :canvas-size  [800 600]
+    :hidpi        true               ; scale the drawing buffer by devicePixelRatio
+    :audio        true               ; wire Web Audio + the unlock gate
+    :capture-keys ["Tab" "ArrowUp" "ArrowDown" "ArrowLeft" "ArrowRight" "Space"]
+    :persist      false              ; IDBFS, opt-in (sqlite)
+    :main-loop    :callback          ; :callback | :asyncify | :none
+    :heap         134217728          ; fixed heap; see Memory and threads
+    :threads      false              ; DEFAULT false for apps (reversal, see 11)
+    :title        "My Game"
+    :lazy-assets  ["assets/music/long-track.ogg"]
   })
 ```
 
 ### Spice-side declaration
 
-Library spices add a `:web` block to advertise *what they require* of the
-host page. The app's `:web` block wins on conflict; spice `:web` blocks are
-unioned. Example for `tur-raylib`:
+Library spices advertise what they require of the host page. The app's `:web`
+block wins on conflict; spice blocks are unioned. For `tur-raylib`:
 
 ```turmeric
 (defpackage tur-raylib
   ...
-  :web #{
-    :requires  #{:canvas :audio}
-    :main-loop :raylib           ; raylib's WEB build owns the frame loop
-    :cmake-options #{:PLATFORM "Web"
-                     :SUPPORT_MODULE_RAUDIO "ON"}
+  :web #map{
+    :supported true
+    :requires  #set{:canvas :audio}
+    :main-loop :callback
+    :link-flags ["-sUSE_GLFW=3" "-sMAX_WEBGL_VERSION=2"
+                 "-sEXPORTED_RUNTIME_METHODS=ccall"]
+    :cmake-options #map{:PLATFORM "Web"}
   })
 ```
 
-`tur-opengl` would declare `:requires #fx{:canvas}` and add
-`-sUSE_GLFW=3 -sFULL_ES3=1 -sMIN_WEBGL_VERSION=2`. `tur-sqlite` would declare
-no canvas/audio but add `-sFORCE_FILESYSTEM=1`.
+Note `#set{...}` for `:requires` (a set of keywords) and `#map{...}` for the
+key-value blocks -- the draft used `#{...}` for both, which is neither.
 
 ### How the build tool consumes it
 
-`tur build --target web` walks the dependency graph, collects every spice's
-`:web` block, unions the requirements, and:
+`tur build --target wasm` walks the dependency graph, collects every `:web`
+block, unions them, and:
 
-1. Writes/refreshes `web-dist/index.html` from a template, inserting the
-   canvas, title, and audio-unlock affordances.
-2. Composes the final `emcc` link command from the union of
-   `:cmake-options` and built-in flags (`-sMODULARIZE=1`,
-   `-sALLOW_MEMORY_GROWTH=1`, etc.).
-3. Errors loudly if any spice in the graph is on the ❌ list above (with a
-   pointer to the relevant section of this doc).
-4. Picks a main-loop strategy (see next section).
-
----
-
-## Main-Loop Strategy
-
-Browsers can't block a while-true loop -- the page would freeze. Three
-strategies, selected by the union of `:main-loop` declarations:
-
-| Strategy | Trigger | What we do |
-|----------|---------|------------|
-| `:none` | No spice requests a loop | Run `main()` once; user is expected to register callbacks (e.g. an `onclick`). Used for offline tools (`tur-plutovg` rendering to PNG, scscm compiling text). |
-| `:emscripten` | `tur-opengl`, custom requestAnimationFrame games | Caller writes the loop body as a Turmeric function; the scaffold calls `emscripten_set_main_loop_arg` once and exits `main()`. Requires a small helper in `tur-opengl` or a new `tur-web` spice. |
-| `:raylib` | `tur-raylib` present | Raylib's `PLATFORM_WEB` build *already* expects to be driven by `emscripten_set_main_loop`. The user's `while (!window-should-close?)` body becomes the frame callback. Needs a build-time rewrite or a runtime shim that yields one iteration per call. |
-
-For v0, `:raylib` does what Raylib's own examples do: ship a thin
-`raylib/web` module (Turmeric-side) exposing
-`(run-main-loop frame-fn)`; users opt into it when targeting web. Code that
-keeps the native `while` form gets a clear migration error.
+1. Hard-errors if any spice in the graph carries `:web #map{:supported false}`,
+   naming the spice(s) and pointing at the matrix in section 9.
+2. Picks a main-loop strategy (section 6.1) and validates it against what the
+   graph requires.
+3. Composes the `emcc` link line from the union of `:link-flags` plus the
+   built-in base (section 8).
+4. Passes each spice's `:cmake-options` through to `emcmake` -- the missing
+   piece today, since `pkg.c:4007` configures with no `-DPLATFORM=Web`.
+5. Writes/refreshes `web-dist/index.html` from a template with the canvas,
+   title, loading indicator and audio-unlock affordance.
 
 ---
 
-## v0 Web-App Scaffold
+## 5. Why the browser fights a game loop
 
-`tur new-web my-app` (new subcommand) writes:
+One paragraph of orientation, because every integration point below descends
+from it.
+
+A browser page runs on a single event-loop thread that also services layout,
+input and compositing. A WASM module that enters `while (1)` never returns to
+that loop, so nothing repaints, no input is delivered, and the tab hangs. The
+page does not get a frame because the program drew one; it gets a frame
+because the program *returned* and the browser then chose to composite. Every
+difficulty below -- the loop, the callback lifetime, the audio gesture, the
+canvas size -- is a consequence of control inversion: the browser calls the
+program, not the reverse.
+
+---
+
+## 6. Browser integration points
+
+This is the section the first draft lacked. Each subsection states the
+problem, the decision, and what has to be built.
+
+### 6.1 The frame loop: two modes
+
+There are exactly two ways to run a raylib frame loop under Emscripten, and
+upstream raylib supports both. The first draft picked callback-only and then
+promised "unmodified" programs in its goals; that is the contradiction.
+
+**Mode A -- `:asyncify` (compatibility).** Link with `-sASYNCIFY`. Emscripten
+instruments the module so a blocking call can suspend and resume, which lets
+`while (not (window-should-close))` yield to the browser. The existing source
+runs **unchanged**.
+
+The cost is not merely "some overhead," and this is the number that decides
+the design: raylib's web `WindowShouldClose` waits a **fixed 16 ms** (raylib
+5.5; 12 ms in 5.6) *in addition to* the frame's own time. At a 60 Hz target
+the frame budget is 16.6 ms, so the fixed wait roughly halves the achievable
+rate -- expect ~30 fps and visible stutter, on top of Asyncify's own binary
+size (roughly 2x) and speed penalty. Asyncify is therefore a **porting and
+triage mode**, not the mode a game ships in.
+
+**Mode B -- `:callback` (shipping).** The program registers a per-frame
+function and returns. Emscripten calls it once per display refresh via
+`emscripten_set_main_loop`. Full speed, no Asyncify, no fixed wait. The cost
+is that per-frame state can no longer live in `main`'s stack frame, which is
+the real porting work (section 6.3).
+
+**Decision.** Support both, default to `:callback`, and make `:asyncify` a
+documented one-key fallback rather than an error. Rationale: `:callback` is
+the only mode that produces a shippable game, so it must be the default and
+the path the scaffold generates; `:asyncify` is what makes an existing
+`turmeric-spices` example or a user's half-finished game render in a browser
+*today*, which is worth a great deal for adoption and demos. Emitting a
+"migration error" for the blocking form, as the draft proposed, throws that
+away for no gain.
+
+`:none` remains for non-interactive programs: run `main()` once, no loop.
+Used by offline tools (plutovg rendering to a PNG, scscm compiling text).
+
+### 6.2 The callback boundary, and the region note it requires
+
+This is the load-bearing integration point, and it carries a correctness
+requirement from this repo's own rules.
+
+In `:callback` mode a Turmeric closure has to reach
+`emscripten_set_main_loop`. The mechanism exists:
+[c-integration-guide.md:889](../../guides/c-integration-guide.md) -- a
+function-typed parameter marked `^fat` arrives in inline C as an `int64_t`
+closure handle, dispatched with `TUR_APPLY*`.
+
+The subtlety is lifetime. `emscripten_set_main_loop(cb, fps, 0)` **returns
+immediately**; the browser invokes `cb` afterwards, after `main` has already
+returned. So the frame closure -- and everything it captures -- must outlive
+the call that registered it, and must be stored somewhere the browser can
+reach later. Storing a caller's word into a C global that outlives the
+enclosing bracket is precisely the case CLAUDE.md's **Region Store Hooks
+STRICT RULE** governs:
+
+> Any primitive that writes a caller's word into memory that can outlive a
+> `with-region` / `bt-scope` bracket MUST note that word.
+
+And the automatic note does **not** apply here. The rule exempts a *typed*
+node parameter, because the emitter notes it at body entry. A `^fat`
+parameter arrives **erased**, as `int64_t` -- the type no longer says it is a
+node -- which is exactly the case the rule says needs the manual macro. So:
+
+```turmeric
+;;; run-main-loop -- register a per-frame callback and return to the browser.
+;;;
+;;; Parameters:
+;;;   frame -- called once per display refresh
+;;;   fps   -- target rate; 0 means "use the display refresh rate"
+;;;
+;;; Since: W2
+(defn run-main-loop [^fat frame : (fn [] #fx{} unit) fps : int] : void
+  ```c
+  #include <emscripten/emscripten.h>
+  /* The browser calls the trampoline after main() has returned, so this
+     closure outlives the bracket that built it. It arrives ERASED (int64_t),
+     so the emitter's body-entry note does not cover it. */
+  TUR_REGION_NOTE(frame);
+  tur_web_frame_set(frame);
+  emscripten_set_main_loop(tur_web_frame_trampoline, (int)fps, 0);
+  ```)
+```
+
+A missed note here is a silent use-after-rewind on the default build -- the
+failure mode `docs/archive/region-escape-through-unhooked-stores.md` documents
+-- and it would present as a game that renders one correct frame and then
+garbage, which is an expensive thing to debug from that symptom. Per the same
+rule, this joins the hooked set **in the same change** as a fixture:
+`tests/fixtures/region-escape-via-main-loop`, modeled on the existing
+`region-escape-via-callcc` (the closest analogue: `call/cc`'s stack image is
+also a live capture the runtime must not rewind under).
+
+`tur_web_frame_set` / `tur_web_frame_trampoline` are a ~20-line vendored C
+shim holding the handle in a file-scope static and calling `TUR_APPLY0`. It
+goes in a new `raylib/web/` source declared through
+`:build-opts :c-sources` -- an existing mechanism (`collect_build_aux`,
+`src/main.c:3544`). It must **not** go in `raylib__*.c`: those are
+`/* generated by tur (phase 2) */`.
+
+Two smaller traps at this boundary:
+
+- **`simulate_infinite_loop`.** Pass `0`, as above. Passing `1` makes
+  Emscripten unwind by throwing a JS exception, so `main` never returns
+  normally and nothing after the call -- including `close-window` and any
+  Turmeric-side cleanup or `defer` -- ever runs.
+- **`-sEXIT_RUNTIME=0` is mandatory** in `:callback` mode. With the default,
+  the runtime tears down when `main` returns and the registered callback fires
+  into a dead module. The REPL already sets this; the app target must too.
+
+### 6.3 State hoisting: the real porting cost
+
+The draft treated the blocking-to-callback conversion as a "build-time rewrite
+or a runtime shim that yields one iteration per call." Neither is cheap,
+because of how real programs are written. From `raygui/examples/hello-gui.tur`:
+
+```turmeric
+(defn main [] : int
+  (init-window 800 600 "hello-gui")
+  (set-target-fps 60)
+  (let [speed     1.0
+        enabled   0
+        name-buf  (make-text-buf 64)
+        name-edit 0]
+    (while (not (window-should-close))
+      (begin-drawing)
+      ...
+      (set! speed (gui-slider ... speed 0.0 10.0))
+      (set! enabled (gui-check-box ... enabled))
+      (end-drawing))
+    (free-text-buf name-buf))
+  (close-window)
+  0)
+```
+
+Mutable per-frame state lives in a `let` **inside `main`** and is updated with
+`set!`. A frame callback cannot see it: by the time the browser calls back,
+that frame is gone. So the conversion is not syntactic -- it has to relocate
+state, which is why a mechanical source rewrite is the wrong tool.
+
+Three options, in the order they should be offered:
+
+1. **A `with-web-game-loop` macro**, the web twin of `ecs-raylib/loop`'s
+   `with-game-loop`. The macro already owns the `let`, so it can lift those
+   bindings into a heap state box, emit a frame closure that reads and writes
+   them, and register it. For any program already using `with-game-loop`, the
+   port is **changing the import** -- no body changes. This is the path to
+   push, and it is the argument for landing the macro before hand-written
+   examples proliferate.
+2. **An explicit state-threading form**, for code not using the macro:
+   `(run-main-loop-with state : S (fn [S] S))`, where the frame function takes
+   the state and returns the next one. Honest about the control inversion and
+   needs no mutation.
+3. **`:asyncify`**, which needs no restructuring at all. This is why mode A
+   has to stay supported rather than erroring: for a program shaped like the
+   one above, it is a link-flag change against a source rewrite.
+
+### 6.4 Canvas: size, DPI, resize
+
+Undefined in the draft. There are three distinct sizes and conflating them is
+the most common source of a blurry or mis-scaled game:
+
+- The **CSS size** (`style.width/height`) -- how large the canvas appears.
+- The **drawing-buffer size** (`canvas.width/height`) -- how many pixels the
+  GL context actually renders.
+- **`devicePixelRatio`** -- the ratio between them on a HiDPI display.
+
+`init-window w h` sets the drawing buffer. If CSS size and buffer size
+disagree, the browser scales the result: a 800x600 buffer in a
+1600x1200 CSS box is a soft, upscaled image, and on a 2x display a canvas
+sized 800x600 in CSS renders 800x600 real pixels into a 1600x1200 physical
+area, which looks blurry on every Mac.
+
+v0 decisions:
+
+- `:canvas-size [w h]` sets both the CSS size and, multiplied by
+  `devicePixelRatio` when `:hidpi true`, the drawing buffer.
+- The shell reads `devicePixelRatio` **before** `init-window` and passes the
+  scaled values in, so raylib and the canvas agree from the first frame.
+- Resize is **opt-in and off by default**. A game whose backbuffer changes
+  size mid-run needs to re-derive projection matrices and re-layout UI, which
+  is a game-specific concern raylib does not solve. v0 ships a fixed canvas
+  and a documented `emscripten_set_canvas_element_size` escape hatch, rather
+  than a resize handler that silently breaks every fixed-layout game.
+- Fullscreen is likewise out of v0: it requires a user gesture and changes
+  the drawing-buffer size, so it inherits the whole resize problem.
+
+### 6.5 Input capture
+
+Undefined in the draft, and games break on it immediately. The browser owns
+the keyboard and mouse before the canvas does:
+
+- **Arrow keys and Space scroll the page.** A platformer where jumping also
+  scrolls the document is the default behavior, not a bug to find later.
+- **Tab moves focus** out of the canvas, after which the game receives no key
+  events at all.
+- **A canvas gets keyboard events only when focusable and focused** --
+  `tabindex="0"` plus a click, or explicit focus on load.
+- **Mouse-look needs Pointer Lock**, which requires a user gesture and can be
+  exited by the user at any time (Esc); the game must handle losing it.
+- **Right-click opens the context menu** unless suppressed.
+
+v0: `:capture-keys [...]` lists keys the shell calls `preventDefault` on,
+defaulting to the set that breaks games (arrows, Space, Tab). The canvas gets
+`tabindex="0"` and is focused on the first click, alongside the audio-unlock
+gesture (section 6.6) -- the same click can do both. Pointer Lock is an
+escape hatch, not scaffolded.
+
+The keyboard default deserves its bluntness: silently swallowing keys the page
+might want is the lesser evil against a game that scrolls itself.
+
+### 6.6 Audio, and the gesture gate
+
+**Reversal.** The draft's resolved decision #6 said the AudioContext
+user-gesture requirement is "the user's responsibility; no scaffolded unlock UI
+in v0." That should flip, for a reason specific to this platform: every
+browser starts an `AudioContext` in a `suspended` state and will not start it
+until a real user gesture, so a game that calls `init-audio-device` on load is
+**silent, with no error anywhere**. No console message, no failed call --
+audio simply never starts. That is the single worst failure shape to hand a
+user as "your responsibility," because there is nothing to search for.
+
+The scaffold is also the only component that *can* fix it: the gesture has to
+be handled on the page, before the module runs, which is exactly the file
+`tur new-web` generates.
+
+v0, when `:audio true`:
+
+- The shell renders a click-to-start overlay and does not call the module's
+  entry point until it is clicked.
+- That click resumes the `AudioContext` and focuses the canvas (6.5) in one
+  gesture -- a start button is a thing users expect in a browser game, so this
+  costs no UX.
+- The link line adds `-sEXPORTED_RUNTIME_METHODS=ccall`, without which raylib's
+  web audio path fails at runtime with `Uncaught ReferenceError: ccall is not
+  defined`. Non-obvious and worth having in the base flags rather than
+  rediscovered.
+
+The remaining question is whether raylib 5.5's `raudio` module works against
+our toolchain at all; upstream
+[raysan5/raylib#690](https://github.com/raysan5/raylib/issues/690) and the
+live `audio_music_stream` example say it does. That is what the W1.5 spike
+confirms before W2 commits to it.
+
+### 6.7 Assets, and the path-matching trap
+
+Assets are packaged with `--preload-file` into a `.data` sidecar fetched at
+startup and mounted into MEMFS. Note this is a **new** mechanism for this
+repo, not an existing one: the REPL uses `--embed-file` (which inlines bytes
+into the `.js`, fine for the stdlib, wrong for multi-megabyte game assets).
+
+The trap, which upstream calls out explicitly: **the path in the code must
+match the path given to the packager** -- absolute in both or relative in
+both. A mismatch does not fail the build; it produces a runtime "Failed to
+open file" and a game with missing textures. v0 therefore packages
+`web/assets/**` at exactly the relative path the native target uses, so
+`(load-texture "assets/player.png")` resolves identically in both targets,
+and the tooling refuses an absolute asset path rather than letting the
+mismatch through.
+
+`:lazy-assets [...]` switches selected files to fetch-on-demand, for a big
+blob that should not block startup.
+
+### 6.8 Memory and threads
+
+**Two reversals here**, both against the draft's "match the REPL" reasoning.
+The REPL and a game have opposite constraints, so inheriting its flags is
+wrong in both cases.
+
+**Threads: default OFF for the app target.** The draft resolved "pthreads on
+by default, matching the REPL," with COOP/COEP headers templated and a
+documented GH Pages caveat. But `-pthread` needs `SharedArrayBuffer`, which
+needs `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`. Those headers cannot be set on
+GitHub Pages at all, and `require-corp` additionally breaks any
+cross-origin subresource that does not opt in. The entire point of the app
+target is a static site a user can drop anywhere -- so defaulting to a
+configuration that cannot be hosted on the most common free static host, to
+match an artifact with different needs, inverts the priority. raylib's web
+build does not need threads. Default `:threads false`; `:threads true` stays
+available and keeps the `_headers` template for hosts that can serve them.
+
+**Memory: fixed heap, not growth.** The draft's decision list did not settle
+this and the REPL uses `-sALLOW_MEMORY_GROWTH=1`. For a game that is the wrong
+default: upstream raylib marks memory growth **"NOT RECOMMENDED"**, because
+growth invalidates cached views into the heap and costs a copy at every grow
+-- a frame-time spike exactly when a level loads. Use a fixed heap
+(`:heap`, default 128 MB, matching raylib's own `BUILD_WEB_HEAP_SIZE`
+default), and document raising it for asset-heavy games. Growth stays
+available for the pure-computational (non-raylib) case where the working set
+is genuinely unknown.
+
+One interaction to record: `-sASYNCIFY` has its own stack, and the default is
+often too small for a deep call graph -- the symptom is a runtime abort
+mentioning the Asyncify stack. If mode A shows it, raise
+`-sASYNCIFY_STACK_SIZE`.
+
+### 6.9 Startup, loading, and exit
+
+- **First frame.** A `.data` preload plus a multi-megabyte `.wasm` means
+  seconds of blank canvas on a cold load. The shell ships a loading indicator
+  driven by Emscripten's `setStatus` hook; the click-to-start overlay (6.6)
+  covers the tail of it, since the user cannot click until assets are in.
+- **GL context choice.** raylib must be compiled with
+  `-DGRAPHICS_API_OPENGL_ES2` or `-DGRAPHICS_API_OPENGL_ES3`. ES3 additionally
+  needs `-sMAX_WEBGL_VERSION=2` on the *program* link line. (The draft wrote
+  `-sMIN_WEBGL_VERSION=2`, which is a different setting -- it raises the
+  floor rather than the ceiling.) v0 targets ES3 + WebGL2, with ES2 as the
+  documented fallback for old mobile.
+- **Exit.** `close-window` on the web is close to meaningless -- there is no
+  window to reclaim and the tab is still there. In `:callback` mode, quitting
+  means `emscripten_cancel_main_loop`, then leaving the module resident. v0
+  maps a completed game to "cancel the loop and draw a final frame," and does
+  not attempt to tear down the module.
+
+---
+
+## 7. Composed `emcc` link line
+
+What the tool produces, so the flags live in one place rather than spread
+across the prose above.
+
+**Base (always):**
 
 ```
-my-app/
-  build.tur                 -- with :web block already populated
-  src/main.tur
-  web/
-    index.html              -- single page, <canvas>, audio-unlock button
-    main.js                 -- imports TurmericModule, calls turi_wasm_eval on main.tur
-    style.css
-    vite.config.js
-    package.json            -- vite + nothing else
-  .gitignore
+-sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=TurmericApp -sEXIT_RUNTIME=0
+-sINITIAL_MEMORY=<:heap, default 134217728>
+-O2 -std=c99 -Wall -fno-strict-aliasing
 ```
 
-Running `tur build --target web` from `my-app/`:
+**When `:canvas true`:** `-sUSE_GLFW=3 -sMAX_WEBGL_VERSION=2`
+**When `:audio true`:** `-sEXPORTED_RUNTIME_METHODS=ccall`
+**When `:main-loop :asyncify`:** `-sASYNCIFY` (+ `-sASYNCIFY_STACK_SIZE` as needed)
+**When `:threads true`:** `-pthread -sPTHREAD_POOL_SIZE_STRICT=0` + the `_headers` template
+**When assets exist:** `--preload-file web/assets@assets`
+**When `:persist true`:** `-sFORCE_FILESYSTEM=1` + IDBFS mount
 
-1. Compiles user `.tur` sources to bytecode embedded in the WASM module.
-2. Builds all cmake-dep spices through `emcmake` (already supported).
-3. Links a `my-app.wasm` + `my-app.js` ES module into `web/public/`.
-4. Runs `vite build` (invoked by the tool, not the user) to produce
-   `web-dist/`.
+**Passed to `emcmake` for raylib:** `-DPLATFORM=Web`, and
+`-DCMAKE_C_FLAGS=-DGRAPHICS_API_OPENGL_ES3`.
 
-`tur dev --target web` runs `vite dev` with a watcher that recompiles the
-WASM on `.tur` changes.
-
-### Choice of scaffold
-
-Vite is the right v0 default because:
-
-- Already used by `web/` for the REPL -- no new toolchain in the repo.
-- Native ES-module dev server matches Emscripten's `-sMODULARIZE=1` output.
-- Zero-config for static `.wasm`/`.data` asset handling.
-- Trivial to swap out later (the scaffold is a template, not a runtime).
+Note `-sALLOW_MEMORY_GROWTH=1` is deliberately **not** in the base set --
+see 6.8.
 
 ---
 
-## Phases
+## 8. Main-loop strategy table
 
-### Phase W0 -- Compatibility audit + this doc
+| Strategy | Trigger | What we do | Cost |
+|---|---|---|---|
+| `:none` | No spice requests a loop | Run `main()` once. | -- |
+| `:callback` | **Default** when a canvas spice is present | Frame closure registered via `emscripten_set_main_loop`; `main` returns. Needs `-sEXIT_RUNTIME=0` and the region note (6.2). | State must leave `main` (6.3). |
+| `:asyncify` | Opt-in, or `tur build` suggests it when it sees a blocking loop | Link `-sASYNCIFY`; existing `while` loop yields. | ~30 fps on raylib 5.5 (fixed 16 ms wait), ~2x binary, slower. |
 
-- Land this plan.
-- Add a `:web {:supported true|false :reason "..."}` stub to every spice's
-  `build.tur` so the build tool has machine-readable signal. Default
-  `:supported false` for the ❌ row above.
+---
 
-### Phase W1 -- `tur build --target web` for pure spices
+## 9. Per-spice Emscripten compatibility matrix
 
-- Wire `:web` parsing into `pkg.c`.
-- Produce a minimal `index.html` + `main.js` + `app.wasm` for
-  pure-Turmeric / inline-C-only programs (no canvas).
-- Build with `-pthread` by default (matches REPL); template a `_headers`
-  file with COOP/COEP for Cloudflare/Netlify, document the GH Pages
-  caveat.
-- Wire `*args*` from `?arg=foo&arg=bar` plus a JS `turi_wasm_set_args`
-  escape hatch callable from `main.js` before `turi_wasm_eval`.
-- Preload `web/assets/**` into MEMFS via Emscripten `--preload-file`;
-  honor `:web :lazy-assets [...]` as the per-file fetch-on-demand
-  opt-out.
-- Hard-error on any spice with `:supported false`, printing the offending
-  spice(s) and a pointer to the compatibility matrix in this doc.
-- Validate end-to-end with `tur-tidal` + `tur-scscm` "compile a tune to
-  text" demo.
+### 9.1 Audited
 
-### Phase W2 -- Canvas + OpenGL
+| Spice | Tier | Browser status | Notes |
+|-------|------|----------------|-------|
+| `tur-test`     | 1 pure | Works | No I/O. |
+| `tur-math`     | 1 pure | Works | No I/O. |
+| `tur-c-dsl`    | 1 pure | Works | Compile-time codegen; runtime is a no-op. |
+| `tur-glsl`     | 1 pure | Works | Output is shader text. |
+| `tur-tidal`    | 1 inline-C | Works | Pure string transformation. |
+| `tur-scscm`    | 1 inline-C | Partial | String compiler works. OSC client needs a WebSocket bridge (post-v0). |
+| `tur-opengl`   | 2 cmake | Via shim | GLFW Emscripten port; restrict to the GLES 3.0 subset (WebGL2). |
+| `tur-raylib`   | 2 cmake | First-class | raylib 5.5 has `PLATFORM=Web`. Main loop per section 6.1. |
+| `tur-sqlite`   | 2 cmake | Via MEMFS/IDBFS | MEMFS by default; IDBFS via `:web :persist true`. |
+| `tur-png`      | 3 cmake | Works | libpng + zlib compile clean under emcc. |
+| `tur-plutovg`  | 3 cmake | Works | No platform deps. |
+| `tur-json`     | 3 cmake | Works | yyjson is portable C. |
+| `tur-regex`    | 3 cmake | Works | PCRE2 supports Emscripten upstream. |
+| `tur-wav`      | 3 cmake | Works | Pure decode/encode. |
+| `tur-http`     | 3 cmake | Remap | mbedTLS cannot reach the network; remap to `fetch()` via `EM_JS`. v0 stubs with a clear error. |
+| `tur-osc`      | 3 cmake | Never | UDP unavailable in browsers; needs a WebSocket-OSC bridge. |
+| `tur-rtaudio`  | 3 cmake | Research | Would need a Web Audio (`AudioWorklet`) backend. Post-v0. |
+| `tur-rtmidi`   | 3 cmake | Research | Would need Web MIDI. Smaller than rtaudio; still post-v0. |
+| `tur-postgres` | 3 cmake | Never | libpq has no browser story. Hard-error. |
+| `tur-valkey`   | 3 cmake | Never | TCP client. Hard-error. |
 
-- Add `tur-opengl` `:web` block with GLFW shim flags.
-- Ship a `(opengl/web/run-main-loop frame-fn)` helper.
-- Port one existing `tests/fixtures/opengl/*` triangle demo to the new
-  scaffold; document.
+### 9.2 Not yet audited -- coverage gap
 
-### Phase W2.5 -- Raylib audio spike
+The matrix above was written against a 20-spice tree. `turmeric-spices` now
+holds **47**. Recording the gap explicitly rather than letting the table read
+as complete:
 
-- Build the minimal raylib + raudio web demo end-to-end *before*
-  committing to W3's scope. Upstream issue
-  [raysan5/raylib#690](https://github.com/raysan5/raylib/issues/690) and
-  the live `audio_music_stream` example on raylib.com suggest this works
-  out of the box; the spike confirms it against our toolchain and
-  `:web :audio true` plumbing.
-- Document the AudioContext user-gesture requirement (browsers won't
-  start audio until a click/keypress). v0 mirrors what Raylib's own
-  examples do and pushes the unlock affordance to the user; no elaborate
-  scaffolding.
+`ansi`, `crdt`, `ecs`, `ecs-raylib`, `frame`, `httpd`, `linalg`, `msgpack`,
+`notebook`, `plot`, `raygui`, `sdf-raylib`, `secret`, `signal`, `stats`,
+`template`, `thread-pool`, `tls`, `tourist`, `tourist-session`,
+`tourist-session-valkey`, `tourist-ws`, `watch`, `ws-client`, `ws-core`,
+`ws-server`, `zlib`.
 
-### Phase W3 -- Raylib
+Three of those matter for this plan's goal and should be audited in W0, since
+they are raylib-adjacent and a game will reach for them:
 
-- Add `tur-raylib` `:web` block (`PLATFORM=Web`, `USE_GLFW=3`,
-  `SUPPORT_MODULE_RAUDIO=ON`).
-- Ship `(raylib/web/run-main-loop frame-fn)`.
-- Update `tur-raylib` docs with the platform divergence (no blocking
-  while-loop on web) and a one-screen example that runs both natively and
-  in the browser.
+- **`ecs-raylib`** -- owns `with-game-loop`, the macro section 6.3 proposes a
+  web twin of. Should ship that twin.
+- **`raygui`** -- its examples are the blocking-loop-with-`let`-state shape
+  that motivates 6.3; the best porting test cases in the tree.
+- **`sdf-raylib`** -- `raylib/integration.tur` renders per frame and has its
+  own camera loop; check whether it needs the same treatment.
+
+Provisional reads on the rest, to be confirmed rather than trusted: the pure
+and compute spices (`ansi`, `crdt`, `linalg`, `msgpack`, `plot`, `signal`,
+`stats`, `template`, `ecs`, `frame`, `secret`, `zlib`) should fall on the
+works side; everything socket-shaped (`httpd`, `tls`, `ws-*`, `tourist*`,
+`watch`) will not work without a remap, for the same reason as `tur-osc`;
+`thread-pool` depends on the `:threads` decision in 6.8 and is unavailable
+under the new default.
+
+---
+
+## 10. Phases
+
+Re-sequenced raylib-first: raylib exercises canvas, audio, input, assets and
+the frame loop simultaneously, so it finds integration bugs that a pure-spice
+phase cannot, and it is the driving goal. OpenGL becomes a near-free
+follow-on rather than a gate.
+
+### Phase W0 -- Audit + manifest plumbing
+
+- Land this revision.
+- Add a `:web #map{:supported true|false :reason "..."}` stub to every spice
+  manifest, defaulting `false` for the never-works rows. Close the 9.2 gap,
+  starting with `ecs-raylib`, `raygui`, `sdf-raylib`.
+- Wire `:web` parsing into `pkg.c` and thread `:cmake-options` into the
+  existing `emcmake` configure at `pkg.c:4007` -- today it passes no
+  `-DPLATFORM`.
+- Hard-error on `:supported false` in the dep graph, naming the spice.
+
+### Phase W1 -- AOT app shell, no canvas
+
+- Produce `index.html` + `main.js` + `app.wasm` for pure-Turmeric /
+  inline-C-only programs, with `-sMODULARIZE=1 -sEXPORT_NAME=TurmericApp
+  -sEXIT_RUNTIME=0` and a fixed heap.
+- `*args*` from `?arg=foo&arg=bar`, plus a `turi_wasm_set_args` escape hatch
+  callable before the entry point. (CLAUDE.md's rule on how Turmeric code
+  *reads* args -- `*args*` / `stdlib/args.tur` only -- is unchanged.)
+- `--preload-file web/assets@assets` with the relative-path guard from 6.7;
+  `:lazy-assets` opt-out.
+- Validate with the `tur-tidal` + `tur-scscm` "compile a tune to text" demo.
+
+### Phase W1.5 -- raylib spike: is the browser story real?
+
+The cheapest possible end-to-end probe, before W2 commits. Three questions,
+each of which would reshape W2 if the answer is no:
+
+1. Does `emcmake` + `-DPLATFORM=Web` build raylib 5.5 through the existing
+   `:cmake-deps` path at all? **Known risk:** `pkg.c:4007` passes no
+   `-DPLATFORM`, and it also suppresses `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`
+   on the wasm arm (`if (!wasm && ...)`), so a dependency with a low
+   `cmake_minimum_required` floor may abort the configure under emcmake in a
+   way it does not natively.
+2. Does a triangle render? (canvas + GLES3 + `USE_GLFW=3`)
+3. Does `raudio` produce sound after a gesture, with `ccall` exported?
+
+Ship the answers as a fixture, not prose.
+
+### Phase W2 -- raylib: canvas, loop, input, audio
+
+- `tur-raylib` `:web` block per section 4.
+- `raylib/web` module: `run-main-loop` (6.2), the `:c-sources` trampoline
+  shim, and `with-web-game-loop` (6.3).
+- **`tests/fixtures/region-escape-via-main-loop`**, and `raylib/web` joins the
+  hooked-store set in CLAUDE.md -- same change, per the strict rule.
+- `-sASYNCIFY` mode A behind `:main-loop :asyncify`, with the ~30 fps cost
+  documented at the point of use.
+- Canvas sizing/HiDPI (6.4), key capture (6.5), audio unlock overlay (6.6),
+  loading indicator (6.9).
+- Port one `raygui` example both ways -- macro swap and Asyncify -- as the
+  end-to-end proof and the documentation's worked example.
+
+### Phase W3 -- OpenGL
+
+- `tur-opengl` `:web` block with the GLFW shim flags (mostly shared with W2).
+- `(opengl/web/run-main-loop frame-fn)` over the same trampoline.
+- Port a `tests/fixtures/opengl/*` triangle demo.
 
 ### Phase W4 -- `tur new-web` scaffold generator
 
-- Implement the subcommand. Template lives at
-  `templates/web-app/`. `--with raylib` / `--with opengl` flags choose the
-  starter `main.tur`.
+- Template at `templates/web-app/`; `--with raylib` / `--with opengl` choose
+  the starter `main.tur`. Generates the `:callback`-mode `main.tur`, so the
+  default a new user meets is the shippable one.
+- `tur dev --target wasm` runs `vite dev` with a `.tur` watcher.
+- Vite remains the right default: already in the repo for the REPL, its ES
+  module dev server matches `-sMODULARIZE=1`, zero-config `.wasm`/`.data`
+  handling, and the scaffold is a template rather than a runtime, so it is
+  cheap to replace.
+- **Port discipline:** the scaffold's dev server and any browser test must
+  pick their own port. Port 3000 is the developer's own Try Turmeric dev
+  server and is off-limits per CLAUDE.md -- a `PreToolUse` hook enforces it.
 
-### Phase W5 -- Storage + audio polish
+### Phase W5 -- Storage + polish
 
 - `tur-sqlite` `:web :persist true` -> IDBFS preload + `FS.syncfs` on quit.
-- Audio-unlock button (browsers require a user gesture before
-  `AudioContext.resume()`); abstract into a tiny `audio-unlock` helper in
-  the scaffold.
+- Fullscreen and canvas resize, if a demand appears (both deferred in 6.4 for
+  the projection/layout reasons given).
 
-### Phase W6 (post-v0) -- Network + audio I/O
+### Phase W6 -- Docs
 
-- `tur-http` rewritten to call `fetch()` via `EM_JS`.
-- Decide rtaudio/rtmidi: AudioWorklet path vs. a separate `tur-webaudio`
-  spice that doesn't pretend to be rtaudio.
-- OSC over WebSocket bridge for `tur-scscm` / `tur-osc`.
+- A `web-games-guide.md` sibling to the existing interpreter-focused
+  `web-emscripten-tutorial.md`: the two loop modes and how to choose, the
+  state-hoisting port, and the integration traps from section 6 (asset paths,
+  `ccall`, audio gesture, key capture, HiDPI).
+- Per CLAUDE.md, a guide links plans and reports by **GitHub URL**, not
+  relative path -- only `guides/` and `api/` are published.
 
----
+### Phase W7 (post-v0) -- Network + audio I/O
 
-## Resolved Decisions
-
-The following were originally open questions; resolved 2026-05-23.
-
-1. **Bundling.** Single monolithic `app.wasm` for v0. Reserve a
-   `:web :side-module true` opt-in for spices, so per-spice lazy-loaded
-   WASM modules can be enabled later without breaking apps.
-2. **Threads.** Pthreads on by default, matching the REPL. Scaffold ships
-   a `_headers` template for COOP/COEP (`Cross-Origin-Opener-Policy:
-   same-origin`, `Cross-Origin-Embedder-Policy: require-corp`); GH Pages
-   gets a documented caveat. Users can opt out via `:web :threads false`
-   for naive static hosts.
-3. **File-system surface.** MEMFS by default, lost on tab close. Spices
-   that want persistence (mainly `tur-sqlite`) opt in via `:web :persist
-   true`, which preloads from IDBFS at boot and calls `FS.syncfs` on
-   quit. No NODEFS in browser builds.
-4. **`*args*`.** Parsed from `?arg=foo&arg=bar` in `location.search` by
-   default; ordering follows query-string order. A
-   `turi_wasm_set_args(args[])` JS escape hatch lets `main.js` override
-   before `turi_wasm_eval`. CLAUDE.md's rule about how Turmeric code
-   reads args (`*args*` / `stdlib/args.tur` only) is unchanged.
-5. **Asset pipeline.** `web/assets/**` is preloaded into MEMFS at boot
-   via Emscripten `--preload-file`, addressable from Turmeric by the same
-   relative path the native target would use. A per-file
-   `:web :lazy-assets ["assets/music/long-track.ogg" ...]` opt-in
-   switches selected files to fetch-on-demand for cases where a big blob
-   shouldn't block startup.
-6. **`tur-raylib` audio.** Assumed working per upstream issue
-   [#690](https://github.com/raysan5/raylib/issues/690); confirmed by a
-   W2.5 spike before W3 implementation begins. The AudioContext
-   user-gesture requirement is documented as the user's responsibility;
-   no scaffolded unlock UI in v0.
-7. **Error UX.** `tur build --target web` hard-errors when the dep graph
-   contains a spice with `:web :supported false`, naming the spice(s)
-   and pointing at the compatibility matrix in this doc. No auto-stubs,
-   no alternative suggestions in the error text itself (those live in
-   the matrix).
+- `tur-http` over `fetch()` via `EM_JS`.
+- Decide rtaudio/rtmidi: AudioWorklet backend, or a separate `tur-webaudio`
+  spice that does not pretend to be rtaudio.
+- OSC-over-WebSocket bridge for `tur-scscm` / `tur-osc`.
 
 ---
 
-## Relationship to existing work
+## 11. Amended decisions
 
-- The WASM REPL (`web/`, `src/web/wasm_glue.c`) stays exactly as-is; nothing
-  in this plan touches it. The new app scaffold is a sibling target, not a
-  replacement.
-- `src/compiler/pkg.c:1375` already branches on `target == "wasm"` for
-  `emcmake`. v0 reuses that branch and adds the `:web` manifest parsing
-  alongside.
+Carried from the 2026-05-23 list, with three reversals marked.
+
+1. **Bundling.** Single monolithic `app.wasm` for v0. Reserve
+   `:web :side-module true` so per-spice lazy-loaded modules can come later.
+   *(Unchanged.)*
+2. **Threads -- REVERSED.** Was "on by default, matching the REPL." Now
+   **off by default** for the app target: `-pthread` requires COOP/COEP, which
+   GitHub Pages cannot serve, and the app target exists to be droppable on a
+   static host. `:threads true` opts in and keeps the `_headers` template.
+   Reasoning in 6.8.
+3. **Memory -- REVERSED.** Was unsettled, with the REPL's
+   `-sALLOW_MEMORY_GROWTH=1` as the implied default. Now a **fixed heap**
+   (`:heap`, default 128 MB): upstream raylib marks growth "NOT RECOMMENDED",
+   and growth causes frame-time spikes on load. Reasoning in 6.8.
+4. **File-system surface.** MEMFS by default, lost on tab close; `:persist
+   true` for IDBFS + `FS.syncfs`. No NODEFS in browser builds. *(Unchanged.)*
+5. **`*args*`.** From `?arg=foo&arg=bar`, with a `turi_wasm_set_args` escape
+   hatch. *(Unchanged.)*
+6. **Asset pipeline.** `web/assets/**` preloaded into MEMFS at the same
+   relative path the native target uses, with `:lazy-assets` as the
+   fetch-on-demand opt-out. *(Unchanged, plus the path-matching guard in
+   6.7.)*
+7. **Audio unlock -- REVERSED.** Was "the user's responsibility; no
+   scaffolded unlock UI." Now **the scaffold ships the gesture gate**: without
+   it a game is silent with no error of any kind, and the page is the only
+   place the gesture can be handled. Reasoning in 6.6.
+8. **Main loop -- AMENDED.** Was callback-only, with a "clear migration error"
+   for the blocking form, which contradicted the "runs unmodified" goal. Now
+   **both modes**, `:callback` default, `:asyncify` a supported fallback.
+   Reasoning in 6.1.
+9. **Error UX.** Hard-error when the graph holds `:supported false`, naming
+   the spice(s) and pointing at section 9. No auto-stubs. *(Unchanged.)*
+10. **Target name -- NEW.** No `--target web`. `--target wasm` already exists
+    and rejects other values; `:web` in the manifest decides whether a
+    browser shell is emitted.
+
+---
+
+## 12. Open questions
+
+Genuinely unresolved, as against the resolved list above.
+
+1. **Does raylib 5.5's CMake autodetect Emscripten?** If it sets
+   `PLATFORM=Web` on its own under `emcmake`, the `:cmake-options` plumbing in
+   W0 is a no-op for raylib and only matters for other deps. W1.5 answers
+   this; do not assume either way.
+2. **`CMAKE_POLICY_VERSION_MINIMUM` on the wasm arm.** `pkg.c:4007` applies
+   the escape hatch only when `!wasm`. Deliberate, or an oversight that will
+   surface as a configure abort the first time a low-floor dep is built for
+   web? Worth settling in W1.5 while a real configure is in hand.
+3. **Asyncify + `-pthread` together.** Both are individually supported;
+   together they are known-awkward. With threads now off by default the
+   combination may never arise -- but `:threads true` plus `:asyncify` is
+   expressible in the manifest, so either it works or the tool should refuse
+   it.
+4. **GLES2 fallback.** Is ES2 worth carrying for old mobile, or is WebGL2 the
+   floor? Decide from whatever telemetry the Try Turmeric site can offer,
+   rather than guessing.
+5. **Is `with-web-game-loop` a `raylib/web` export or an `ecs-raylib`
+   change?** The macro it twins lives in `ecs-raylib`, but the web loop is a
+   raylib concern and non-ECS games need it too. Leaning `raylib/web`, with
+   `ecs-raylib` re-exporting.
+
+---
+
+## 13. Relationship to existing work
+
+- The WASM **REPL** (`web/`, `src/web/wasm_glue.c`, the `tur_wasm` target at
+  `src/CMakeLists.txt:1914`) is untouched. The app scaffold is a sibling
+  target. Its flag set is a useful reference but not a template -- see the two
+  reversals in 6.8.
+- [docs/guides/web-emscripten-tutorial.md](../../guides/web-emscripten-tutorial.md)
+  documents the interpreter-embedding path (`turi_wasm_eval`, COOP/COEP,
+  Vite wiring). No canvas, graphics or loop coverage; no overlap. W6 adds the
+  AOT-app sibling guide.
+- `src/compiler/pkg.c:4007` already branches on `target == "wasm"` for
+  `emcmake`. v0 reuses that branch and adds `:web` parsing plus
+  `:cmake-options` passthrough alongside.
+- [godot-binding-web-plan.md](godot-binding-web-plan.md) is blocked on this
+  plan and needs its Emscripten profile to agree with ours -- particularly
+  `-sMODULARIZE` and `EXPORT_NAME`, since Godot's web export runs its own
+  `Module` instance. **Its link to this plan is stale:** it points at
+  `../wasm-spices-plan.md`, but both files now live in `hold/`, so the
+  relative path resolves to a nonexistent `docs/upcoming/wasm-spices-plan.md`.
+  Fix when either plan next moves.
 - `docs/archive/history/plutovg-spice-plan.md` and
-  `docs/archive/scscm-tidal-spices-plan.md` are consistent with this -- both
-  spices fall on the ✅ side of the matrix and would be the first non-trivial
-  demos of `tur build --target web`.
+  `docs/archive/scscm-tidal-spices-plan.md` remain consistent: both spices are
+  on the works side of the matrix and are W1's validation demo.
