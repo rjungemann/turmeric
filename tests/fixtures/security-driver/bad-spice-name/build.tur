@@ -1,0 +1,9 @@
+;;; D-5: the spice name is half of the directory `tur fetch` CREATES
+;;; (spices/<name>-<ref>), and nothing validated it.  Shell text in it reached
+;;; the git command; `..` in it chose where the fetch wrote.
+(defpackage sec-bad-spice-name
+  :name "sec-bad-spice-name"
+  :modules [main]
+  :spices #map{
+    "a;id;" #map{:url "https://example.invalid/x.git" :ref "v1"}
+  })

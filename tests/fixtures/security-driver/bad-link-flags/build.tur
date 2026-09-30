@@ -1,0 +1,8 @@
+;;; D-1: `:link-flags` is spliced into the cc command VERBATIM (it is the only
+;;; way to spell `-framework Cocoa`), and the string reached system() unexamined.
+(defpackage sec-bad-link-flags
+  :name "sec-bad-link-flags"
+  :modules [main]
+  :build-opts #map{
+    :link-flags ["-lfoo; touch PWNED"]
+  })
