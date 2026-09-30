@@ -157,10 +157,10 @@ are the predicates users actually want to write.
 Two documents in this tree list termination checking as an explicit non-goal,
 and **this plan does not reopen either of them**:
 
-- [refinement-types-plan.md](../../archive/refinement-types-plan.md), under
+- [refinement-types-plan.md](../archive/refinement-types-plan.md), under
   "Non-goals for this prototype": *"Termination checking or total-correctness
   verification."*
-- [loop-invariants-plan.md](loop-invariants-plan.md), "Explicitly not in
+- [loop-invariants-plan.md](hold/loop-invariants-plan.md), "Explicitly not in
   scope": *"A refinement says nothing about whether the loop finishes... A
   non-terminating loop with a true invariant is perfectly well-typed. Ranking
   functions / decreasing measures. Same reason."*
@@ -314,7 +314,7 @@ unchanged.
 ### 5. Diagnostic codes: the ones this plan reserved are gone
 
 Write-frames took `TUR-E0381`/`TUR-E0382`. The sibling
-[loop-invariants-plan.md](loop-invariants-plan.md) needs no codes (its
+[loop-invariants-plan.md](hold/loop-invariants-plan.md) needs no codes (its
 obligations report through `TUR-E0371`/`TUR-W0372` like `:pre`/`:post` do),
 so this plan takes the next free slots: **`TUR-E0383`** (a `^reflect` whose
 function fails the totality gate -- purity, termination, or coverage; the
@@ -570,24 +570,24 @@ Until then this file is the record, and "no measured demand" is the answer.
 
 ## References
 
-- [refinement-types-plan.md](../../archive/refinement-types-plan.md) -- the
+- [refinement-types-plan.md](../archive/refinement-types-plan.md) -- the
   parent plan; "Why checking, not inference" is the constraint this one
   inherits, and its termination non-goal is what RF0 carves out from.
-- [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
+- [refine-predicate-measures-plan.md](../archive/refine-predicate-measures-plan.md)
   -- RM-B; bool-returning measures as predicate atoms (what makes reflecting
   them worth anything) and the `ret_sort` plumbing RF3 rides.
-- [refine-float-measure-missort.md](../../archive/history/refine-float-measure-missort.md)
+- [refine-float-measure-missort.md](../archive/history/refine-float-measure-missort.md)
   -- the soundness bug that mandates RF3's `3.25` fixture discipline.
-- [checked-write-frames-plan.md](../../archive/checked-write-frames-plan.md) -- WF2's
+- [checked-write-frames-plan.md](../archive/checked-write-frames-plan.md) -- WF2's
   `WriteFrameSite` + deferred resolver is the structural template for RF0/RF1,
   and its sabotage-run convention is the acceptance style RF1/RF3 adopt.
-- [loop-invariants-plan.md](loop-invariants-plan.md) -- the sibling plan;
+- [loop-invariants-plan.md](hold/loop-invariants-plan.md) -- the sibling plan;
   shares the termination non-goal and the structure-indexed-type trigger, and
   reuses `TUR-E0371`/`TUR-W0372` rather than claiming codes of its own.
-- [../../guides/refinement-types-guide.md](../../guides/refinement-types-guide.md)
+- [../../guides/refinement-types-guide.md](../guides/refinement-types-guide.md)
   -- the supported fragment, measure rules, and purity walk this plan works
   within.
-- [../../guides/refinement-solver-internals-guide.md](../../guides/refinement-solver-internals-guide.md)
+- [../../guides/refinement-solver-internals-guide.md](../guides/refinement-solver-internals-guide.md)
   -- the staged decision procedure and its caps (the RF4 cost model).
 - Liquid Haskell, `{-@ reflect @-}` -- direct prior art for opt-in reflection
   gated on totality. Dafny's `fuel` -- prior art for bounded unfolding as the

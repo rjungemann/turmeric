@@ -704,7 +704,8 @@ its own equation. `(> (len (Cons 1 (Cons 2 (Cons 3 (Nil))))) 3)` is
 is ignored and the measure stays opaque. The plan, with what the first cut
 settled and what is still open (non-ground unfolding, counterexamples
 through a reflected measure), is
-[reflected-measures-plan.md](../upcoming/reflected-measures-plan.md).
+[reflected-measures-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
+(the docs pack carries guides, not plans, so the link is by URL).
 
 ---
 
