@@ -422,7 +422,15 @@ web: wasm web-deps
 # zeroed table repeatedly reached main via release commits. If a deploy leaves
 # stdlib/docstrings.tur dirty, that is a real regen (new/changed docstrings),
 # not noise: read the diff before discarding it.
+#
+# The spice check is deploy-only on purpose. `genspices.py` reports a missing
+# ../turmeric-spices/ checkout as a warning and produces zero spice pages, which
+# is correct for CI and for a contributor without the sibling repo -- but a
+# deploy of that pack silently drops every spice from the site, the offline pack
+# and the search index, and still exits 0. `docs` stays lenient; only this
+# recipe insists.
 deploy-web: web
+    python3 tools/check-pack-spices.py web/public/docs-pack/
     cd web && npm run deploy
 
 # Run web dev server.
