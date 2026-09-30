@@ -11,6 +11,13 @@ HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 TVM_SH="$HERE/../tvm.sh"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/tvm-test.XXXXXX")"
+# Normalize: macOS sets TMPDIR with a TRAILING SLASH, so the mktemp template
+# above yields `/var/folders/.../T//tvm-test.XXXXXX`. Paths this suite builds
+# by string concatenation keep that `//`, while anything that round-trips
+# through the shell's own cwd (`cd "$proj" && pwd`) comes back collapsed -- so
+# the .tur-version check compared two spellings of the same directory and
+# failed on every macOS host. One `cd`/`pwd` here fixes it for all of them.
+WORK="$(CDPATH= cd -- "$WORK" && pwd)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 PASS=0
@@ -131,8 +138,80 @@ if [ -f "$v99/share/turmeric/stdlib/list.tur" ]; then ok "flat install moves std
 if [ -d "$v99/stdlib" ]; then bad "flat install leaves no stdlib at the version root"; else ok "flat install leaves no stdlib at the version root"; fi
 if [ -f "$v99/include/turi/eval.h" ]; then ok "flat install keeps include/turi in place"; else bad "flat install keeps include/turi in place"; fi
 
-# checksum present + verified (install succeeded means it passed)
-ok "install verified checksum"
+# --- C-2: integrity verification fails CLOSED ------------------------------
+#
+# docs/upcoming/security-audit-plan.md C-2. The old code fell through to a
+# successful install whenever the check could not run -- an unreachable sums
+# file, an asset with no row, or a host with no sha256 tool -- three of those
+# four paths in complete silence. These four cases are the regression guard;
+# the previous suite asserted only that a GOOD install succeeds, which every
+# one of the broken paths also did.
+#
+# Each builds a release whose checksums are damaged in one specific way, then
+# asserts (a) the install is refused, (b) nothing lands in versions/, and
+# (c) --insecure is the override. `tvm install` is run in a subshell because a
+# sourced function's `return 1` must not take the suite's shell with it.
+
+# A release whose sha256sums.txt does not exist at all.
+make_release 0.90.0 flat
+rm -f "$RELDIR/v0.90.0/sha256sums.txt"
+if ( tvm install 0.90.0 >/dev/null 2>&1 ); then
+  bad "install refuses a release with no sha256sums.txt"
+else
+  ok "install refuses a release with no sha256sums.txt"
+fi
+if [ -d "$TVM_DIR/versions/0.90.0" ]; then
+  bad "refused install leaves nothing in versions/"
+else
+  ok "refused install leaves nothing in versions/"
+fi
+out="$(tvm install 0.90.0 2>&1 >/dev/null | grep -c 'could not fetch')"
+check "refusal names the sums file it could not fetch" "$out" "1"
+
+# --insecure is the documented override, and it must actually install.
+if ( tvm install --insecure 0.90.0 >/dev/null 2>&1 ) \
+   && [ -x "$TVM_DIR/versions/0.90.0/bin/tur" ]; then
+  ok "--insecure installs past a missing sha256sums.txt"
+else
+  bad "--insecure installs past a missing sha256sums.txt"
+fi
+
+# A sums file that exists but carries no row for this asset. This is the path
+# that used to be silent AND indistinguishable from success: $_want came back
+# empty, so the mismatch test was false and the install simply proceeded.
+make_release 0.91.0 flat
+echo "0000000000000000000000000000000000000000000000000000000000000000  some-other-file.tar.gz" \
+  > "$RELDIR/v0.91.0/sha256sums.txt"
+if ( tvm install 0.91.0 >/dev/null 2>&1 ); then
+  bad "install refuses an asset with no row in sha256sums.txt"
+else
+  ok "install refuses an asset with no row in sha256sums.txt"
+fi
+
+# A row that is present and WRONG. This one always worked -- it is here so a
+# future refactor cannot turn a mismatch into a refusal --insecure can wave
+# through. A failed check is not a missing check.
+make_release 0.92.0 flat
+echo "0000000000000000000000000000000000000000000000000000000000000000  turmeric-v0.92.0-$TARGET.tar.gz" \
+  > "$RELDIR/v0.92.0/sha256sums.txt"
+if ( tvm install 0.92.0 >/dev/null 2>&1 ); then
+  bad "install refuses a checksum mismatch"
+else
+  ok "install refuses a checksum mismatch"
+fi
+if ( tvm install --insecure 0.92.0 >/dev/null 2>&1 ); then
+  bad "--insecure does NOT wave through a checksum mismatch"
+else
+  ok "--insecure does NOT wave through a checksum mismatch"
+fi
+
+# The happy path still verifies: 0.99.0 installed above against a real sums
+# file, and would now be refused if the check had silently stopped running.
+if [ -x "$TVM_DIR/versions/0.99.0/bin/tur" ]; then
+  ok "install verified checksum"
+else
+  bad "install verified checksum"
+fi
 
 # ls shows it
 out="$(tvm ls | sed 's/^[* ] //;s/ .*//' | grep -c '0.99.0')"
