@@ -1,0 +1,4 @@
+TUR-E0371
+the invariant of the while loop in 'closed' does not hold on entry
+the invariant of the while loop in 'reassigned' does not hold on entry
+the predicate (>= i 0) is false for the value given here

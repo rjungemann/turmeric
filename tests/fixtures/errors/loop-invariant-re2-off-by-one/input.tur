@@ -1,0 +1,24 @@
+;; loop-invariants-plan LI3 negative controls for the RE2 shape.  `offbyone`
+;; guards with `(< i (+ n 1))`, so the last iteration's `i` is `n` -- not a
+;; valid slot.  `late` reads the slot AFTER the increment, where the loop
+;; condition no longer covers `i`: the walk drops `(< i n)` at the `set!`.
+(defn slot-get [n : int x : #refine{ j : int | (and (>= j 0) (< j n)) }] : int
+  (* x 10))
+
+(defn offbyone [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i (+ n 1)) :invariant (>= i 0)
+      (set! acc (+ acc (slot-get n i)))
+      (set! i (+ i 1)))
+    acc))
+
+(defn late [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i n) :invariant (>= i 0)
+      (set! i (+ i 1))
+      (set! acc (+ acc (slot-get n i))))
+    acc))
+
+(defn main [] : int 0)

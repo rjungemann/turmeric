@@ -1,0 +1,21 @@
+;; loop-invariants-plan LI3: what the post-loop fact buys, and that it chains.
+;; `exact` needs `i <= n AND not (i < n)`, i.e. i = n.  `down-up` runs two
+;; proved loops over the same variable: the second loop's entry sees the first
+;; one's post-fact, and the return sees only the SECOND one's -- the first
+;; loop's facts describe a value the second loop has since replaced.
+(defn exact [n : #refine{ v : int | (>= v 0) }] : #refine{ r : int | (= r n) }
+  (let [^mut i 0]
+    (while (< i n) :invariant (<= i n)
+      (set! i (+ i 1)))
+    i))
+
+(defn down-up [n : #refine{ v : int | (>= v 1) }] : #refine{ r : int | (= r 0) }
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= i 0) (set! i (+ i 1)))
+    (while (> i 0) :invariant (>= i 0) (set! i (- i 1)))
+    i))
+
+(defn main [] : int
+  (println (exact 7))
+  (println (down-up 3))
+  0)

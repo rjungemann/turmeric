@@ -38,6 +38,11 @@ typedef struct RefineStats {
     uint32_t memo_hits;         /* RT7 obligations answered from the memo */
     uint32_t path_probes;       /* RT4 per-path probes for branching bodies */
     uint32_t proven_by_path;    /* obligations discharged by path splitting */
+    /* loop-invariants-plan: while-loop invariant obligations (initiation and
+     * preservation, one per conjunct), and loops the analysis declined. */
+    uint32_t inv_proven;
+    uint32_t inv_unproven;
+    uint32_t inv_declined;
 } RefineStats;
 
 const RefineStats *refine_stats(void);
@@ -52,6 +57,17 @@ void refine_memo_reset(void);
  * would vanish from the stats -- a branching body would look like a function
  * with no refinement at all. */
 void refine_note_split_proven(void);
+
+/* loop-invariants-plan: count one invariant obligation (proven or not), or
+ * one loop the analysis declined outright. */
+void refine_note_invariant(bool proven);
+void refine_note_invariant_declined(void);
+
+/* loop-invariants-plan: the notes an E0371 (`refuted`) or W0372 carries --
+ * predicate, counterexample, hint -- for a `quiet` obligation whose headline
+ * the caller emitted itself. */
+void refine_emit_obligation_notes(const RefineObligation *ob, Arena *a,
+                                  bool refuted, bool closed);
 
 /* RT6: search for an additional hypothesis that would discharge `vc`.  This is
  * a SECOND query through the solver seam, not a heuristic -- a candidate is

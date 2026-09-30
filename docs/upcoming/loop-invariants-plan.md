@@ -1,10 +1,13 @@
 # Plan: Loop Invariants for Refinement Types (`:invariant`)
 
-> **Status:** Elaborated 2026-08-17 -- phased and sized against the real
-> elaborator, still **on hold** pending the trigger below. Not started.
-> **Last Updated:** 2026-08-17
+> **Status:** LI0--LI5 **landed 2026-09-30** behind `--enable=loop-invariants`
+> (prototype; `introduced` 0.57.0, `expires_at` 0.58.0 -- advisory). Moved out
+> of `hold/` when executed. What shipped, and where it departs from the
+> elaboration below, is recorded in [Delivered](#delivered-2026-09-30) at the
+> end; the rest of this file is the plan as elaborated.
+> **Last Updated:** 2026-09-30
 > **Type:** Compiler / Refinement types
-> **Depends on:** [refinement-types-plan.md](../../archive/refinement-types-plan.md)
+> **Depends on:** [refinement-types-plan.md](../archive/refinement-types-plan.md)
 > (RT0--RT7 + S0--S4, all landed). The `refined` graduation this plan used to
 > wait on **happened 2026-08-01** (`bb7cbef61`, shipped v0.33.0); static
 > discharge is unconditional and the old experiment clock is gone.
@@ -67,7 +70,7 @@ proves its own invariant and then nothing downstream can use it.
 The 2026-07-25 version of this file recorded zero measured demand. That is no
 longer quite true:
 
-- [ecs-refinement-typed-apis-plan.md](../v1/ecs-refinement-typed-apis-plan.md)
+- [ecs-refinement-typed-apis-plan.md](v1/ecs-refinement-typed-apis-plan.md)
   (on the v1 track) names user-written `while` invariants as its prerequisite
   **C3** and states "this plan is that signal". Its RE2 phase (bounds-checked
   slot access on sized worlds) is the concrete consumer: `for-each` lowers to
@@ -432,7 +435,7 @@ bet and elaboration confirmed it.
   A non-terminating loop with a true invariant is perfectly well-typed.
 - **Ranking functions / decreasing measures.** Same reason. (A measure's
   *definition* entering the logic is the separate
-  [reflected-measures-plan.md](reflected-measures-plan.md), which carves out
+  [reflected-measures-plan.md](hold/reflected-measures-plan.md), which carves out
   its own totality obligation without touching program termination.)
 - **`for` / `loop` surface support.** Nothing to support -- see settled
   decision 3. Macros that expand to `while` compose for free.
@@ -444,18 +447,146 @@ bet and elaboration confirmed it.
 
 ## References
 
-- [refinement-types-plan.md](../../archive/refinement-types-plan.md) -- the
+- [refinement-types-plan.md](../archive/refinement-types-plan.md) -- the
   parent plan; "Why checking, not inference" is the constraint this one
   inherits.
-- [../../guides/refinement-types-guide.md](../../guides/refinement-types-guide.md)
+- [../guides/refinement-types-guide.md](../guides/refinement-types-guide.md)
   -- the user-facing write-up; the `while` limitation is documented at
   line 954 and is what LI5 rewrites.
-- [../../guides/refinement-solver-internals-guide.md](../../guides/refinement-solver-internals-guide.md)
+- [../guides/refinement-solver-internals-guide.md](../guides/refinement-solver-internals-guide.md)
   -- pipeline, staged solver, caps.
-- [../v1/ecs-refinement-typed-apis-plan.md](../v1/ecs-refinement-typed-apis-plan.md)
+- [v1/ecs-refinement-typed-apis-plan.md](v1/ecs-refinement-typed-apis-plan.md)
   -- the demand signal (C3) and the RE2 consumer.
-- [checked-write-frames-plan.md](../../archive/checked-write-frames-plan.md) -- WF3's
+- [checked-write-frames-plan.md](../archive/checked-write-frames-plan.md) -- WF3's
   `rt_collect_set_targets` is the assignment model this plan reuses; a landed
   `#writes` frame would later let a call in the loop body stop declining.
 - Hoare (1969) -- the while rule; Floyd-Hoare initiation/preservation/use is
   the entire logical content of this plan.
+
+---
+
+## Delivered (2026-09-30)
+
+All six phases, behind `--enable=loop-invariants` (row in
+`src/runtime/experiments.c`, bit `g_opt_loop_invariants`, TUR-W0060 fired from
+`elab_while` when an `:invariant` is written). Code: `elab_while`
+(`elab_forms.c`) for LI0/LI1; the `li_*` block and `li_prove_paths_ext` in
+`elab_fns.c` for LI2/LI3; `quiet` obligations and the invariant stats line in
+`refine_discharge.c`; the TUR-E0371 / TUR-W0372 explain texts in `diag.c`.
+
+### Where it departs from the elaboration above
+
+- **The stray-keyword premise was wrong.** Settled decision 1 said a stray
+  `:invariant` "would fail elaboration rather than be silently absorbed". It
+  was silently absorbed: a keyword is a value, so `(while c :invariant p ...)`
+  evaluated `p` as a statement each iteration and checked nothing. The keyword
+  is now rejected anywhere but directly after the condition (and at most once).
+- **The body substitution is applied to the goal FORM, not carried in
+  `RefineObligation.subst`** (settled decision 4). The encoder leaves a
+  substituted name FREE when its image does not encode, and a free `acc` in
+  `p'` is the pre-body `acc` -- which proves `p'` from `p`, the one answer
+  preservation must never give by accident. A Form-level substitution that does
+  not encode fails the whole goal instead (unknown, check kept).
+- **Branching bodies are in, not deferred.** `if`/`when` split the body into
+  paths (at most 16), one preservation obligation per path under its
+  substituted branch tests; the failing path is named in the diagnostic. This
+  was the most common decline in practice.
+- **Initiation facts come from a position-aware walk (`li_walk`), not
+  `rt_build_env` alone.** The accumulator's `let` equation is what initiation
+  needs, and the WF3 whole-body filter would drop it (the loop assigns the very
+  name it mentions). The walk drops a fact only when code BEFORE the point
+  assigns or borrows what it names; a plain `(set! x v)` adds `x = v`; an
+  enclosing loop counts as having run any number of times. Call-site crossings
+  use the same walk (under the gate) when their path crosses or steps over an
+  annotated loop -- that is what gives the RE2 shape both bounds.
+- **Havoc renames the PAST, not the future** (LI3 step 2). Renaming the
+  statements after the loop handed a second proved loop a renamed copy of its
+  own form, whose invariant still spoke of `x`: two loops in a row judged the
+  final value by the FIRST loop's post-fact (a live wrong proof during
+  development; `errors/loop-invariant-post-havoc`'s `down-up`). Every hypothesis
+  already in the environment is instead rewritten so an assigned `x` reads a
+  fresh `x~liN`, and `p AND (not c)` is assumed of the current `x`.
+- **More declines than listed**, each closing a channel that rebinds a local
+  with no `set!` in the loop -- and each one a live miscompile before it was
+  closed: a name BORROWED anywhere in the function (`(& x)`, `&mut x`: an
+  alias taken before the loop reaches a writing callee inside it), and a name
+  assigned where code does not run in place (a lambda's shared cell, an
+  effect-handler clause, `defer`, any special form `li_head_runs_in_place`
+  does not allow-list). The invariant and condition may not read a field, a
+  deref or a mutable global: those heads are unresolvable, and the encoder
+  treats an unresolvable head as a congruent abstract measure.
+- **Reporting is `quiet` + caller-worded, `runtime_guarded = false`.** A
+  refuted preservation is TUR-E0371 naming the conjunct (LI4). A refuted
+  initiation is TUR-E0371 when the walk kept every fact, or when the kept facts
+  refute the goal outright (`(not q)` provable -- reported as "false for the
+  value given here"); an OPEN counterexample from a walk that dropped a fact is
+  TUR-W0372 instead, because it may rest on what was dropped.
+- **Scope of the defn-level pass.** Loops are decided by the enclosing `defn`
+  (so `main` and every ordinary function). A loop in a `definstance` method or
+  a top-level lambda keeps both runtime checks and gets no static verdict.
+
+### Pre-existing bugs found and fixed on the way
+
+- **mut-param-refinement-trusted-after-set** (miscompile). A `^mut` refined
+  parameter reassigned in the body kept its ENTRY refinement as a hypothesis:
+  `(set! n -5) n` under `n : Nat` proved a `Nat` return, elided the check, and
+  returned -5. `rt_build_env` now drops a rebound `^mut` parameter's refinement
+  (and a `:pre` naming it), and the return obligation then uses the whole body.
+  Pinned by `refine-mut-param-rebound-not-trusted`.
+- **refine-s3-cross-sort-exchange** (miscompile, found by the LI5 fuzz
+  population). S3 passed an LA-entailed equality between an Int and a Real term
+  to EUF, which holds `0` and `0.0` as distinct constants -- a manufactured
+  conflict, so `(> acc 0.0)` "followed" from `acc = 0.0` whenever an unrelated
+  Int was pinned to the same value. Every one of the fuzz soundness hits was
+  this. Terms of different sorts are no longer exchanged. Pinned by
+  `refine-no-cross-sort-exchange`.
+- **`&mut` was not a borrow to WF3.** `rt_form_borrows_name` and
+  `wf_borrow_write_free` only knew `(& x)`, so `&mut x` -- the borrow a callee
+  writes through -- was invisible to them. Both now treat it as a write
+  channel.
+
+### Fixtures
+
+Happy: `refine-loop-invariant-parses`, `loop-invariant-gate-off`,
+`loop-invariant-entry-panics`, `loop-invariant-body-panics`,
+`loop-invariant-count-up` (the header example, all three checks elided, stats
+line pinned), `refine-loop-invariant-re2` (both bounds, a post-loop crossing,
+the `for-slots` macro prototype of the `for-each` lowering),
+`loop-invariant-branching`, `loop-invariant-post-loop`,
+`loop-invariant-strict-bare-loop`, `loop-invariant-declines`,
+`refine-mut-param-rebound-not-trusted`, `refine-no-cross-sort-exchange`.
+Errors: `loop-invariant-effectful`, `loop-invariant-not-bool`,
+`loop-invariant-misplaced`, `loop-invariant-entry-false`,
+`loop-invariant-not-preserved`, `loop-invariant-post-havoc` (the sabotage
+fixture: skip the rename in `li_prove_paths_ext` and it fails),
+`loop-invariant-strict-unproven`, `loop-invariant-re2-off-by-one`,
+`loop-invariant-unseen-writes`.
+
+### Fuzz
+
+`tests/refine-fuzz-src.py` gained `shape_loop` (true, sabotaged, branching and
+must-decline bodies; int and float accumulators) in the default mix and
+`--only-shape loop`; both legs pass `--enable=loop-invariants`.
+The first two `--only-shape loop --n 400` runs (seeds 11, 23) found **12
+soundness bugs -- every one the S3 cross-sort exchange above**, reached
+through the float accumulator beside the int counter. After that fix:
+
+| run | cases | proven / refuted | soundness bugs | other BUG | suspicious (report-only) |
+|---|---|---|---|---|---|
+| `--only-shape loop --seed 11` | 400 | 715 / 383 | **0** | 0 | 12 |
+| `--only-shape loop --seed 23` | 400 | 665 / 404 | **0** | 0 | 6 |
+| default mix `--seed 41` | 400 | 441 / 416 | **0** | 0 | 4 |
+
+The "suspicious" rows are universal refutations (TUR-E0371 over all inputs)
+of programs whose `main` happens not to pass a violating argument -- the
+harness's documented report-only class.
+
+### Left open
+
+- Graduation, on the experiment lifecycle (the row's `expires_at` forces the
+  review, not the date it happens).
+- A nested loop that assigns still declines the outer loop; a `when` guarding
+  an early `return` still declines the whole loop.
+- The ECS `for-each` lowering itself (RE2) has not started -- it waits on its
+  own profile. What it needs from here is one `:invariant (>= i 0)` in its
+  expansion.

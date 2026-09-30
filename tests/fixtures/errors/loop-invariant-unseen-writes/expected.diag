@@ -1,0 +1,2 @@
+the invariant of the while loop in 'alias' is not analysed statically: 'acc' is borrowed
+the invariant of the while loop in 'handler' is not analysed statically: 'acc' is borrowed, or assigned inside a lambda or handler clause

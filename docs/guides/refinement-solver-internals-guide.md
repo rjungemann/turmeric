@@ -104,6 +104,78 @@ in `refine_collect.h:114`):
   owes the proof*.
 - **`speculative` / `path_probe`** -- probes used by template inference (RT4)
   and path splitting; they are decided but report nothing and count nothing.
+- **`quiet`** -- decided and counted like any obligation (stats, memo,
+  refutation search), but reports nothing: the verdict is recorded
+  (`refuted`, `refuted_closed`, `unknown_reason`) and the caller words the
+  headline and attaches the shared notes with `refine_emit_obligation_notes`.
+  Loop invariants use it, because "the body does not preserve `(>= acc 0)`" is
+  not a sentence the generic "refinement on X" reporter can build.
+
+### Loop invariants (experimental, `--enable=loop-invariants`)
+
+`elab_while` parses `:invariant p`, validates it (pure `bool`), injects the two
+runtime checks (entry; last statement of the body) and records a
+`LoopInvSite` (`elab_internal.h`): the source forms, the two check slots, and
+the **sort of every local in scope** -- a name the environment does not
+declare defaults to Int, which for a float local would let S2's integer
+tightening prove a falsehood. The enclosing `defn` decides its sites once its
+body is elaborated (`li_analyze_loops`, `elab_fns.c`), BEFORE its return
+obligations, and a proof overwrites the matching check slot with nil.
+
+| # | obligation | environment | goal |
+|---|---|---|---|
+| 1 | initiation | the entry walk's facts | each conjunct of `p` |
+| 2 | preservation | entry facts not naming an assigned variable, `p`, `c`, the path's branch tests | each conjunct of `p` under the path's substitution |
+| 3 | use | -- | `p AND (not c)` after the loop, once 1 and 2 are proved |
+
+Three pieces, each deliberately small:
+
+- **The entry walk (`li_walk`)** descends the function body to a point and
+  collects what holds there: `if` conditions, `let` equations, a plain
+  `(set! x v)`'s `x = v`, a proved loop's post-fact, a loop's `p` and `c` inside
+  its body. It is *position-aware*: a statement before the point drops the
+  facts naming what it assigns or borrows; an enclosing loop counts as having
+  run any number of times; a lambda body starts empty; a special form whose
+  binders it cannot read forfeits every fact naming a symbol it holds. Unlike
+  the crossing walk's WF3 whole-body filter, an assignment AFTER the point does
+  not stale a fact at it -- which is what lets a crossing inside a loop body
+  keep `p` and `c` when the loop assigns the very names they mention.
+  Call-site crossings use this walk (under the gate) whenever their path
+  crosses or steps over an annotated loop.
+- **The body composer (`li_compose`)** turns the body into one sequential
+  substitution per path (`if`/`when` split the path set, at most 16). It is
+  applied to the goal as a FORM, not handed to the encoder as `RefineSubst`:
+  the encoder leaves a substituted name FREE when its image does not encode,
+  and a free `acc` in `p'` is the pre-body `acc` -- which would prove `p'` from
+  `p`, the one answer preservation must never give by accident.
+- **The post-loop step (`li_prove_paths_ext`)** extends `rt_prove_paths`' `do`
+  case. Havoc is done by renaming the PAST: every hypothesis already in the
+  environment is rewritten so an assigned `x` reads `x~liN`, then `p` and
+  `(not c)` are assumed of the current `x`. Renaming the future instead gave a
+  second loop a renamed copy of its own form whose invariant still spoke of
+  `x`, and two proved loops in a row judged the final value by the first one's
+  post-fact -- a live wrong proof during development. The same function reads a
+  multi-binding / multi-body `let` as the nested single-binding lets it means.
+
+**Declines, and the channel each one closes.** A loop is declined (both checks
+kept) rather than modelled when a variable it depends on can change with no
+`set!` in the loop: borrowed anywhere in the function (`&`, `&mut` -- an alias
+taken before the loop reaches a writing callee inside it), or assigned where
+code does not run in place (a lambda, which lives in a shared cell; an
+effect-handler clause, which runs during a `perform`; a `defer`; any special
+form `li_head_runs_in_place` does not allow-list). The invariant and condition
+may not read a field, a deref or a mutable global -- those are unresolvable
+heads the encoder treats as congruent abstract measures, and a call between
+two occurrences could change them. Early exits, place writes, nested
+assigning loops and shadowing body `let`s decline as listed in the user guide.
+Every one of those shapes was a live miscompile at some point during
+development, and `tests/fixtures/errors/loop-invariant-unseen-writes` and
+`loop-invariant-declines` pin them.
+
+**Sabotage.** `errors/loop-invariant-post-havoc` is the check that the havoc
+is load-bearing: skip the environment rename in `li_prove_paths_ext` and its
+`stale` function proves `(= r 0)` of a loop counter, its return check is
+elided, and the fixture fails for want of its diagnostic.
 
 ---
 
@@ -443,7 +515,8 @@ help: (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) 
   up a called function's return refinement and purity. A `NULL` resolver
   disables result propagation and purity discrimination -- every call falls back
   to the safe fresh-per-occurrence encoding. Obligations are created from
-  `elab_fns.c` (returns / `:post`) and `elab_call.c` (arguments).
+  `elab_fns.c` (returns / `:post` / loop invariants) and `elab_call.c`
+  (arguments).
 - **Effect system.** Purity for congruence is decided against the effect
   whitelist described above; the `#fx{...}` row is a veto. See the
   [effects-system-guide.md](effects-system-guide.md) for the effect rows

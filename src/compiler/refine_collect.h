@@ -235,6 +235,16 @@ typedef struct RefineObligation {
      * deciding whether a cap is worth raising wants to know which. Summing
      * them is one addition; separating them after the fact is impossible. */
     RefineCapStats caps_probe;
+    /* loop-invariants-plan: decide it and RECORD the verdict, but report
+     * nothing -- the caller words the headline, because "the loop does not
+     * preserve (>= acc 0)" is not a sentence the generic reporter can build.
+     * Stats, the RT7 memo and the refutation search run exactly as for a
+     * reported obligation; refine_emit_obligation_notes then attaches the
+     * same notes an E0371 / W0372 carries. */
+    bool         quiet;
+    bool         refuted;         /* quiet: a counterexample was found      */
+    bool         refuted_closed;  /* quiet: ... and the goal was ground      */
+    const char  *unknown_reason;  /* quiet: why it could not be encoded     */
 } RefineObligation;
 
 typedef struct RefineObligationVec {

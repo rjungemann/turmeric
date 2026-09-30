@@ -16,12 +16,14 @@ Unlike `-X`, which conflated "in development", "stable but opt-in", and
 every flag carries a hard expiry by which it must graduate or be removed.
 
 > **The registry is small by design.** Run `tur experiments` for the
-> authoritative current set (at the time of writing it holds one row:
+> authoritative current set (at the time of writing it holds two rows:
 > `r7rs` -- the `#lang r7rs` Scheme dialect, see
 > [r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md),
 > whose `#lang` line is itself the enable, so it is never written as
-> `--enable=r7rs`); this guide describes how the mechanism behaves for
-> whatever rows are present.
+> `--enable=r7rs`; and `loop-invariants` -- `(while c :invariant p ...)`, see
+> [loop-invariants-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md));
+> this guide describes how the mechanism behaves for whatever rows are
+> present.
 
 ## Opting in
 

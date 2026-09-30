@@ -1,0 +1,18 @@
+;; loop-invariants-plan LI2/LI3: the plan's header example.  Under
+;; --strict-refine any unproven obligation is an error, so this compiling at
+;; all says every one was discharged: the invariant's initiation and
+;; preservation (per conjunct), and the RETURN refinement, which only follows
+;; from the post-loop fact `p AND (not c)`.  hook.sh also pins that the
+;; emitted C carries none of the three runtime checks.
+(defn count-up [n : int] : #refine{ r : int | (>= r 0) }
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+      (set! acc (+ acc 1))
+      (set! i   (+ i 1)))
+    acc))
+
+(defn main [] : int
+  (println (count-up 5))
+  (println (count-up 0))
+  0)

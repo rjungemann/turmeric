@@ -1,0 +1,14 @@
+;; loop-invariants-plan LI1: an invariant the body breaks panics at the end of
+;; the iteration that broke it.  `delta` is opaque to the solver, so the
+;; preservation obligation is undecided (W0372) and the check stays.
+(defn delta [i : int] : int (if (> i 1) -10 1))
+
+(defn f [n : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= i 0)
+      (set! i (+ i (delta i))))
+    i))
+
+(defn main [] : int
+  (println (f 5))
+  0)

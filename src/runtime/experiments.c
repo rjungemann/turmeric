@@ -417,6 +417,21 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.57.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_BETA,
       &g_opt_r7rs },
+    /* loop-invariants (docs/upcoming/loop-invariants-plan.md) -- a `while` may
+     * carry a user-WRITTEN `:invariant <pred>` (checking, never inference).
+     * Follows the `#writes` precedent: the annotation always parses and is
+     * validated (bool, pure); the gate withholds the acting -- the entry and
+     * re-establishment runtime checks, the Hoare initiation/preservation
+     * obligations that elide them, and the post-loop fact `p AND (not c)`.
+     * A prototype: the decline list (place writes, early exits, nested
+     * loops, borrowed locals) is the part expected to move. */
+    { "loop-invariants",
+      "`(while c :invariant p ...)` -- user-written loop invariants: runtime-checked, statically discharged, usable after the loop",
+      "docs/upcoming/loop-invariants-plan.md",
+      "0.57.0",                  /* introduced */
+      "0.58.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_loop_invariants },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

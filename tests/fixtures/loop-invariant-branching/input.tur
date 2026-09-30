@@ -1,0 +1,25 @@
+;; loop-invariants-plan: a body that assigns under `if` / `when` is checked
+;; path by path -- one preservation obligation per path, each under the branch
+;; tests that select it (substituted, so they speak of the state at the top of
+;; the body).  --strict-refine: everything here discharges.
+(defn evens [n : int] : #refine{ r : int | (>= r 0) }
+  (let [^mut i   0
+        ^mut cnt 0]
+    (while (< i n) :invariant (and (>= cnt 0) (<= cnt i) (>= i 0))
+      (when (= (mod i 2) 0)
+        (set! cnt (+ cnt 1)))
+      (set! i (+ i 1)))
+    cnt))
+
+(defn clampy [n : int] : #refine{ r : int | (and (>= r 0) (<= r 10)) }
+  (let [^mut x 0
+        ^mut i 0]
+    (while (< i n) :invariant (and (>= x 0) (<= x 10))
+      (if (> x 5) (set! x (- x 1)) (set! x (+ x 3)))
+      (set! i (+ i 1)))
+    x))
+
+(defn main [] : int
+  (println (evens 7))
+  (println (clampy 9))
+  0)

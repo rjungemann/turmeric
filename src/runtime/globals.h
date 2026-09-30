@@ -383,6 +383,10 @@ extern bool g_opt_saffron_gc;
  * LangTraits.dynamic (g_opt_dynamic_any) and its reader rides
  * SourceFile.reader_type == READER_R7RS, both per-file. */
 extern bool g_opt_r7rs;
+/* loop-invariants-plan LI0: `--enable=loop-invariants`.  A `while` with a
+ * written `:invariant` always PARSES; this bit gates the acting -- runtime
+ * checks, static discharge, and the post-loop fact. */
+extern bool g_opt_loop_invariants;
 extern bool g_opt_r7rs_gc;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value

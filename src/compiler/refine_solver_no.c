@@ -37,6 +37,22 @@ static uint32_t collect_shared(EufState *euf, VCTerm **out, uint32_t cap) {
     return n;
 }
 
+/* Only terms of the SAME sort are exchanged.
+ *
+ * LA reasons over the rationals, where an Int `i` and a Real `acc` are just two
+ * numbers: `i = 0, acc = 0.0` entails `i = acc`.  EUF, handed that equality,
+ * merges `i`'s class (holding the Int constant 0) with `acc`'s (holding the
+ * Real constant 0.0) -- two DISTINCT constants in one class, a conflict, so the
+ * cube "is unsat" and the goal "is valid".  That proved `(> acc 0.0)` from
+ * `acc = 0.0` whenever an unrelated Int variable pinned to the same value was
+ * in scope, and elided the check that would have caught it (found by the
+ * loop-invariant fuzz population, whose int counter sits beside a float
+ * accumulator; reproduced with a plain `:pre`).  Not exchanging across sorts
+ * only withholds information, which is the safe direction. */
+static bool no_same_sort(const VCTerm *a, const VCTerm *b) {
+    return a && b && a->sort == b->sort;
+}
+
 /* Decide a single cube by running both theories and exchanging entailed
  * equalities to a fixpoint.  Returns true when the cube is refuted. */
 /* `shared_euf` non-NULL selects the SX3 incremental path: the caller owns one
@@ -69,6 +85,7 @@ static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c,
          * a linear equation. */
         for (uint32_t i = 0; i < n_shared; i++) {
             for (uint32_t j = i + 1; j < n_shared; j++) {
+                if (!no_same_sort(shared[i], shared[j])) continue;
                 if (!euf_equal(euf, shared[i], shared[j])) continue;
                 if (la_entails_eq(la, shared[i], shared[j])) continue;  /* already known */
                 la_assert_eq(la, shared[i], shared[j]);
@@ -80,6 +97,7 @@ static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c,
         /* LA -> EUF: every equality the arithmetic entails becomes a union. */
         for (uint32_t i = 0; i < n_shared; i++) {
             for (uint32_t j = i + 1; j < n_shared; j++) {
+                if (!no_same_sort(shared[i], shared[j])) continue;
                 if (euf_equal(euf, shared[i], shared[j])) continue;
                 if (!la_entails_eq(la, shared[i], shared[j])) continue;
                 progress = true;

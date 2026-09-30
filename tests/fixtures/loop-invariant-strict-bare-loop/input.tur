@@ -1,0 +1,14 @@
+;; loop-invariants-plan settled decision 6: a `while` with no `:invariant`
+;; generates no obligation, so --strict-refine has nothing to promote -- with
+;; the gate on, a bare loop stays exactly as silent as it was.
+(defn sum-to [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n)
+      (set! acc (+ acc i))
+      (set! i (+ i 1)))
+    acc))
+
+(defn main [] : int
+  (println (sum-to 5))
+  0)

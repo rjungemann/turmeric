@@ -1,0 +1,11 @@
+;; loop-invariants-plan LI0: an invariant is a contract predicate and takes the
+;; same purity gate (TUR-E0375) -- with or without the experiment gate, since
+;; the annotation is always validated.
+(def ^mut counter 0)
+(defn tick [] : int (set! counter (+ counter 1)) counter)
+
+(defn main [] : int
+  (let [^mut i 0]
+    (while (< i 3) :invariant (>= (tick) 0)
+      (set! i (+ i 1))))
+  0)

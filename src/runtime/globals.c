@@ -124,6 +124,7 @@ const char *g_repl_start_lang = NULL; /* saffron-lang-plan S8 / r7rs R9: `tur re
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
 bool g_opt_r7rs = false;         /* r7rs-lang-plan D11: set by the `#lang r7rs` line, never by a flag */
+bool g_opt_loop_invariants = false; /* loop-invariants-plan: `--enable=loop-invariants` */
 bool g_opt_r7rs_gc = true;       /* r7rs-gc (graduated 2026-09-25): a compiled `#lang r7rs` program's allocator is the collector; TUR_R7RS_GC=0 or --no-r7rs-gc opts out (docs/archive/r7rs-gc-plan.md) */
 bool g_opt_saffron_gc = true;   /* any-widen-stored-in-an-adt-field-has-no-owner (2026-09-28): a compiled single-unit `#lang saffron` program's allocator is the r7rs-gc collector; TUR_SAFFRON_GC=0 or --no-saffron-gc opts out */
 bool g_opt_dynamic_any = false;  /* graduated 2026-09-10 as g_opt_saffron; set by any dynamic-language `#lang` file, not by a flag */
