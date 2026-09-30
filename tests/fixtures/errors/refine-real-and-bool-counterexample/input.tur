@@ -1,0 +1,20 @@
+;; RT3: the bounded model search covers Real and Bool variables.
+;;
+;; Until 2026-09-29 it declined any VC with a non-Int variable, so a float
+;; function whose return refinement is plainly false got only the vague
+;; TUR-W0372 and no witness, and so did anything with a bool parameter in
+;; its predicate.  Reals are evaluated in double -- which is not an
+;; approximation of the runtime check but exactly it -- so a real witness
+;; is a value the program would reject.
+(defn lift [x : #refine{ v : float | (> v 0.0) }] : #refine{ r : float | (> r 1.5) }
+  x)
+
+;; With flag = true the precondition admits x = 0, and r = 0 is not > 0.
+(defn pick [flag : bool x : int] : #refine{ r : int | (> r 0) }
+  :pre (or flag (> x 0))
+  x)
+
+(defn main [] : int
+  (println (lift 2.5))
+  (println (pick false 3))
+  0)

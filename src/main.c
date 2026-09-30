@@ -11006,6 +11006,8 @@ static void smt_print_model(const RefineModel *m) {
         const RefineModelBinding *b = &m->bindings[i];
         if (b->is_real)
             printf("  (define-fun %s () Real %g)\n", b->name, b->rval);
+        else if (b->is_bool)
+            printf("  (define-fun %s () Bool %s)\n", b->name, b->ival ? "true" : "false");
         else
             printf("  (define-fun %s () Int %lld)\n", b->name, (long long)b->ival);
     }

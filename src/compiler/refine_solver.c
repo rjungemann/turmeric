@@ -271,6 +271,13 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
  * VALUE set rather than a structural quantity, and nothing has asked. */
 #define MODEL_MAX_CANDS 16
 
+/* A candidate or evaluated value.  Ints stay exact int64 (overflow-checked);
+ * anything touching a real is evaluated in DOUBLE, which is not an
+ * approximation of the runtime check but exactly it: the emitted contract
+ * evaluates the predicate in C double arithmetic, so a double-evaluated
+ * witness is one the program would reject.  Bools ride in `i` as 0 / 1. */
+typedef struct { bool is_real; int64_t i; double r; } MVal;
+
 /* reflected-measures RF6: an application's value is READ OFF ITS OWN
  * DEFINITIONAL EQUATION.  The encoder asserts `f(t) = <body at t>` (or the
  * iff pair for a Bool measure) for every reflected application it unfolded;
@@ -286,19 +293,16 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
 
 typedef struct {
     const VCTerm *app;   /* a VC_APP of a reflected measure */
-    const VCTerm *def;   /* what it equals (Int) / is equivalent to (Bool) */
+    const VCTerm *def;   /* what it equals (Int/Real) / is equivalent to (Bool) */
 } ModelDef;
 
 typedef struct {
-    const int64_t  *vals;   /* one per VC variable */
+    const MVal     *vals;   /* one per VC variable */
     bool            fail;   /* evaluation hit overflow / an opaque term */
     const ModelDef *defs;
     uint32_t        n_defs;
     uint32_t        depth;  /* definitional recursion guard */
 } EvalCtx;
-
-static int64_t eval_arith(EvalCtx *E, const VCTerm *t);
-static bool    eval_bool(EvalCtx *E, const VCTerm *t);
 
 static const VCTerm *model_def_of(const EvalCtx *E, const VCTerm *app) {
     for (uint32_t i = 0; i < E->n_defs; i++)
@@ -306,11 +310,6 @@ static const VCTerm *model_def_of(const EvalCtx *E, const VCTerm *app) {
     return NULL;
 }
 
-/* Collect the definitional equations from the hypotheses: `(= app rhs)` for
- * an Int measure, `(and (=> app q) (=> q app))` for a Bool one -- exactly the
- * shapes refine_collect.c's rf_def asserts.  Only a REFLECTED symbol's
- * application is admitted as a definition; an equation that happens to
- * mention a constructor application defines nothing. */
 static inline RefineVC *vc_mutable(const RefineVC *vc) { return (RefineVC *)vc; }
 
 /* An implication as the builder stores it: `(=> a b)` is normalized to
@@ -325,6 +324,12 @@ static bool model_impl_parts(const VCTerm *t, const VCTerm **a, const VCTerm **b
     return false;
 }
 
+/* Collect the definitional equations from the hypotheses: `(= app rhs)` for
+ * a value measure, the iff pair for a Bool one (`p <=> true` folds to the
+ * bare atom and `p <=> false` to its negation at construction) -- exactly
+ * the shapes refine_collect.c's rf_def asserts.  Only a REFLECTED symbol's
+ * application is admitted as a definition; an equation that happens to
+ * mention a constructor application defines nothing. */
 static uint32_t model_collect_defs(const RefineVC *vc, ModelDef *out, uint32_t cap) {
     uint32_t n = 0;
     for (uint32_t i = 0; i < vc->n_hyps && n < cap; i++) {
@@ -334,15 +339,11 @@ static uint32_t model_collect_defs(const RefineVC *vc, ModelDef *out, uint32_t c
             if (h->kids[0]->op == VC_APP)      { app = h->kids[0]; def = h->kids[1]; }
             else if (h->kids[1]->op == VC_APP) { app = h->kids[1]; def = h->kids[0]; }
         } else if (h->op == VC_APP && h->sort == VS_BOOL) {
-            /* `p <=> true` folds to the bare atom at construction. */
             app = h; def = vc_bool(vc_mutable(vc), true);
         } else if (h->op == VC_NOT && h->n == 1 && h->kids[0]->op == VC_APP &&
                    h->kids[0]->sort == VS_BOOL) {
-            /* ... and `p <=> false` to its negation. */
             app = h->kids[0]; def = vc_bool(vc_mutable(vc), false);
         } else if (h->op == VC_AND && h->n == 2) {
-            /* The iff pair `(and (=> p q) (=> q p))`, in whichever order and
-             * spelling the builder left it. */
             const VCTerm *a1, *b1, *a2, *b2;
             if (model_impl_parts(h->kids[0], &a1, &b1) &&
                 model_impl_parts(h->kids[1], &a2, &b2) && a1 == b2 && b1 == a2) {
@@ -361,11 +362,18 @@ static uint32_t model_collect_defs(const RefineVC *vc, ModelDef *out, uint32_t c
     return n;
 }
 
+static MVal eval_arith(EvalCtx *E, const VCTerm *t);
+
+static inline double mv_d(MVal v) { return v.is_real ? v.r : (double)v.i; }
+
 static bool eval_bool(EvalCtx *E, const VCTerm *t) {
     if (E->fail) return false;
     switch (t->op) {
         case VC_TRUE:  return true;
         case VC_FALSE: return false;
+        case VC_VAR:
+            if (t->sort != VS_BOOL) { E->fail = true; return false; }
+            return E->vals[t->as.idx].i != 0;
         case VC_NOT:   return !eval_bool(E, t->kids[0]);
         case VC_AND:
             for (uint32_t i = 0; i < t->n; i++) if (!eval_bool(E, t->kids[i])) return false;
@@ -374,23 +382,25 @@ static bool eval_bool(EvalCtx *E, const VCTerm *t) {
             for (uint32_t i = 0; i < t->n; i++) if (eval_bool(E, t->kids[i])) return true;
             return false;
         case VC_EQ: case VC_LT: case VC_LE: {
-            /* RF6: an equality between two PROPOSITIONS (a Bool measure's
-             * `(= p q)` spelling) evaluates as an iff. */
-            if (t->op == VC_EQ && t->kids[0]->sort == VS_BOOL && t->kids[1]->sort == VS_BOOL) {
-                bool a = eval_bool(E, t->kids[0]);
-                bool b = eval_bool(E, t->kids[1]);
-                return E->fail ? false : (a == b);
+            if (t->kids[0]->sort == VS_BOOL || t->kids[1]->sort == VS_BOOL) {
+                /* (= p q) over propositions: iff. */
+                if (t->op != VC_EQ) { E->fail = true; return false; }
+                bool a = eval_bool(E, t->kids[0]), b = eval_bool(E, t->kids[1]);
+                return !E->fail && a == b;
             }
-            int64_t a = eval_arith(E, t->kids[0]);
-            int64_t b = eval_arith(E, t->kids[1]);
+            MVal a = eval_arith(E, t->kids[0]);
+            MVal b = eval_arith(E, t->kids[1]);
             if (E->fail) return false;
-            return t->op == VC_EQ ? (a == b) : t->op == VC_LT ? (a < b) : (a <= b);
+            if (a.is_real || b.is_real) {
+                double x = mv_d(a), y = mv_d(b);
+                return t->op == VC_EQ ? (x == y) : t->op == VC_LT ? (x < y) : (x <= y);
+            }
+            return t->op == VC_EQ ? (a.i == b.i) : t->op == VC_LT ? (a.i < b.i) : (a.i <= b.i);
         }
         case VC_IMPLIES: {
             bool a = eval_bool(E, t->kids[0]);
             if (E->fail) return false;
-            if (!a) return true;
-            return eval_bool(E, t->kids[1]);
+            return !a || eval_bool(E, t->kids[1]);
         }
         case VC_APP: {
             /* RF6: a reflected Bool measure at an unfolded application. */
@@ -407,56 +417,88 @@ static bool eval_bool(EvalCtx *E, const VCTerm *t) {
     }
 }
 
-static int64_t eval_arith(EvalCtx *E, const VCTerm *t) {
-    if (E->fail) return 0;
-    int64_t a, b, r = 0;
+static MVal mv_int(int64_t i)  { MVal v = { false, i, 0.0 }; return v; }
+static MVal mv_real(double r)  { MVal v = { true, 0, r };    return v; }
+
+static MVal eval_arith(EvalCtx *E, const VCTerm *t) {
+    MVal a, b; int64_t r = 0;
+    if (E->fail) return mv_int(0);
     switch (t->op) {
-        case VC_CONST_INT: return t->as.i;
-        case VC_VAR:       return E->vals[t->as.idx];
+        case VC_CONST_INT:  return mv_int(t->as.i);
+        case VC_CONST_REAL: return mv_real(t->as.r);
+        case VC_VAR:
+            if (t->sort == VS_BOOL) { E->fail = true; return mv_int(0); }
+            return E->vals[t->as.idx];
         case VC_NEG:
             a = eval_arith(E, t->kids[0]);
-            if (E->fail || __builtin_sub_overflow((int64_t)0, a, &r)) { E->fail = true; return 0; }
-            return r;
+            if (E->fail) return mv_int(0);
+            if (a.is_real) return mv_real(-a.r);
+            if (__builtin_sub_overflow((int64_t)0, a.i, &r)) { E->fail = true; return mv_int(0); }
+            return mv_int(r);
         case VC_ADD: case VC_SUB: case VC_MUL: case VC_DIV: case VC_MOD:
             a = eval_arith(E, t->kids[0]);
             b = eval_arith(E, t->kids[1]);
-            if (E->fail) return 0;
+            if (E->fail) return mv_int(0);
+            if (a.is_real || b.is_real) {
+                /* C promotes the int operand; `mod` has no double form in the
+                 * predicate language, and a zero divisor would give an
+                 * inf/nan the fragment does not model -- decline both. */
+                double x = mv_d(a), y = mv_d(b);
+                switch (t->op) {
+                    case VC_ADD: return mv_real(x + y);
+                    case VC_SUB: return mv_real(x - y);
+                    case VC_MUL: return mv_real(x * y);
+                    case VC_DIV: if (y == 0.0) { E->fail = true; return mv_int(0); }
+                                 return mv_real(x / y);
+                    default:     E->fail = true; return mv_int(0);
+                }
+            }
             switch (t->op) {
-                case VC_ADD: if (__builtin_add_overflow(a, b, &r)) E->fail = true; return r;
-                case VC_SUB: if (__builtin_sub_overflow(a, b, &r)) E->fail = true; return r;
-                case VC_MUL: if (__builtin_mul_overflow(a, b, &r)) E->fail = true; return r;
-                case VC_DIV: if (b == 0) { E->fail = true; return 0; } return a / b;
-                default:     if (b == 0) { E->fail = true; return 0; } return a % b;
+                case VC_ADD: if (__builtin_add_overflow(a.i, b.i, &r)) E->fail = true; return mv_int(r);
+                case VC_SUB: if (__builtin_sub_overflow(a.i, b.i, &r)) E->fail = true; return mv_int(r);
+                case VC_MUL: if (__builtin_mul_overflow(a.i, b.i, &r)) E->fail = true; return mv_int(r);
+                case VC_DIV: if (b.i == 0 || (a.i == INT64_MIN && b.i == -1)) { E->fail = true; return mv_int(0); }
+                             return mv_int(a.i / b.i);
+                default:     if (b.i == 0 || (a.i == INT64_MIN && b.i == -1)) { E->fail = true; return mv_int(0); }
+                             return mv_int(a.i % b.i);
             }
         case VC_APP: {
-            /* RF6: a reflected Int measure at an unfolded application. */
-            const VCTerm *d = t->sort == VS_INT ? model_def_of(E, t) : NULL;
-            if (!d || E->depth >= MODEL_DEF_DEPTH) { E->fail = true; return 0; }
+            /* RF6: a reflected Int/Real measure at an unfolded application. */
+            const VCTerm *d = t->sort != VS_BOOL ? model_def_of(E, t) : NULL;
+            if (!d || E->depth >= MODEL_DEF_DEPTH) { E->fail = true; return mv_int(0); }
             E->depth++;
-            int64_t v = eval_arith(E, d);
+            MVal v = eval_arith(E, d);
             E->depth--;
             return v;
         }
         default:
-            E->fail = true;   /* VC_CONST_REAL, ... */
-            return 0;
+            E->fail = true;   /* an opaque term */
+            return mv_int(0);
     }
 }
 
-static void collect_lits(const VCTerm *t, int64_t *out, uint32_t *n, uint32_t cap) {
+/* Every numeric literal in the VC, as a double, for the candidate sets. */
+static void collect_lits(const VCTerm *t, MVal *out, uint32_t *n, uint32_t cap) {
     if (!t || *n >= cap) return;
-    if (t->op == VC_CONST_INT) {
-        for (uint32_t i = 0; i < *n; i++) if (out[i] == t->as.i) return;
-        out[(*n)++] = t->as.i;
+    if (t->op == VC_CONST_INT || t->op == VC_CONST_REAL) {
+        MVal v = t->op == VC_CONST_INT ? mv_int(t->as.i) : mv_real(t->as.r);
+        for (uint32_t i = 0; i < *n; i++)
+            if (out[i].is_real == v.is_real && (v.is_real ? out[i].r == v.r : out[i].i == v.i)) return;
+        out[(*n)++] = v;
         return;
     }
     for (uint32_t i = 0; i < t->n; i++) collect_lits(t->kids[i], out, n, cap);
 }
 
-static void add_cand(int64_t *c, uint32_t *n, int64_t v) {
+static void add_cand_int(MVal *c, uint32_t *n, int64_t v) {
     if (*n >= MODEL_MAX_CANDS) return;
-    for (uint32_t i = 0; i < *n; i++) if (c[i] == v) return;
-    c[(*n)++] = v;
+    for (uint32_t i = 0; i < *n; i++) if (c[i].i == v) return;
+    c[(*n)++] = mv_int(v);
+}
+static void add_cand_real(MVal *c, uint32_t *n, double v) {
+    if (*n >= MODEL_MAX_CANDS) return;
+    for (uint32_t i = 0; i < *n; i++) if (c[i].r == v) return;
+    c[(*n)++] = mv_real(v);
 }
 
 RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
@@ -467,20 +509,10 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
     if (vc->n_ufuncs > 0 && !vc->reflect_model_ok) return NULL;
     ModelDef defs[MODEL_MAX_DEFS];
     uint32_t n_defs = vc->n_ufuncs > 0 ? model_collect_defs(vc, defs, MODEL_MAX_DEFS) : 0;
-    /* Which variables are ENUMERATED: every variable but a nullary
-     * constructor, which is a free constant and gets a fixed distinct value
-     * below (and stays out of the printed model). */
-    bool is_const[MODEL_MAX_VARS + 64];
-    memset(is_const, 0, sizeof(is_const));
-    uint32_t n_enum = 0;
-    for (uint32_t i = 0; i < vc->n_vars; i++) {
-        bool c = false;
-        for (uint32_t j = 0; j < vc->n_ctor_consts; j++)
-            if (vc->ctor_consts[j] == i) { c = true; break; }
-        if (i < sizeof(is_const) / sizeof(is_const[0])) is_const[i] = c;
-        if (!c) n_enum++;
-    }
-    if (vc->n_vars >= sizeof(is_const) / sizeof(is_const[0])) return NULL;
+    /* A hypothesis the encoder left out would make any witness suspect: the
+     * dropped fact may exclude it.  Declining costs a refutation, never a
+     * proof -- and the alternative was a hard error on a correct program. */
+    if (vc->hyps_dropped) return NULL;
     /* n_vars == 0 is allowed and is the IMPORTANT case: a call site with
      * literal arguments (`(safe-div 10 0)`) has a closed goal, so one
      * evaluation decides it outright.  The odometer below runs exactly once and
@@ -489,67 +521,84 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
     /* Past the uninterpreted-symbol gate, so this VC could plausibly use the
      * search at SOME cap -- which is what makes its width worth recording.
      * The peak is real, not saturating: n_vars is known before the check. */
-    refine_cap_peak(&g_caps.model_vars_peak, n_enum);
-    if (n_enum > MODEL_MAX_VARS) {
+    refine_cap_peak(&g_caps.model_vars_peak, vc->n_vars);
+    if (vc->n_vars > MODEL_MAX_VARS) {
         g_caps.model_vars_hits++;
-        /* Would a higher cap actually let this one search?  Only if every
-         * variable is also an integer -- the sort gate below would otherwise
-         * decline it anyway, and counting it as "the cap cost us this" would
-         * overstate what a raise buys.  This is the number a raise has to be
-         * argued from. */
-        bool all_int = true;
-        for (uint32_t i = 0; i < vc->n_vars; i++)
-            if (vc->vars[i].sort != VS_INT) { all_int = false; break; }
-        if (all_int) g_caps.model_vars_would_run++;
+        /* Every sort has a candidate set now (Int, Real and Bool -- the sort
+         * gate that used to exclude Real and Bool variables is gone), so a
+         * VC turned away here WOULD run at a higher cap. */
+        g_caps.model_vars_would_run++;
         return NULL;
     }
-    for (uint32_t i = 0; i < vc->n_vars; i++)
-        if (vc->vars[i].sort != VS_INT) return NULL;
 
-    /* Candidates: literals in the VC, their immediate neighbours, and a few
-     * small integers around zero. */
-    int64_t lits[MODEL_MAX_CANDS]; uint32_t n_lits = 0;
+    /* Per-variable candidates.  Ints: the integer literals in the VC, their
+     * immediate neighbours, and a few small integers around zero.  Reals: the
+     * numeric literals (of either kind) as doubles, each with a half-unit
+     * either side, and a few small values; the runtime evaluates in double,
+     * so a real witness is exactly one the program would reject.  Bools:
+     * false and true. */
+    MVal lits[MODEL_MAX_CANDS]; uint32_t n_lits = 0;
     for (uint32_t i = 0; i < vc->n_hyps; i++)
         collect_lits(vc->hyps[i], lits, &n_lits, MODEL_MAX_CANDS);
     collect_lits(vc->goal, lits, &n_lits, MODEL_MAX_CANDS);
 
-    int64_t cand[MODEL_MAX_CANDS]; uint32_t n_cand = 0;
-    for (int64_t v = -2; v <= 2; v++) add_cand(cand, &n_cand, v);
-    for (uint32_t i = 0; i < n_lits; i++) {
-        add_cand(cand, &n_cand, lits[i]);
-        if (lits[i] < INT64_MAX) add_cand(cand, &n_cand, lits[i] + 1);
-        if (lits[i] > INT64_MIN) add_cand(cand, &n_cand, lits[i] - 1);
+    MVal     cand[MODEL_MAX_VARS][MODEL_MAX_CANDS];
+    uint32_t n_cand[MODEL_MAX_VARS];
+    uint32_t nv = vc->n_vars;
+    bool is_const[MODEL_MAX_VARS];
+    for (uint32_t v = 0; v < nv; v++) {
+        uint32_t *n = &n_cand[v]; *n = 0;
+        MVal *c = cand[v];
+        /* RF6: a nullary constructor (`Nil`) is a free constant.  One fixed
+         * value no literal can collide with, distinct per constant -- not a
+         * dimension of the search, and not a binding worth printing. */
+        is_const[v] = false;
+        for (uint32_t j = 0; j < vc->n_ctor_consts; j++)
+            if (vc->ctor_consts[j] == v) { is_const[v] = true; break; }
+        if (is_const[v]) { add_cand_int(c, n, INT64_MIN / 2 + (int64_t)v); continue; }
+        switch (vc->vars[v].sort) {
+            case VS_BOOL:
+                add_cand_int(c, n, 0); add_cand_int(c, n, 1);
+                break;
+            case VS_INT:
+                for (int64_t k = -2; k <= 2; k++) add_cand_int(c, n, k);
+                for (uint32_t i = 0; i < n_lits; i++) {
+                    if (lits[i].is_real) continue;
+                    add_cand_int(c, n, lits[i].i);
+                    if (lits[i].i < INT64_MAX) add_cand_int(c, n, lits[i].i + 1);
+                    if (lits[i].i > INT64_MIN) add_cand_int(c, n, lits[i].i - 1);
+                }
+                break;
+            case VS_REAL:
+                add_cand_real(c, n, 0.0);
+                add_cand_real(c, n, 0.5);  add_cand_real(c, n, -0.5);
+                add_cand_real(c, n, 1.0);  add_cand_real(c, n, -1.0);
+                for (uint32_t i = 0; i < n_lits; i++) {
+                    double d = mv_d(lits[i]);
+                    add_cand_real(c, n, d);
+                    add_cand_real(c, n, d + 0.5);
+                    add_cand_real(c, n, d - 0.5);
+                }
+                break;
+        }
+        if (*n == 0) return NULL;
     }
-    if (n_cand == 0 && n_enum > 0) return NULL;
 
-    /* The cap that binds: the odometer runs n_cand ** n_enum full
-     * evaluations.  Past the budget we decline rather than start something
-     * that might not finish in compile-time noise; a decline here is one a
-     * bigger budget WOULD have let run, which is what the counter says. */
+    /* The cap that binds: the odometer runs prod(n_cand) full evaluations.
+     * Past the budget we decline rather than start something that might not
+     * finish in compile-time noise; a decline here is one a bigger budget
+     * WOULD have let run, which is what the counter says. */
     {
         uint64_t evals = 1;
-        for (uint32_t i = 0; i < n_enum && evals <= MODEL_MAX_EVALS; i++)
-            evals *= n_cand;
+        for (uint32_t v = 0; v < nv && evals <= MODEL_MAX_EVALS; v++) evals *= n_cand[v];
         if (evals > MODEL_MAX_EVALS) { g_caps.model_evals_hits++; return NULL; }
     }
 
-    /* `vals` is indexed by VC variable; the odometer runs over the
-     * enumerated ones through `enum_of`.  A constructor constant takes a
-     * distinct value no candidate can collide with. */
-    uint32_t nv = vc->n_vars;
-    int64_t vals[MODEL_MAX_VARS + 64];
-    uint32_t enum_of[MODEL_MAX_VARS];
+    MVal     vals[MODEL_MAX_VARS];
     uint32_t idx[MODEL_MAX_VARS] = {0};
-    {
-        uint32_t k = 0;
-        for (uint32_t i = 0; i < nv; i++) {
-            if (is_const[i]) vals[i] = INT64_MIN / 2 + (int64_t)i;
-            else { vals[i] = 0; enum_of[k++] = i; }
-        }
-    }
 
     for (;;) {
-        for (uint32_t i = 0; i < n_enum; i++) vals[enum_of[i]] = cand[idx[i]];
+        for (uint32_t v = 0; v < nv; v++) vals[v] = cand[v][idx[v]];
 
         EvalCtx E = { vals, false, defs, n_defs, 0 };
         bool sat = true;
@@ -557,23 +606,37 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
             if (!eval_bool(&E, vc->hyps[i])) sat = false;
         if (sat && !E.fail && !eval_bool(&E, vc->goal) && !E.fail) {
             RefineModel *m = (RefineModel *)arena_alloc(a, sizeof(RefineModel));
-            m->n = n_enum;
-            m->bindings = n_enum ? (RefineModelBinding *)arena_alloc(
-                                       a, n_enum * sizeof(RefineModelBinding)) : NULL;
-            for (uint32_t i = 0; i < n_enum; i++) {
-                m->bindings[i].name    = vc->vars[enum_of[i]].name;
-                m->bindings[i].is_real = false;
-                m->bindings[i].ival    = vals[enum_of[i]];
-                m->bindings[i].rval    = 0.0;
+            uint32_t n_shown = 0;
+            for (uint32_t v = 0; v < nv; v++) if (!is_const[v]) n_shown++;
+            m->n = n_shown;
+            m->bindings = n_shown ? (RefineModelBinding *)arena_alloc(
+                                        a, n_shown * sizeof(RefineModelBinding)) : NULL;
+            for (uint32_t v = 0, k = 0; v < nv; v++) {
+                if (is_const[v]) continue;   /* RF6: a constructor constant */
+                m->bindings[k].name    = vc->vars[v].name;
+                m->bindings[k].is_real = vc->vars[v].sort == VS_REAL;
+                m->bindings[k].is_bool = vc->vars[v].sort == VS_BOOL;
+                m->bindings[k].ival    = vals[v].is_real ? 0 : vals[v].i;
+                m->bindings[k].rval    = vals[v].is_real ? vals[v].r : 0.0;
+                k++;
             }
             return m;
         }
-        if (E.fail) return NULL;   /* the formula is not evaluable at all */
+        /* An assignment that could not be evaluated (overflow, a zero
+         * divisor) is skipped, not fatal: the next one may be a witness.
+         * Only a formula that fails on its FIRST assignment is given up on,
+         * since that is the opaque-term case and every assignment would fail
+         * the same way. */
+        if (E.fail) {
+            bool first = true;
+            for (uint32_t v = 0; v < nv; v++) if (idx[v]) { first = false; break; }
+            if (first) return NULL;
+        }
 
         /* odometer */
         uint32_t k = 0;
-        while (k < n_enum && ++idx[k] >= n_cand) { idx[k] = 0; k++; }
-        if (k == n_enum) break;
+        while (k < nv && ++idx[k] >= n_cand[k]) { idx[k] = 0; k++; }
+        if (k == nv) break;
     }
     return NULL;
 }
