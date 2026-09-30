@@ -1055,6 +1055,7 @@ bool type_is_transparent_int_newtype(Type t) {
          * keeps treating it as the int64 carrier it still is at runtime. */
         AdtDef *adef = t.as.adt_.def;
         if (!adef || adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+        if (adef->is_heap) return false;   /* see the TY_APP arm */
         return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     } else if (t.kind == TY_APP) {
         /* structdef-retirement DS-D: no struct-headed app forms, so an applied
@@ -1065,6 +1066,15 @@ bool type_is_transparent_int_newtype(Type t) {
         if (!type_extract_adt_app(&t, &adef, args, &n_args) || !adef)
             return false;
         if (adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+        /* phantom-parametric-heap-let-binding-repr-ice: `:heap` asks for
+         * REFERENCE semantics -- a node mutated through one handle is seen
+         * through every other -- and an int64 identity cannot give it that.
+         * repr_of already ranks :heap first (heap-ptr in every position), so
+         * collapsing `(defstruct Holder :heap [V] [payload : int])` to int64
+         * here made every site this predicate steers disagree with it: the
+         * binding ICE'd, and a `set!` through a generic callee would have
+         * written a copy.  A :heap record stays a heap record. */
+        if (adef->is_heap) return false;
         return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     }
     return false;

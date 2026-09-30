@@ -255,7 +255,12 @@ bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb) {
 
 bool call_returns_fresh_sum_box(const Expr *call) {
     if (!call || call->kind != EX_CALL) return false;
-    if (call->as.call_.ctor) return true;
+    /* phantom-parametric-heap-let-binding-repr-ice (second defect): a
+     * transparent int newtype's constructor is an identity -- `(Holder 7)` IS
+     * 7, no box is minted -- so it is not a fresh sum box, and the RM1 scope
+     * drop freed the payload integer as a pointer (a segfault at scope end). */
+    if (call->as.call_.ctor)
+        return !type_is_transparent_int_newtype(call->type);
     if (!call_dispatch_is_static(call)) return false;
     return call_returns_fresh_sum_box_as(call, call->as.call_.fn_binding);
 }

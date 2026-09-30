@@ -105,3 +105,43 @@ see what the rest of the pipeline then does with it.
 
 Fixtures worth having: the four-row control table above, since each row
 isolates one ingredient and three of them pass.
+
+## Resolution (2026-09-30)
+
+The trigger was narrower than "phantom". It was **a phantom parameter plus a
+single concrete `:int` field**, which is exactly SC7's *transparent int
+newtype* shape (`type_is_transparent_int_newtype`, `src/compiler/types.c`).
+SC7 makes such a record its int64 payload everywhere: an identity
+constructor, identity field access, `int64_t` as its C name. It never looked
+at `:heap`. `repr_of` ranks `:heap` first and answers heap-ptr, so the
+`let-bind` shadow saw `int64_t` against heap-ptr and ICE'd. A two-field
+phantom `:heap` struct (`[payload : int extra : int]`) was never affected,
+and neither is the non-phantom control, because neither is the newtype shape.
+
+`:heap` now opts out of the collapse, in both arms of the predicate. The
+reason is semantic, not only ICE-avoidance. `:heap` asks for reference
+semantics, a node mutated through one handle and seen through every other,
+and an int64 identity cannot give that. With the collapse, a
+`(set! (.payload h) 42)` through a generic callee would have written a copy.
+Because the one predicate steers every site SC7 touches (16 call sites), all
+of them now agree with `repr_of`.
+
+**A second defect in the same shape, found while measuring the controls.**
+Dropping `:heap` from the repro, the genuine transparent newtype, compiled
+and then **segfaulted** at scope exit. `call_returns_fresh_sum_box`
+(`src/compiler/elab_fns.c`) treats every constructor application as a freshly
+minted box. For a transparent newtype that constructor is an identity, so
+RM1's scope drop emitted `tur_region_free((void *)7)`. A transparent-newtype
+constructor is no longer fresh.
+
+Pinned by:
+
+- `tests/fixtures/phantom-heap-let-binding`: the report's control table
+  (let, ascribed let, inline, non-phantom), plus a write through a generic
+  callee seen through the caller's handle (`42`).
+- `tests/fixtures/transparent-int-newtype-let-no-free`: the non-`:heap`
+  shape, let-bound and read.
+
+Both pass under `run.sh` and `run-turi.sh`, and the full suite stays green.
+The crdt spice's opposite-remedy spellings recorded above are multi-field
+structs. Those are a different path, not re-measured here.

@@ -1,0 +1,35 @@
+;; phantom-parametric-heap-let-binding-repr-ice: a `:heap` struct whose one
+;; field is a concrete `:int` and whose type parameter is phantom was collapsed
+;; to the SC7 transparent int newtype, which disagreed with repr_of's heap
+;; pointer -- a let binding of it ICE'd.  `:heap` now keeps it a heap record.
+;; The report's control table, row by row, plus mutation through a generic
+;; callee (reference semantics, which an int64 identity cannot give).
+(defstruct Holder :heap [V] [payload : int])
+(defn holder-new [V] [] : (Holder V) (Holder 0))
+(defn holder-put [V] [^borrow h : (Holder V) v : V] : (Holder V) (Holder (:: v int)))
+(defn holder-get [V] [^borrow h : (Holder V)] : int (.payload h))
+(defn holder-poke [V] [^borrow h : (Holder V) n : int] : int
+  (set! (.payload h) n)
+  0)
+
+;; Control: the same shape with a non-phantom parameter.
+(defstruct Real :heap [V] [payload : V])
+(defn real-put [V] [^borrow h : (Real V) v : V] : (Real V) (Real v))
+
+(defn main [] : int
+  ;; the repro: a let binding
+  (let [a (holder-put (:: (holder-new) (Holder int)) 7)]
+    (println (holder-get a)))
+  ;; an ascribed binding
+  (let [b (:: (holder-put (:: (holder-new) (Holder int)) 8) (Holder int))]
+    (println (holder-get b)))
+  ;; consumed inline, no binding
+  (println (holder-get (holder-put (:: (holder-new) (Holder int)) 9)))
+  ;; non-phantom control
+  (let [r (real-put (:: (Real 0) (Real int)) 10)]
+    (println (.payload r)))
+  ;; a write through a generic callee is seen through the caller's handle
+  (let [c (:: (holder-new) (Holder int))]
+    (holder-poke c 42)
+    (println (holder-get c)))
+  0)
