@@ -254,6 +254,36 @@ bool turi_env_has_cap(TuriEnv *env, TuriCaps cap);
 void turi_env_register_native(TuriEnv *env, const char *name,
                                TuriNativeFn fn, void *ud);
 
+/* security-audit-plan WP3 (S-1): capability-checked native dispatch.
+ *
+ * turi_env_register_native looks `name` up in the builtin classification table
+ * (src/turi/native_caps.c) and stamps the row's required capabilities on the
+ * native; a call from an env that lacks any of them returns TURI_ERROR without
+ * running the native.  A name with no row carries no requirement -- an
+ * embedder's own native is exposed because the embedder chose to expose it.
+ *
+ * turi_env_register_native_caps states the requirement explicitly instead of
+ * consulting the table.  Pass TURI_CAP_NONE to expose a native unconditionally
+ * even when it shadows a classified builtin name. */
+void turi_env_register_native_caps(TuriEnv *env, const char *name,
+                                   TuriNativeFn fn, void *ud, TuriCaps required);
+
+/* One row of the classification table: a builtin native's name and the
+ * capabilities a caller must hold.  0 = pure. */
+typedef struct TuriNativeCapRow {
+    const char *name;
+    TuriCaps    caps;
+} TuriNativeCapRow;
+
+/* The whole table, sorted by strcmp on name; *n_out receives its length. */
+const TuriNativeCapRow *turi_native_cap_table(size_t *n_out);
+
+/* The row for `name`, or NULL when the name is not a classified builtin. */
+const TuriNativeCapRow *turi_native_cap_find(const char *name);
+
+/* Render `caps` as a comma-separated list ("fs,proc") into buf; returns buf. */
+const char *turi_caps_describe(TuriCaps caps, char *buf, size_t n);
+
 /* Like turi_env_register_native, but also records the Turmeric type the
  * native's TuriValue result carries at runtime (`ret`).  Without this, the
  * elaborator types every interpreter-mode native call -- and any defn wrapping

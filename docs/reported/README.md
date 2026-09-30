@@ -34,6 +34,17 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Security (filed 2026-09-30)
+
+Findings from [security-audit-plan](../upcoming/security-audit-plan.md) that
+are open in the tree. Section 2 of the plan is the full candidate list; a row
+lands here only once a work package has reproduced it and chosen not to fix it
+in the same change.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-sandbox-handles-are-forgeable-integers](turi-sandbox-handles-are-forgeable-integers.md) | high | S-5, filed by WP3: a sandboxed or macro-time `(vec-get 4096 0)` reads address 4096 -- interpreter handles are bare integers the natives cast back unchecked -- and `panic` / some native error paths `_exit` the host. Not a capability; the directions are a per-env handle registry plus turning host exits into errors under a restricted env |
+
 ## Representation gaps (filed 2026-09-09, extended 2026-09-10)
 
 A value whose representation does not fit the one the typed path already chose

@@ -181,6 +181,13 @@ extern bool g_dump_expansion;
  * src/turi/macro_env.c. */
 extern bool g_macro_caps_io;
 
+/* security-audit-plan WP3: --no-proc-macros.  When set, defining, calling, or
+ * `:for-macros`-importing into a procedural macro (defmacro*) is a diagnostic
+ * and no macro-time code runs; template defmacro still expands, since it runs
+ * nothing.  rust-analyzer's `procMacro.enable = false`, for pointing `tur
+ * check` at a tree you have not read.  Read in src/turi/macro_env.c. */
+extern bool g_no_proc_macros;
+
 /* interp-stdlib-class-method-shadows-user-defn: true while an interpreter
  * entry point (--interpret / REPL / WASM) is preloading stdlib modules via
  * `(load ...)` turns.  Those turns run with stdlib_prefix == 0, so

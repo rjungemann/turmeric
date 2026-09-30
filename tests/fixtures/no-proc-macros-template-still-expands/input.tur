@@ -1,0 +1,8 @@
+;; security-audit-plan WP3: --no-proc-macros refuses only defmacro*.  A
+;; template defmacro runs no code at expansion time, so it still expands.
+(defmodule prog
+  (defmacro twice [x]
+    `(+ ~x ~x))
+  (defn main [] : int
+    (println (twice 21))
+    0))

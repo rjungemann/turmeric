@@ -1,0 +1,2 @@
+(extern-c printf [^cstr fmt ^int v] :int)
+(printf "%d\n" 7)
