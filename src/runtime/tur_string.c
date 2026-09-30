@@ -26,12 +26,33 @@ typedef struct {
 
 static inline char *str_bytes(tur_string_hdr *h) { return (char *)(h + 1); }
 
+/* An allocation that cannot be satisfied is fatal, as it is in buf.c and
+ * arena.c: every caller below writes through the result immediately. */
+static void *str_checked(void *p) {
+    if (!p) {
+        fprintf(stderr, "tur: string: out of memory\n");
+        abort();
+    }
+    return p;
+}
+
+/* Clamp a caller's (off, len) window to [0, n] without forming `off + len`,
+ * which overflows int64 for a huge `len` and then compares LESS than `n` --
+ * the clamp is skipped and the window runs off the end (security audit WP5,
+ * M-5).  `off` is clamped first, so `n - off` cannot overflow. */
+static void str_clamp_window(int64_t n, int64_t *off, int64_t *len) {
+    if (*off < 0) *off = 0;
+    if (*off > n) *off = n;
+    if (*len < 0) *len = 0;
+    if (*len > n - *off) *len = n - *off;
+}
+
 /* ---- construction / conversion ---------------------------------------- */
 
 void *tur_string_from_bytes(const char *src, int64_t n) {
     if (n < 0) n = 0;
-    tur_string_hdr *h =
-        (tur_string_hdr *)malloc(sizeof(tur_string_hdr) + (size_t)n + 1);
+    tur_string_hdr *h = (tur_string_hdr *)str_checked(
+        malloc(sizeof(tur_string_hdr) + (size_t)n + 1));
     h->rc = 1;
     h->len = n;
     char *b = str_bytes(h);
@@ -164,7 +185,7 @@ void *tur_string_concat(void *a, void *b) {
     tur_string_hdr *ha = (tur_string_hdr *)a, *hb = (tur_string_hdr *)b;
     int64_t la = ha ? ha->len : 0, lb = hb ? hb->len : 0;
     tur_string_hdr *h =
-        (tur_string_hdr *)malloc(sizeof(tur_string_hdr) + (size_t)(la + lb) + 1);
+        (tur_string_hdr *)str_checked(malloc(sizeof(tur_string_hdr) + (size_t)(la + lb) + 1));
     h->rc = 1;
     h->len = la + lb;
     char *dst = str_bytes(h);
@@ -177,10 +198,7 @@ void *tur_string_concat(void *a, void *b) {
 void *tur_string_substring(void *s, int64_t start, int64_t len) {
     tur_string_hdr *h = (tur_string_hdr *)s;
     int64_t n = h ? h->len : 0;
-    if (start < 0) start = 0;
-    if (start > n) start = n;
-    if (len < 0) len = 0;
-    if (start + len > n) len = n - start;
+    str_clamp_window(n, &start, &len);
     return tur_string_from_bytes(h ? str_bytes(h) + start : NULL, len);
 }
 
@@ -228,18 +246,28 @@ typedef struct {
 } tur_sb;
 
 void *tur_sb_new(void) {
-    tur_sb *b = (tur_sb *)malloc(sizeof(tur_sb));
+    tur_sb *b = (tur_sb *)str_checked(malloc(sizeof(tur_sb)));
     b->len = 0;
     b->cap = 16;
-    b->data = (char *)malloc((size_t)b->cap);
+    b->data = (char *)str_checked(malloc((size_t)b->cap));
     return b;
 }
 
 static void sb_reserve(tur_sb *b, int64_t extra) {
+    /* `extra` is a strlen or a caller's byte count; `len + extra` and the
+     * doubling below are checked rather than trusted to stay under INT64_MAX,
+     * where a wrap left `cap < need` looping forever or shrank the buffer
+     * (security audit WP5, M-5). */
+    if (extra < 0 || extra > INT64_MAX - b->len) {
+        fprintf(stderr, "tur: str-build: length overflow\n");
+        abort();
+    }
     int64_t need = b->len + extra;
     if (need <= b->cap) return;
-    while (b->cap < need) b->cap *= 2;
-    b->data = (char *)realloc(b->data, (size_t)b->cap);
+    int64_t cap = b->cap;
+    while (cap < need) cap = (cap > INT64_MAX / 2) ? need : cap * 2;
+    b->data = (char *)str_checked(realloc(b->data, (size_t)cap));
+    b->cap = cap;
 }
 
 void tur_sb_push_cstr(void *bp, const char *s) {
@@ -294,11 +322,8 @@ static const char *slice_ptr(tur_strslice *s) {
 
 void *tur_string_slice(void *s, int64_t off, int64_t len) {
     int64_t n = tur_string_len(s);
-    if (off < 0) off = 0;
-    if (off > n) off = n;
-    if (len < 0) len = 0;
-    if (off + len > n) len = n - off;
-    tur_strslice *sl = (tur_strslice *)malloc(sizeof(*sl));
+    str_clamp_window(n, &off, &len);
+    tur_strslice *sl = (tur_strslice *)str_checked(malloc(sizeof(*sl)));
     sl->rc = 1;
     sl->parent = tur_string_retain(s);
     sl->off = off;
@@ -343,11 +368,8 @@ int64_t tur_slice_byte_at(void *sl, int64_t i) {
 void *tur_slice_sub(void *sl, int64_t off, int64_t len) {
     if (!sl) return tur_string_slice(NULL, 0, 0);
     tur_strslice *s = (tur_strslice *)sl;
-    if (off < 0) off = 0;
-    if (off > s->len) off = s->len;
-    if (len < 0) len = 0;
-    if (off + len > s->len) len = s->len - off;
-    tur_strslice *r = (tur_strslice *)malloc(sizeof(*r));
+    str_clamp_window(s->len, &off, &len);
+    tur_strslice *r = (tur_strslice *)str_checked(malloc(sizeof(*r)));
     r->rc = 1;
     r->parent = tur_string_retain(s->parent);
     r->off = s->off + off;
@@ -364,7 +386,7 @@ void *tur_slice_to_string(void *sl) {
 const char *tur_slice_to_cstr(void *sl) {
     tur_strslice *s = (tur_strslice *)sl;
     int64_t n = s ? s->len : 0;
-    char *out = (char *)malloc((size_t)n + 1);
+    char *out = (char *)str_checked(malloc((size_t)n + 1));
     if (n) memcpy(out, slice_ptr(s), (size_t)n);
     out[n] = '\0';
     return out;

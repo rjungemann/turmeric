@@ -2235,11 +2235,16 @@ static TuriValue native_grid_new(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     (void)env; (void)ud;
     int64_t w = (n >= 1) ? a[0].as_int : 0;
     int64_t h = (n >= 2) ? a[1].as_int : 0;
+    /* The compiled twin's bound (stdlib/grid.tur, security audit WP5). */
+    if (w < 0 || h < 0 || w > INT_MAX || h > INT_MAX ||
+        (h > 0 && (uint64_t)w > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)h))
+        return turi_errorf("grid-new: dimensions %lldx%lld out of range",
+                           (long long)w, (long long)h);
     TuriGridRep *g = (TuriGridRep *)malloc(sizeof(*g));
     if (!g) return turi_int(0);
     g->width = (int)w; g->height = (int)h; g->cx = 0; g->cy = 0;
-    int64_t cells = w * h; if (cells < 0) cells = 0;
-    g->data = (int64_t *)calloc((size_t)cells, sizeof(int64_t));
+    g->data = (int64_t *)calloc((size_t)w * (size_t)h, sizeof(int64_t));
+    if (!g->data && w > 0 && h > 0) { free(g); return turi_error("grid-new: out of memory"); }
     return turi_int((int64_t)(intptr_t)g);
 }
 static TuriValue native_grid_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2248,6 +2253,9 @@ static TuriValue native_grid_get(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
     if (!g || !g->data) return turi_int(0);
     int64_t x = a[1].as_int, y = a[2].as_int;
+    if (x < 0 || y < 0 || x >= g->width || y >= g->height)
+        return turi_errorf("grid-get: (%lld, %lld) out of bounds in %dx%d",
+                           (long long)x, (long long)y, g->width, g->height);
     return turi_int(g->data[(size_t)(y * g->width + x)]);
 }
 static TuriValue native_grid_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2256,6 +2264,9 @@ static TuriValue native_grid_set(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
     if (!g || !g->data) return turi_nil();
     int64_t x = a[1].as_int, y = a[2].as_int, v = a[3].as_int;
+    if (x < 0 || y < 0 || x >= g->width || y >= g->height)
+        return turi_errorf("grid-set!: (%lld, %lld) out of bounds in %dx%d",
+                           (long long)x, (long long)y, g->width, g->height);
     g->data[(size_t)(y * g->width + x)] = v;
     return turi_nil();
 }
@@ -2289,19 +2300,27 @@ static TuriSizedBufRep *sbuf_of(TuriValue v) { return (TuriSizedBufRep *)(intptr
 static TuriValue native_sbuf_new_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     int64_t k = (n >= 1) ? a[0].as_int : 0;
+    /* The compiled twin's bound (stdlib/sized-buf.tur): `k * 8` wrapped for a
+     * huge k, leaving a tiny block under a huge len (security audit WP5). */
+    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t))
+        return turi_errorf("sized-buf-new: length %lld out of range", (long long)k);
     TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
     if (!b) return turi_int(0);
     b->len = k;
     b->data = k > 0 ? (int64_t *)malloc((size_t)k * sizeof(int64_t)) : NULL;
+    if (k > 0 && !b->data) { free(b); return turi_error("sized-buf-new: out of memory"); }
     return turi_int((int64_t)(intptr_t)b);
 }
 static TuriValue native_sbuf_new_zeroed_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     int64_t k = (n >= 1) ? a[0].as_int : 0;
+    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t))
+        return turi_errorf("sized-buf-new-zeroed: length %lld out of range", (long long)k);
     TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
     if (!b) return turi_int(0);
     b->len = k;
     b->data = k > 0 ? (int64_t *)calloc((size_t)k, sizeof(int64_t)) : NULL;
+    if (k > 0 && !b->data) { free(b); return turi_error("sized-buf-new-zeroed: out of memory"); }
     return turi_int((int64_t)(intptr_t)b);
 }
 static TuriValue native_sbuf_free_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2693,9 +2712,7 @@ static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, vo
     int d = (n > 1) ? (int)a[1].as_int : 6;
     if (d < 0) d = 0;
     if (d > 17) d = 17;
-    char fmt[16];
-    snprintf(fmt, sizeof(fmt), "%%.%df\n", d);
-    printf(fmt, x);
+    printf("%.*f\n", d, x);
     return turi_nil();
 }
 /* r7rs-lang-plan R2: the three newline-free write primitives the R7RS prelude
@@ -3719,8 +3736,15 @@ static TuriValue native_r7rs_substring(TuriEnv *env, TuriValue *a, uint32_t n, v
     const char *s = r7rs_arg_cstr(a, n, 0);
     int64_t st = r7rs_arg_int(a, n, 1), en = r7rs_arg_int(a, n, 2);
     size_t len = strlen(s);
-    if (st < 0 || en < st || (size_t)en > len) turi_runtime_panic(env, "substring: range out of bounds");
+    if (st < 0 || en < st || (size_t)en > len) {
+        /* turi_runtime_panic RETURNS under a catch boundary; falling through
+         * copied `en - st` bytes -- SIZE_MAX for en = -1 -- from outside the
+         * string (security audit WP5, M-5). */
+        turi_runtime_panic(env, "substring: range out of bounds");
+        return turi_nil();
+    }
     char *r = (char *)malloc((size_t)(en - st) + 1);
+    if (!r) return turi_error("substring: out of memory");
     memcpy(r, s + st, (size_t)(en - st)); r[en - st] = 0;
     return turi_cstr(r);
 }
@@ -4843,6 +4867,9 @@ static TuriValue native_chan_new(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     (void)env; (void)ud;
     int64_t cap = (n > 0) ? a[0].as_int : 0;
     if (cap < 1) cap = 1;
+    /* `8 * cap` wrapped for a huge cap (security audit WP5, M-5). */
+    if ((uint64_t)cap > SIZE_MAX / sizeof(int64_t))
+        return turi_errorf("chan-new: capacity %lld out of range", (long long)cap);
     WkChan *ch = (WkChan *)malloc(sizeof(WkChan));
     if (!ch) return turi_nil();
     ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);

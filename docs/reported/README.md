@@ -2407,6 +2407,16 @@ carries a witness parameter and ships no generic helpers.
 | --- | --- | --- |
 | [buf-puts-breaks-the-incidental-nul-invariant](buf-puts-breaks-the-incidental-nul-invariant.md) | medium | (filed 2026-09-29, open) `buf_vprintf` reserves `n + 1` bytes and lets `vsnprintf` write its NUL, so a `Buf` built only out of `buf_printf` is *incidentally* a C string -- and `link_command_run` reads `aux_includes->data` / `aux_sources->data` that way, neither of which its producer terminates. `buf_puts` and `buf_write` reserve exactly `n`. Swapping one for the other in `collect_spice_aux_c` was a heap-buffer-overflow ASan caught in `tests/spice-c-sources-tests.sh` while all 3405 fixtures stayed green (no fixture builds a spice with vendored `:c-sources`). Preferred fix: make `buf_write` reserve `n + 1` and store the NUL without counting it, so the invariant every caller already assumes becomes real |
 
+## Found executing security-audit-plan WP5 (filed 2026-09-30)
+
+Found while probing the region store hooks for the security audit's runtime
+memory-safety package; unrelated to the audit's own findings, which are
+tracked in `docs/upcoming/security-audit-plan.md`.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [stm-inside-closure-captured-tvar-undeclared](stm-inside-closure-captured-tvar-undeclared.md) | medium | `(atomically (stm (tvar/write tv v)))` inside any lambda that captures `tv` passes `tur check` and fails in cc with `'tv_N' undeclared`: the capture is lost where the lambda's lift and `stm`'s nest. Every `with-region` body is a lambda, so a transaction cannot run inside a bracket |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

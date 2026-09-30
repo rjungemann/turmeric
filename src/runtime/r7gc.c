@@ -651,7 +651,13 @@ static void *tur_gc_alloc_small(tur_gc_thread *t, size_t n) {
  * only through the page descriptor (metadata, never scanned). */
 static void *tur_gc_alloc_large(size_t n) {
     tur_gc_state *G = tur_gc_G;
+    /* A request within a chunk of SIZE_MAX rounded to ZERO chunks, which
+     * mapped nothing and handed back a live-looking pointer: malloc's
+     * failure answer was lost and every `if (!p)` guard with it (security
+     * audit WP5, M-5).  The page records its chunk count as a uint32_t too. */
+    if (n > SIZE_MAX - (TUR_GC_CHUNK - 1)) return NULL;
     size_t nch = (n + TUR_GC_CHUNK - 1) / TUR_GC_CHUNK;
+    if (nch > UINT32_MAX) return NULL;
     uintptr_t base = tur_gc_chunks(nch);
     tur_gc_page *pg = (tur_gc_page *)tur_gc_meta(sizeof *pg);
     memset(pg, 0, sizeof *pg);

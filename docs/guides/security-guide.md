@@ -187,10 +187,6 @@ an HMAC-signed name. A `Serializable` instance's own `deserialize`, which
 receives an environment's bytes, is the program's code and the program's
 responsibility.
 
-**Status today: open for size arithmetic in a few runtime helpers (M-5,
-medium).** `read-async`, string slicing, `bytes-alloc` and the string builder
-compute allocation sizes from signed values without an overflow or sign check.
-
 ---
 
 ## T3 -- The sandboxed interpreter

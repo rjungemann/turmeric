@@ -55,6 +55,12 @@
 
 (defn bytes-alloc [n : int] : Bytes
   ```c
+  /* A negative n wrapped `8 + (size_t)n` to a tiny block and the memset
+     below ran off it (security audit WP5, M-5). */
+  if (n < 0 || n > INT64_MAX - (int64_t)sizeof(int64_t)) {
+    fprintf(stderr, "bytes-alloc: length %lld out of range\n", (long long)n);
+    exit(1);
+  }
   int64_t *buf = malloc(sizeof(int64_t) + (size_t)n);
   if (!buf) { fprintf(stderr, "bytes-alloc: out of memory\n"); exit(1); }
   buf[0] = (int64_t)n;
@@ -124,6 +130,9 @@
   ```c
   int64_t la = a ? ((int64_t*)a)[0] : 0;
   int64_t lb = b ? ((int64_t*)b)[0] : 0;
+  if (la < 0 || lb < 0 || la > INT64_MAX - (int64_t)sizeof(int64_t) - lb) {
+    fprintf(stderr, "bytes-concat: length out of range\n"); exit(1);
+  }
   int64_t total = la + lb;
   int64_t *out = malloc(sizeof(int64_t) + (size_t)total);
   if (!out) { fprintf(stderr, "bytes-concat: out of memory\n"); exit(1); }
@@ -312,6 +321,9 @@
     ```c
     int64_t *inner = (int64_t*)x;
     int64_t dlen = inner ? inner[0] : 0;
+    if (dlen < 0 || dlen > INT64_MAX - 16) {
+      fprintf(stderr, "serialize bytes: length out of range\n"); exit(1);
+    }
     int64_t total = 8 + dlen;
     int64_t *buf = malloc(sizeof(int64_t) + (size_t)total);
     if (!buf) { fprintf(stderr, "serialize bytes: oom\n"); exit(1); }
@@ -343,7 +355,10 @@
       | ((int64_t)p[5] << 40)
       | ((int64_t)p[6] << 48)
       | ((int64_t)p[7] << 56);
-    if (((int64_t*)b)[0] < 8 + dlen) {
+    /* dlen is 8 bytes off the wire: a negative one passed `< 8 + dlen` and
+       the header store below overflowed a 0..7-byte block, and a huge one
+       overflowed the addition (security audit WP5, M-5). */
+    if (dlen < 0 || dlen > ((int64_t*)b)[0] - 8) {
       fprintf(stderr, "deserialize bytes: buffer too short for payload\n"); exit(1);
     }
     int64_t *out = malloc(sizeof(int64_t) + (size_t)dlen);

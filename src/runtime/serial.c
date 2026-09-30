@@ -365,8 +365,14 @@ typedef struct WireCursor {
     size_t         pos;
 } WireCursor;
 
+/* Bytes left to read.  The length checks below compare against this rather
+ * than forming `pos + n`, which a wire-supplied n can overflow. */
+static size_t cur_left(const WireCursor *c) {
+    return c->pos <= c->len ? c->len - c->pos : 0;
+}
+
 static bool cur_read(WireCursor *c, void *dst, size_t n) {
-    if (c->pos + n > c->len) return false;
+    if (n > cur_left(c)) return false;
     memcpy(dst, c->data + c->pos, n);
     c->pos += n;
     return true;
@@ -402,17 +408,13 @@ static bool cur_u64le(WireCursor *c, uint64_t *out) {
 }
 
 /* Read a length-prefixed string (allocates a NUL-terminated copy). */
-/* Bytes left to read.  Every length taken from the wire is checked against
- * this BEFORE it sizes an allocation -- the reads were bounded, but a u32
- * length used to reach malloc first, so four bytes could ask for 4 GiB
- * (security-audit-plan WP4). */
-static size_t cur_left(const WireCursor *c) {
-    return c->len - c->pos;
-}
-
 static bool cur_lstr(WireCursor *c, char **out) {
     uint32_t slen;
     if (!cur_u32le(c, &slen)) return false;
+    /* The length is the wire's: check it against the input BEFORE sizing an
+     * allocation by it (a 9-byte input could ask for 4 GiB per field), and
+     * widen before the +1, which wrapped a 0xFFFFFFFF length to malloc(0)
+     * (security audit WP5, M-5; the rest of this reader is WP4's M-1). */
     if ((size_t)slen > cur_left(c)) return false;
     char *s = (char *)malloc((size_t)slen + 1);
     if (!s) return false;
@@ -592,6 +594,8 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
                 if (!cur_u32le(&c, &dlen)) { field_ok = false; break; }
                 fld->value.bytes.len = dlen;
                 fld->value.bytes.data = NULL;
+                /* As cur_lstr: the input must hold dlen bytes before they
+                 * size an allocation. */
                 if ((size_t)dlen > cur_left(&c)) { field_ok = false; break; }
                 if (dlen > 0) {
                     fld->value.bytes.data = (uint8_t *)malloc(dlen);

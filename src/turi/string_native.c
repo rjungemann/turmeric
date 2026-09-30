@@ -2,6 +2,8 @@
  * See string_native.h; every native forwards to src/runtime/tur_string.c. */
 #include "string_native.h"
 
+#include <string.h>
+
 #include "../runtime/tur_string.h"
 #include "value.h"
 
@@ -26,6 +28,13 @@ static TuriValue n_from_bytes(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     const char *src = n >= 1 ? arg_cstr(a[0]) : "";
     int64_t len = n >= 2 ? a[1].as_int : 0;
+    /* A cstr VALUE carries no length but its NUL, so a `len` past it read
+     * the interpreter's own heap beyond the string -- an out-of-bounds read
+     * any program, sandboxed or not, could aim (security audit WP5, M-5).
+     * Cap it there.  A raw address (a TURI_INT) is a byte buffer that may hold
+     * NULs, as on the compiled path, and keeps the caller's length. */
+    if (n >= 1 && a[0].tag == TURI_CSTR && src && len > 0)
+        len = (int64_t)strnlen(src, (size_t)len);
     return turi_int((int64_t)(intptr_t)tur_string_from_bytes(src, len));
 }
 static TuriValue n_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {

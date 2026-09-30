@@ -880,6 +880,13 @@
       void *tls_ctx;
   } HttpdBlock;
   if (workers <= 0) workers = 4;
+  /* `workers * sizeof(pthread_t)` wrapped for a huge count and the first
+     pthread_create wrote past the block; the spawn loop is `int i` too
+     (security audit WP5, M-5). */
+  if (workers > INT32_MAX || (uint64_t)workers > SIZE_MAX / sizeof(pthread_t)) {
+    TUR_CLOSURE_DROP(handler);
+    return NULL;
+  }
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   int opt = 1;
