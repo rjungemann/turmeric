@@ -1,13 +1,13 @@
 /* fuzz_justfile -- the Justfile parser behind `tur run` (T1).
  *
- * parse_justfile is static, so this harness includes justrun.c.  Parsing
- * EVALUATES backtick assignments today (security-audit-plan D-2, owned by
- * WP2: `tur run --list` in an untrusted tree runs shell), so before the
+ * parse_justfile is static, so this harness includes justrun.c.  Since WP2
+ * (D-2) the parse keeps each assignment's RHS unevaluated and jvar_force runs
+ * it on first use, so after parsing the harness forces every variable itself:
+ * without that the expression evaluator -- where a 5000-deep RHS overflowed
+ * the stack -- is never reached.  Forcing runs backticks, so before the
  * include every route to a process or to the environment is renamed to an
- * inert stand-in.  The fuzzer therefore exercises the parser -- including
- * the path a failed backtick takes -- and can never run a command it made
- * up.  When D-2 lands (parse stops evaluating), the stand-ins stay as a
- * guard. */
+ * inert stand-in: the fuzzer exercises the path a failed backtick takes and
+ * can never run a command it made up. */
 /* As justrun.c's own first lines: feature macros precede every header. */
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
@@ -57,7 +57,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     jf->settings.shell[1] = jr_strdup("-c");
     jf->justfile_dir      = jr_strdup("/nonexistent-fuzz-dir");
     /* Imports resolve against the path's directory, which does not exist. */
-    (void)parse_justfile(text, "/nonexistent-fuzz-dir/Justfile", jf);
+    if (parse_justfile(text, "/nonexistent-fuzz-dir/Justfile", jf) == 0)
+        for (int i = 0; i < jf->n_vars; i++) (void)jvar_force(jf, i);
     jfile_free(jf);
     free(jf);
     free(text);
