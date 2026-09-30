@@ -514,6 +514,16 @@ void pkg_cmake_deps_free(PkgCmakeDep *deps, int n);
 bool pkg_cmake_verify_lock(const char *project_dir,
                             const PkgLockFile *lock);
 
+/* C-3: verify every PRESENT, lock-pinned spice tree against its recorded tree
+ * hash.  Prints a diagnostic naming `cmd` and returns false on a mismatch.
+ * A missing directory is NOT a failure -- the caller decides what absence
+ * means -- and a hash an older tur wrote is skipped rather than reported as
+ * tampering (see pkg_hash_comparable). */
+bool pkg_verify_locked_spices(const char *project_dir,
+                              const PkgManifest *manifest,
+                              const PkgLockFile *lock,
+                              const char *cmd);
+
 /* Parse cmake/spice-deps-manifest.json.
  * Returns true on success (file not present is not an error -- returns true
  * with n_entries == 0). */

@@ -1493,6 +1493,25 @@ jobs:
       - name: Installer end-to-end (C-1)
         run: sh tvm/tests/install-script.sh
 
+  # C-3: tur.lock integrity. Needs a built tur, so it is its own job rather
+  # than a step in `tvm` above; still cheap, since it only needs the compiler
+  # and a local file:// git repo.
+  lock-integrity:
+    name: tur.lock integrity (C-3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+      - name: Build tur
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build -j"$(nproc)" --target tur
+      - name: Lock integrity suite
+        run: sh tests/run-lock-integrity.sh
+
   check-snapshots:
     name: Check codegen snapshots
     runs-on: ubuntu-latest

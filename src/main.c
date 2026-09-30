@@ -5988,31 +5988,18 @@ static int cmd_run(int argc, char **argv) {
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
                              spices_dir, s->name);
                 struct stat _dstat;
-                if (stat(dep_dir, &_dstat) != 0 || !S_ISDIR(_dstat.st_mode)) {
+                if (stat(dep_dir, &_dstat) != 0 || !S_ISDIR(_dstat.st_mode))
                     need_fetch = true;
-                } else {
-                    /* Verify SHA-256 matches lock (if lock has entry). */
-                    PkgLockEntry *le = pkg_lock_find(&lock, s->name, false);
-                    /* Only a hash THIS algorithm produced can be compared.  A
-                     * lockfile written by an older tur carries a `tar -c |
-                     * sha256sum` digest (or the git-SHA fallback), which is not
-                     * comparable and must not be reported as tampering -- the
-                     * next `tur fetch` rewrites it in the current format. */
-                    if (le && pkg_hash_comparable(le->sha256)) {
-                        char actual_sha[PKG_HASH_MAX];
-                        if (pkg_hash_dir(dep_dir, actual_sha) &&
-                            strcmp(actual_sha, le->sha256) != 0) {
-                            fprintf(stderr,
-                                "tur run: integrity check failed for '%s'.\n"
-                                "  Run `tur fetch --update` to re-download.\n",
-                                s->name);
-                            pkg_lock_free(&lock);
-                            pkg_manifest_free(&m);
-                            free(root);
-                            return 1;
-                        }
-                    }
-                }
+            }
+            /* C-3: the per-dep hash comparison used to be open-coded right
+             * here and existed nowhere else in the tree, so `tur build` --
+             * the command that actually compiles a dependency's code --
+             * checked nothing at all.  One implementation, three callers. */
+            if (!pkg_verify_locked_spices(root, &m, &lock, "tur run")) {
+                pkg_lock_free(&lock);
+                pkg_manifest_free(&m);
+                free(root);
+                return 1;
             }
             if (need_fetch) {
                 /* LS5: partial-fetch isolation -- a single broken URL dep
@@ -7411,6 +7398,29 @@ static int cmd_build_project(const char *root_in, const char *out_path,
         if (pkg_resolve_manifest_path(root, mpath, sizeof(mpath))) {
             PkgManifest dm; memset(&dm, 0, sizeof(dm));
             if (pkg_manifest_read(mpath, &dm)) {
+                /* C-3: `tur build` verifies the spice trees it is about to
+                 * compile, exactly as `tur run` does.  It never did, which was
+                 * the sharper half of the gap: `tur run` interprets, while
+                 * this is the path that turns a dependency's source into a
+                 * binary you keep and ship. */
+                {
+                    char lpath[4096];
+                    snprintf(lpath, sizeof(lpath), "%s/tur.lock", root);
+                    PkgLockFile vlock;
+                    memset(&vlock, 0, sizeof(vlock));
+                    vlock.format_version = 1;
+                    if (pkg_lock_read(lpath, &vlock)) {
+                        bool vok = pkg_verify_locked_spices(root, &dm, &vlock,
+                                                            "tur build");
+                        pkg_lock_free(&vlock);
+                        if (!vok) {
+                            pkg_manifest_free(&dm);
+                            free_tur_files(tur_files, n_files);
+                            return 1;
+                        }
+                    }
+                }
+
                 PkgCmakeDep *closure = NULL;
                 int n_closure = 0;
                 if (pkg_collect_transitive_cmake_deps(
