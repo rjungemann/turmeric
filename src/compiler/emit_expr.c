@@ -6324,7 +6324,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * only type available. */
         const Type *_decl = (e->as.call_.fn_binding->type.kind == TY_FN)
             ? e->as.call_.fn_binding->type.as.fn.result_full_type : NULL;
-        Type _rt = emit_resolve_type(ctx, _decl ? *_decl : e->type);
+        /* ...and a declared BARE tyvar is that borrow shape, full stop.  It
+         * must not be resolved through the ACTIVE spec: the callee's `A` is
+         * not the enclosing generic's `A`, it only shares the name, and a
+         * spec binding `A := (Option float)` made `vec-get`'s element box
+         * read as a fresh owned Option -- the read-back freed the vector's
+         * element, and the second read double-freed it. */
+        Type _rt = (_decl && _decl->kind == TY_TYVAR)
+            ? *_decl
+            : emit_resolve_type(ctx, _decl ? *_decl : e->type);
         AdtDef *_rd = NULL;
         Type _ra[16];
         uint8_t _rn = 0;
@@ -9851,6 +9859,46 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (type_is_wide_byval_adt(rfull_resolved))
                             disp_result = rfull_resolved;
                     }
+                    /* closure-head-dispatch-follows-emitted-signature: the head
+                     * is a closure LITERAL of this body -- `((fn [] c))` with
+                     * `c : A` -- so the thunk in slot 0 is known: the lambda's
+                     * clone for the active spec (or its base).  Its RECORDED
+                     * return spelling decides the slot type.  Keyed on the
+                     * call's elaborated type instead, a wrapped tyvar-result
+                     * call typed `int` cast a clone returning
+                     * `tur_adt_Option__float` by value to `int64_t (*)(void*)`
+                     * and dereferenced the result as a box (segfault). */
+                    if (fn_binding->closure_head_init &&
+                        fn_binding->type.kind == TY_FN &&
+                        fn_binding->type.as.fn.result_full_type) {
+                        const Expr *hs = fn_binding->closure_head_init;
+                        while (hs && hs->kind == EX_ASCRIBE) hs = hs->as.ascribe_.inner;
+                        const Binding *lamb =
+                            (hs && hs->kind == EX_CLOSURE && hs->as.closure_.closure &&
+                             hs->as.closure_.closure->fn)
+                                ? hs->as.closure_.closure->fn->binding : NULL;
+                        if (lamb) {
+                            const EmitAbiSpecialization *isp =
+                                ctx->current_abi_specialization
+                                    ? emit_inner_closure_spec_for_binding(
+                                          ctx, ctx->current_abi_specialization, lamb)
+                                    : NULL;
+                            char *lown = NULL;
+                            const char *lcn = (isp && isp->clone_name) ? isp->clone_name
+                                              : (lown = name_for_binding(ctx, lamb));
+                            const char *lrct = lcn ? emit_sig_lookup_ret_ctype(lcn) : NULL;
+                            if (lrct) {
+                                Type rr = emit_resolve_type(ctx,
+                                    *fn_binding->type.as.fn.result_full_type);
+                                const char *rrc = emit_type_c_name(ctx, rr);
+                                if (rrc && strcmp(lrct, rrc) == 0)
+                                    disp_result = rr;
+                                else if (strcmp(lrct, "int64_t") == 0)
+                                    disp_result = emit_type_from_kind(TY_INT);
+                            }
+                            free(lown);
+                        }
+                    }
                     const char *ret_c = type_c_name(disp_result);
                     Type arg_types[MAX_FN_ARITY];
                     char **arg_strs = (n > 0)
@@ -10019,10 +10067,96 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) {
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
+                    /* lambda-head-called-through-resolved-signature: the head
+                     * is a lambda LITERAL from this body, lifted ONCE, so its
+                     * thunk's parameters are whatever its recorded signature
+                     * says -- the int64 carrier for a parameter declared `A`
+                     * -- in every clone.  Building the cast from the
+                     * arguments' types resolved in THIS spec called
+                     * `int64_t __fn(int64_t)` through `int64_t (*)(float)`:
+                     * the float went in xmm0, the thunk read rdi, and
+                     * `((fn [y : A] : A y) x)` printed 0 at float32.  Key the
+                     * slot on the callee's EMITTED signature: a carrier slot
+                     * gets the carrier spelling and the argument bridged to it
+                     * by bits.  (A `(fn [A] A)` PARAMETER of a spec is not a
+                     * literal and keeps the resolved spelling its callers
+                     * pass.) */
+                    const char *lam_cname = NULL;
+                    char *lam_cname_owned = NULL;
+                    {
+                        const Expr *lsrc = fn_binding->closure_head_init;
+                        while (lsrc && lsrc->kind == EX_ASCRIBE)
+                            lsrc = lsrc->as.ascribe_.inner;
+                        /* A captureless lambda literal elaborates to a VAR
+                         * naming its lifted binding; a capturing one to an
+                         * EX_CLOSURE.  Either way the callee is a function
+                         * with a RECORDED emitted signature -- which a spec's
+                         * `(fn ...)` parameter never has, so it is untouched. */
+                        const Binding *lb = NULL;
+                        if (lsrc && lsrc->kind == EX_CLOSURE &&
+                            lsrc->as.closure_.closure &&
+                            lsrc->as.closure_.closure->fn)
+                            lb = lsrc->as.closure_.closure->fn->binding;
+                        else if (lsrc && lsrc->kind == EX_VAR)
+                            lb = lsrc->as.var.binding;
+                        if (lb) {
+                            lam_cname_owned = name_for_binding(ctx, lb);
+                            if (lam_cname_owned &&
+                                emit_sig_lookup_param_ctype(lam_cname_owned, 0))
+                                lam_cname = lam_cname_owned;
+                        }
+                    }
+                    bool *lam_carrier_slot = (bool *)calloc(n ? n : 1, sizeof(bool));
+                    if (lam_cname && lam_carrier_slot) {
+                        for (uint32_t i = 0; i < n; i++) {
+                            const char *lpc = emit_sig_lookup_param_ctype(lam_cname, i);
+                            if (!lpc || strcmp(lpc, "int64_t") != 0) continue;
+                            Type lat = emit_resolve_type(ctx, e->as.call_.args[i]->type);
+                            const char *lac = emit_type_c_name(ctx, lat);
+                            if (!lac || strcmp(lac, "int64_t") == 0) continue;
+                            lam_carrier_slot[i] = true;
+                            if (lat.kind == TY_FLOAT || lat.kind == TY_FLOAT64 ||
+                                lat.kind == TY_FLOAT32 || lat.kind == TY_BOOL ||
+                                lat.kind == TY_INT8 || lat.kind == TY_INT16 ||
+                                lat.kind == TY_INT32 || lat.kind == TY_UINT8 ||
+                                lat.kind == TY_UINT16 || lat.kind == TY_UINT32 ||
+                                lat.kind == TY_CSTR || lat.kind == TY_PTR_VOID ||
+                                lat.kind == TY_SYM)
+                                arg_strs[i] = emit_carrier_bridge(
+                                    ctx, body, arg_strs[i], CK_CONCRETE,
+                                    CK_CARRIER, lat);
+                            else if (strchr(lac, '*')) {
+                                Buf _lb; buf_init(&_lb);
+                                buf_printf(&_lb, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                                buf_putc(&_lb, '\0');
+                                free(arg_strs[i]);
+                                arg_strs[i] = strdup(_lb.data);
+                                buf_free(&_lb);
+                            } else if (strncmp(lac, "tur_adt_", 8) == 0 &&
+                                       !type_is_heap_adt(lat) &&
+                                       !type_is_heap_struct(lat)) {
+                                /* A by-value aggregate rides the carrier as a
+                                 * box.  Heap, not a stack spill: the lambda may
+                                 * hand its argument back (the identity lambda
+                                 * does), and the result is read after the
+                                 * call. */
+                                arg_strs[i] = emit_carrier_bridge_escaping(
+                                    ctx, body, arg_strs[i], CK_CONCRETE,
+                                    CK_CARRIER, lat);
+                            } else {
+                                lam_carrier_slot[i] = false;
+                            }
+                        }
+                    }
+                    free(lam_cname_owned);
                     Buf out; buf_init(&out);
                     buf_printf(&out, "((%s (*)(", ret_c);
                     for (uint32_t i = 0; i < n; i++) {
                         if (i > 0) buf_puts(&out, ", ");
+                        if (lam_carrier_slot && lam_carrier_slot[i]) {
+                            buf_puts(&out, "int64_t");
+                            continue;
+                        }
                         /* poly-hof-constrained-arg-baked-carrier: resolve the arg
                          * type through the active ABI spec so a monomorphized
                          * by-value arg (`a : A` -> Box) types the cast signature
@@ -10058,7 +10192,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             arg->kind == EX_VAR && arg->as.var.binding &&
                             (arg->as.var.binding->type.kind == TY_FN ||
                              arg->as.var.binding->type.kind == TY_INT);
-                        if (ptr_formal && var_is_int64_carrier) {
+                        if (ptr_formal && var_is_int64_carrier &&
+                            !(lam_carrier_slot && lam_carrier_slot[i])) {
                             buf_printf(&out, "(%s)(intptr_t)(%s)", pty, arg_strs[i]);
                         } else {
                             buf_puts(&out, arg_strs[i]);
@@ -10070,6 +10205,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_free(&out);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
+                    free(lam_carrier_slot);
                     free(fn_ptr);
                     note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
@@ -13346,20 +13482,74 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * word (elab type `int`, or a union bridge above) is left
                  * alone; every non-float scalar survives the carrier by value. */
                 if (raw && fn_name && emit_arg &&
-                    emit_arg->type.kind != TY_INT &&
                     strncmp(raw, "((union", 7) != 0 &&
                     strncmp(raw, "(((union", 8) != 0) {
                     const char *_cpc = emit_sig_lookup_param_ctype(fn_name, i);
-                    Type _cat = emit_resolve_type(ctx, emit_arg->type);
-                    if (_cpc && strcmp(_cpc, "int64_t") == 0 &&
-                        (_cat.kind == TY_FLOAT || _cat.kind == TY_FLOAT64 ||
-                         _cat.kind == TY_FLOAT32)) {
+                    if (_cpc && strcmp(_cpc, "int64_t") == 0) {
+                        /* The emitted spelling decides first: a hoisted temp
+                         * RECORDED as `double` is a double whatever the elab
+                         * type says -- a generic call whose concrete spec
+                         * returns the float, handed through its tyvar wrapper
+                         * as the call it wraps (typed `int`). */
                         const char *_have = emit_str_is_bare_ident(raw)
                             ? emit_localvar_lookup_ctype(raw) : NULL;
-                        if (!_have || strcmp(_have, "int64_t") != 0)
+                        Type _src = type_simple(TY_UNKNOWN, CK_COPY);
+                        if (_have && strcmp(_have, "double") == 0)
+                            _src = emit_type_from_kind(TY_FLOAT);
+                        else if (_have && strcmp(_have, "float") == 0)
+                            _src = emit_type_from_kind(TY_FLOAT32);
+                        else if (!_have && emit_arg->type.kind != TY_INT) {
+                            Type _cat = emit_resolve_type(ctx, emit_arg->type);
+                            if (_cat.kind == TY_FLOAT || _cat.kind == TY_FLOAT64 ||
+                                _cat.kind == TY_FLOAT32)
+                                _src = _cat;
+                        }
+                        if (_src.kind != TY_UNKNOWN)
                             raw = emit_carrier_bridge(ctx, body, raw,
                                                       CK_CONCRETE, CK_CARRIER,
-                                                      _cat);
+                                                      _src);
+                        /* The by-value AGGREGATE twin: a temp recorded as a
+                         * struct (`tur_adt_MxP`, `tur_adt_Option__float`) --
+                         * a concrete spec's result under the tyvar wrapper --
+                         * cannot pass for an int64 at all (cc rejects it).
+                         * Box it, with the escaping (heap) bridge when the
+                         * sink is an inline-C container insert that keeps the
+                         * element, as the typed-arg path above does. */
+                        else if ((_have && strcmp(_have, "int64_t") != 0 &&
+                                  !strchr(_have, '*') &&
+                                  strncmp(_have, "tur_adt_", 8) == 0) ||
+                                 (!_have && emit_arg->type.kind != TY_INT &&
+                                  !arg_carrier_boxed &&
+                                  /* already a carrier word: an earlier rule
+                                   * boxed it (the by-value spec-param arm) */
+                                  strncmp(raw, "(int64_t)", 9) != 0 &&
+                                  strncmp(raw, "((int64_t)", 10) != 0)) {
+                            const Expr *_tw = arg_expr;
+                            while (_tw && _tw->kind == EX_ASCRIBE)
+                                _tw = _tw->as.ascribe_.inner;
+                            Type _agg = emit_resolve_type(ctx,
+                                (_tw && _tw->kind == EX_REINTERPRET &&
+                                 _tw->as.reinterpret_.target_kind == TY_TYVAR)
+                                    ? _tw->type : emit_arg->type);
+                            const char *_aggc = emit_type_c_name(ctx, _agg);
+                            /* Without a recorded temp, the resolved type is
+                             * the spelling -- but only a by-value aggregate
+                             * (a pointer or scalar spelling never lands here
+                             * as an aggregate, and a `:heap` ADT is its own
+                             * pointer). */
+                            bool _agg_ok = _have
+                                ? (_aggc && strcmp(_aggc, _have) == 0)
+                                : (_aggc && strncmp(_aggc, "tur_adt_", 8) == 0 &&
+                                   !strchr(_aggc, '*') &&
+                                   !type_is_heap_adt(_agg) &&
+                                   !type_is_heap_struct(_agg));
+                            if (_agg_ok)
+                                raw = fn_binding->body_is_inline_c
+                                    ? emit_carrier_bridge_escaping(ctx, body, raw,
+                                          CK_CONCRETE, CK_CARRIER, _agg)
+                                    : emit_carrier_bridge(ctx, body, raw,
+                                          CK_CONCRETE, CK_CARRIER, _agg);
+                        }
                     }
                 }
                 ctx->ce_word_store_sink = ce_sink_prev;

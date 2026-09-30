@@ -70,28 +70,14 @@ fixtures:
 - an effectful TYPED fn field aborted ("no CPS entry registered"), and its E2a
   call value-converted a float argument into the wrong register
   (`fn-field-typed-float`).
-
-## Open: a lifted lambda called inside a spec
-
-Found by `tests/generic-spec-matrix.py` (the `lambda` sink), and the same
-mechanism with a float in it, so it is a silent wrong answer rather than a
-benign mismatch:
-
-```turmeric
-(defn viafn [A] [x : A] : A ((fn [y : A] : A y) x))
-(viafn (:: 7.1 float32))   ; prints 0; the float64 twin prints 7.1 by luck
-```
-
-The lambda is lifted ONCE, with the carrier signature `int64_t __fn(int64_t)`,
-but the float32 spec calls it through `int64_t (*)(float)`: the cast's parameter
-types come from the arguments' resolved types, not from the callee. The float
-travels in `xmm0` and the callee reads `rdi`. It is pre-existing (the baseline
-prints the same `0`). The fix is the one below: key the call on the callee's
-EMITTED signature. That needs the call-head binding to remember the lambda it was
-bound from, because a `(fn [A] A)` PARAMETER of a spec is concrete (its
-callers pass concrete functions) while a lambda local to the generic body is the
-carrier thunk. Alternatively, clone the lambda per spec, as the passed- and
-returned-closure paths already do.
+- a lambda literal lifted ONCE with the carrier signature was called in a spec
+  through a pointer typed from the arguments' resolved types:
+  `((fn [y : A] : A y) x)` printed `0` at float32 (the float went in `xmm0`, the
+  thunk read `rdi`), and a by-value struct argument segfaulted.  The call now
+  follows the callee's EMITTED signature -- the fix direction below, applied to
+  the call-head path -- and a closure literal's fat dispatch takes its return
+  slot from the clone's recorded signature
+  (`generic-spec-carrier-crossings-2`).
 
 ## Fix direction
 

@@ -77,13 +77,30 @@ interpreter holds every float kind as a double. It printed `0` for `2.5`.
   both directions.
 - **Interpreter:** `gen-unwrap` at float32 reads the double it boxed.
 
+## Second batch: what the matrix found next
+
+With the first five fixed, `tests/generic-spec-matrix.py` still failed 77 of its
+1170 cells. The baseline compiler fails 256. Every one was the same mechanism
+at a different consumer, and each fix is keyed on the EMITTED C spelling, not
+on the elaborated type (which is the tyvar):
+
+| Sink | Before | Fix |
+| --- | --- | --- |
+| lambda `((fn [y : A] : A y) E)` | `0` at float32, segfault at a struct | The call-head path casts to the lifted thunk's RECORDED signature (`emit_sig_lookup_param_ctype`) and bridges each argument into a carrier slot: bits for a scalar, a heap box for an aggregate. A `(fn [A] A)` spec parameter has no recorded signature and keeps the resolved spelling its callers pass. |
+| capture `((fn [] c))`, `c : A` | segfault at an Option | The fat dispatch of a closure literal takes its return slot from the lambda clone's recorded return type. |
+| `(some x)`, `A := (Option float)` | invalid C | A same-family `#{Construct}` call in a spec adopted the spec's RESULT type (`some` minted at `A := float`). The call's own composed bindings now decide, when they are concrete and carry no possibly-collapsed `int`. |
+| `(vec-push! w E)`, by-value struct / Option | invalid C | An argument recorded (or, off a temp, resolved) as a by-value aggregate is boxed into an int64 carrier parameter. A float recorded as `double` is bit-bridged even when the elab type is the wrapped call's `int`. |
+| `^mut` cell reset from `vec-get`, at an Option | double free | Owned-box marking resolved `vec-get`'s declared bare `A` through the ENCLOSING spec's `A` (name capture). It made the vector's element box look owned, so each read-back freed it. A bare-tyvar declared result is borrow-shaped and is never resolved there. |
+| `(ident (f))`, `f : (fn [] A)` | `3.45846e-323` | The CPS path typed its result variable from the wrapped call's `int`. A delegated value recorded as `double` / aggregate is packed into a carrier binder (bits / reaped box). A safely delegatable wrapped call is delegated as the wrapper. |
+
+After the second batch the matrix is at **0 of 1170** (baseline 256) and gates
+in ctest (`tur_generic_spec_matrix`) against an empty baseline.
+
 ## Verified
 
 - `tests/fixtures/generic-spec-carrier-crossings` (compiled and `--interpret`)
   and `tests/fixtures/gen-yield-float32-interp`.
 - Full suite green, snapshots regenerated.
-- `tests/generic-spec-matrix.py`: see its baseline for the cells still open.
-  The lambda sink (`((fn [z : A] : A z) E)` in a float32 spec calls the
-  once-lifted carrier thunk through a float-typed pointer) is the M4 calling
-  protocol family, tracked in
-  `docs/reported/emitted-c-indirect-calls-are-not-type-exact.md`.
+- `tests/fixtures/generic-spec-carrier-crossings-2` pins the second batch.
+- `tests/generic-spec-matrix.py`: 0 of 1170 cells failing (baseline compiler:
+  256), compiled, interpreted and linted.

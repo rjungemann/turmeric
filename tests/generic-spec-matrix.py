@@ -41,8 +41,8 @@ Usage
         [--baseline FILE] [--write-baseline FILE] [--keep DIR]
 
 Exit 1 if a cell fails that the baseline does not list (or any cell fails
-when no baseline is given), 0 otherwise.  A baseline cell that now PASSES is
-reported as FIXED so the baseline can only shrink.
+when no baseline is given), or if a baseline cell now PASSES (reported as
+FIXED: remove its row, so the baseline can only shrink); 0 otherwise.
 """
 
 import argparse
@@ -254,7 +254,9 @@ def main():
     print("generic-spec-matrix: %d cells, %d failing (%d new, %d known), %d fixed"
           % (len(results), len(failing), len(new), len(failing) - len(new),
              len(fixed)))
-    return 1 if new else 0
+    # A FIXED cell fails too: the baseline is a ratchet, and a stale row would
+    # let the cell regress unnoticed.
+    return 1 if (new or fixed) else 0
 
 
 if __name__ == "__main__":

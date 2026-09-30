@@ -3547,7 +3547,32 @@ static CTerm *cps_tail_unit(CpsB *b, CKont kont) {
     return t;
 }
 
+/* generic-call-result-in-generic-collapses-to-int: the outermost reinterpret
+ * typed as the enclosing generic's own tyvar in `e`'s ascription chain, or NULL.
+ * Its VALUE is the clone's concrete `A` (the direct emitter's tyvar arm), while
+ * the call it wraps is typed with the carrier `int`; a delegated binding of the
+ * wrapped call must therefore delegate the WRAPPER and take ITS type, or the
+ * result variable is declared `int64_t` and a spec returning `double` lands in
+ * it by value conversion. */
+static const Expr *tyvar_reinterp_wrapper(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return (e && e->kind == EX_REINTERPRET &&
+            e->as.reinterpret_.target_kind == TY_TYVAR &&
+            e->as.reinterpret_.expr) ? e : NULL;
+}
+
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
+    {
+        const Expr *w = tyvar_reinterp_wrapper(e);
+        const Expr *in = w ? ascribe_peel(w) : NULL;
+        if (w && in && kont.kind != KK_LOOP && !is_atomic(in) &&
+            safe_to_delegate(b, in)) {
+            CVar x = fresh_cvar(b, &w->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return build_letraw(b, (Expr *)w, x, ac);
+        }
+    }
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
     if (!e) {
@@ -4099,6 +4124,12 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
 /* ---- cps_bind: bind e's value to x, then run rest --------------------- */
 
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    {
+        const Expr *w = tyvar_reinterp_wrapper(e);
+        const Expr *in = w ? ascribe_peel(w) : NULL;
+        if (w && in && !is_atomic(in) && safe_to_delegate(b, in))
+            return build_letraw(b, (Expr *)w, x, rest);
+    }
     e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     e = pap_maybe_rewrite(b, e);

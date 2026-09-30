@@ -5112,6 +5112,16 @@ static bool type_phantom_hides_aggregate(const Type *t) {
     return false;
 }
 
+/* Does `t` have a leaf of kind `k` anywhere in its application spine? */
+static bool type_mentions_kind(const Type *t, TypeKind k) {
+    if (!t) return false;
+    if (t->kind == k) return true;
+    if (t->kind == TY_APP)
+        return type_mentions_kind(t->as.app.fn, k) ||
+               type_mentions_kind(t->as.app.arg, k);
+    return false;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -6458,7 +6468,28 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             construct_recovered_byvalue = true;
             abi_changes = true;
         }
+        /* construct-in-spec-takes-the-spec-result: the family adoption below
+         * assumes a same-family construct inside a spec IS the spec's result.
+         * It need not be -- `(match (some x) ...)` inside a spec returning
+         * `(Option float)` (A := (Option float)) is `(Option (Option float))`,
+         * and adopting the spec's result minted `some` at A := float (invalid
+         * C).  The adoption exists for bindings that COLLAPSED the element to
+         * the carrier `int`; when the call's own (composed) bindings already
+         * name a concrete result with no `int` leaf that could be such a
+         * collapse, they are the answer. */
+        bool construct_bindings_decide = false;
         if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
+            ctx->current_abi_specialization && bindings && n_bindings > 0) {
+            Type rb = emit_abi_instantiate_type(&generic_result, bindings,
+                                                n_bindings, ctx->type_arena);
+            rb = emit_resolve_type(ctx, rb);
+            construct_bindings_decide =
+                rb.kind == TY_APP && type_app_is_concrete_adt(&rb) &&
+                !emit_abi_type_has_concrete_named_tyvar(&rb) &&
+                !type_mentions_kind(&rb, TY_INT);
+        }
+        if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
+            !construct_bindings_decide &&
             ctx->current_abi_specialization &&
             ctx->current_abi_specialization->fn) {
             Type spec_ret = ctx->current_abi_specialization->result_type;

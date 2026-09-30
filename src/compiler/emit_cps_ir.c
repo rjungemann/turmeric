@@ -7692,6 +7692,31 @@ static void emit_letraw(CE *ce, const CTerm *t) {
                 bridged_ok = true;
             }
         }
+        /* generic-call-result-in-generic-collapses-to-int, the CPS half: the
+         * binder is the int64 carrier word (typed from a wrapped tyvar-result
+         * call's `int`) but the delegated value is a temp the direct emitter
+         * RECORDED as a concrete `double` / `float` / by-value aggregate -- a
+         * concrete spec's result.  Assigning it raw value-converted the double
+         * (3.45846e-323) or was invalid C for the aggregate.  Pack it the way
+         * the DK slot carries such a value: float bits, or a reaped heap box
+         * (the same box `dk_run` hands an aggregate result through). */
+        if (!bridged_ok && rhs && bct && strcmp(bct, "int64_t") == 0 &&
+            emit_str_is_bare_ident(rhs)) {
+            const char *rc = emit_localvar_lookup_ctype(rhs);
+            if (rc && (strcmp(rc, "double") == 0 || strcmp(rc, "float") == 0)) {
+                char *br = emit_carrier_bridge(ce->ctx, ce->out, strdup(rhs),
+                    CK_CONCRETE, CK_CARRIER,
+                    emit_type_from_kind(strcmp(rc, "float") == 0 ? TY_FLOAT32
+                                                                : TY_FLOAT));
+                ce_line(ce, "%s = %s;", bn, br);
+                free(br);
+                bridged_ok = true;
+            } else if (rc && strncmp(rc, "tur_adt_", 8) == 0 && !strchr(rc, '*')) {
+                ce_line(ce, "%s = __dk_reap_ptr((intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; }));",
+                        bn, rc, rc, rc, rhs);
+                bridged_ok = true;
+            }
+        }
         if (!bridged_ok)
             ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
     }
