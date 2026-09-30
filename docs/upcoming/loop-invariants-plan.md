@@ -533,13 +533,15 @@ All six phases, behind `--enable=loop-invariants` (row in
   returned -5. `rt_build_env` now drops a rebound `^mut` parameter's refinement
   (and a `:pre` naming it), and the return obligation then uses the whole body.
   Pinned by `refine-mut-param-rebound-not-trusted`.
-- **refine-s3-cross-sort-exchange** (miscompile, found by the LI5 fuzz
-  population). S3 passed an LA-entailed equality between an Int and a Real term
-  to EUF, which holds `0` and `0.0` as distinct constants -- a manufactured
-  conflict, so `(> acc 0.0)` "followed" from `acc = 0.0` whenever an unrelated
-  Int was pinned to the same value. Every one of the fuzz soundness hits was
-  this. Terms of different sorts are no longer exchanged. Pinned by
-  `refine-no-cross-sort-exchange`.
+- **Int/Real literal conflict** (miscompile, found by the LI5 fuzz
+  population). S3 passed an LA-entailed equality between an Int and a Real
+  term to EUF, and S1 held `0` and `0.0` as distinct constants -- a
+  manufactured conflict, so `(> acc 0.0)` "followed" from `acc = 0.0` whenever
+  an unrelated Int was pinned to the same value. Every fuzz soundness hit was
+  this. `main` fixed the same root cause independently while this branch was
+  open (#972: S1 compares int/real literals by value; model search now covers
+  Real), so this branch's interim S3 guard was dropped in favour of it. The
+  loop-shaped repro is pinned by `errors/loop-invariant-float-entry-false`.
 - **`&mut` was not a borrow to WF3.** `rt_form_borrows_name` and
   `wf_borrow_write_free` only knew `(& x)`, so `&mut x` -- the borrow a callee
   writes through -- was invisible to them. Both now treat it as a write
@@ -554,13 +556,13 @@ line pinned), `refine-loop-invariant-re2` (both bounds, a post-loop crossing,
 the `for-slots` macro prototype of the `for-each` lowering),
 `loop-invariant-branching`, `loop-invariant-post-loop`,
 `loop-invariant-strict-bare-loop`, `loop-invariant-declines`,
-`refine-mut-param-rebound-not-trusted`, `refine-no-cross-sort-exchange`.
+`refine-mut-param-rebound-not-trusted`.
 Errors: `loop-invariant-effectful`, `loop-invariant-not-bool`,
 `loop-invariant-misplaced`, `loop-invariant-entry-false`,
 `loop-invariant-not-preserved`, `loop-invariant-post-havoc` (the sabotage
 fixture: skip the rename in `li_prove_paths_ext` and it fails),
 `loop-invariant-strict-unproven`, `loop-invariant-re2-off-by-one`,
-`loop-invariant-unseen-writes`.
+`loop-invariant-unseen-writes`, `loop-invariant-float-entry-false`.
 
 ### Fuzz
 
@@ -568,14 +570,16 @@ fixture: skip the rename in `li_prove_paths_ext` and it fails),
 must-decline bodies; int and float accumulators) in the default mix and
 `--only-shape loop`; both legs pass `--enable=loop-invariants`.
 The first two `--only-shape loop --n 400` runs (seeds 11, 23) found **12
-soundness bugs -- every one the S3 cross-sort exchange above**, reached
-through the float accumulator beside the int counter. After that fix:
+soundness bugs -- every one the Int/Real literal conflict above**, reached
+through the float accumulator beside the int counter. With it fixed (the
+loop-only rows re-run after merging #972, whose Real model search roughly
+doubles the refutations):
 
 | run | cases | proven / refuted | soundness bugs | other BUG | suspicious (report-only) |
 |---|---|---|---|---|---|
-| `--only-shape loop --seed 11` | 400 | 715 / 383 | **0** | 0 | 12 |
-| `--only-shape loop --seed 23` | 400 | 665 / 404 | **0** | 0 | 6 |
-| default mix `--seed 41` | 400 | 441 / 416 | **0** | 0 | 4 |
+| `--only-shape loop --seed 11` | 400 | 715 / 732 | **0** | 0 | 22 |
+| `--only-shape loop --seed 23` | 400 | 665 / 767 | **0** | 0 | 15 |
+| default mix `--seed 41` (before the merge) | 400 | 441 / 416 | **0** | 0 | 4 |
 
 The "suspicious" rows are universal refutations (TUR-E0371 over all inputs)
 of programs whose `main` happens not to pass a violating argument -- the
