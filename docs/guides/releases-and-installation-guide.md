@@ -36,7 +36,7 @@ sh tvm/install.sh        # installs into ~/.tvm and wires up your shell rc
 Then, in a new shell:
 
 ```sh
-tvm install 0.36.0       # download + SHA-256 verify + cache a prebuilt release
+tvm install 0.36.0       # download + cache a prebuilt release (verify: see below)
 tvm use 0.36.0           # activate it for this shell
 tvm alias default 0.36.0 # make it the default for new shells
 tvm ls-remote            # list versions available to download
@@ -44,8 +44,25 @@ tvm run 0.17.0 --version # one-shot invoke without switching (great for bisects)
 ```
 
 `tvm install` consumes the same GitHub Release tarballs described in
-Option 2, verifies them against the release's `sha256sums.txt`, and
-extracts each version under `~/.tvm/versions/<v>/`. When no prebuilt
+Option 2, checks them against the release's `sha256sums.txt` **when it can**,
+and extracts each version under `~/.tvm/versions/<v>/`.
+
+> **The checksum check currently fails open.** Four conditions skip it, and
+> only one of them says so:
+>
+> | Condition | What happens |
+> | --- | --- |
+> | `sha256sums.txt` missing, unreachable or empty | skipped, **silently** |
+> | the asset has no row in that file | skipped, **silently** |
+> | no `sha256` tool on the system | skipped, with a log line |
+> | an explicit `--from` source | skipped |
+>
+> It should refuse instead, and making it do so is tracked as C-2 in the
+> [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
+> Note too that the sums file is fetched from the same origin as the asset, so
+> even when the check runs it establishes integrity, not authenticity --
+> release assets are not yet signed or attested. To verify by hand, use the
+> Option 2 steps below. When no prebuilt
 asset exists for a tag (older than the prebuild matrix, or an
 unpublished platform), `tvm install --build <v>` falls back to a CMake
 source build. See [`tvm/README.md`](https://github.com/rjungemann/turmeric/blob/main/tvm/README.md) for the full
@@ -153,6 +170,12 @@ Linuxbrew it's `/usr/local` or `/home/linuxbrew/.linuxbrew`.
 There is currently no stable (versioned) Homebrew formula -- only
 `--HEAD`. A pinned `url`/`sha256` stanza will be added once a stable
 release line is established.
+
+**This is also what the advertised `curl … | sh` installer does**, so that
+path compiles whatever `main` is at that moment and verifies no checksum.
+For a verified install, use `tvm` (with the caveat above) or Option 2's
+manual download-and-check. Tracked as C-1; see the
+[Security Guide](security-guide.md#t4-the-supply-chain).
 
 ### Option 4: Building from source
 

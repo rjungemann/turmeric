@@ -186,6 +186,16 @@ tests/fixtures/*/*/jit.stderr
 # Claude Code agent worktrees (transient, harness-managed)
 .claude/worktrees/
 
+# Claude Code per-machine state. Untracked deliberately (security audit C-8):
+# settings.local.json carries a machine's own absolute paths and its
+# pre-approved command allowlist, which should not be inherited by anyone who
+# clones this repo; memory/ is per-session notes, not project documentation.
+.claude/settings.local.json
+.claude/projects/
+
+# Maintainer scratchpad, not project documentation.
+TEMP.md
+
 
 # J3 benchmark triangle artifacts (run-triangle.sh output dir).
 benchmarks/output/

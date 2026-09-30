@@ -1,15 +1,26 @@
 ---
 title: Sandboxing Guide
 category: Interoperability
-description: Running untrusted Turmeric code safely inside a C host using turi_env_new_sandboxed, capability flags, and resource limits
+description: Restricting Turmeric code inside a C host with turi_env_new_sandboxed, capability flags, and resource limits -- and which operations the capability check does not yet cover
 ---
 
 # Sandboxing Guide
 
 The libturi embedding API provides a sandboxed evaluation environment for
-running untrusted Turmeric code -- REPL widgets, plug-in scripts, user-supplied
-formulas -- inside a C host process without exposing I/O, FFI, or unsafe memory
-operations.
+Turmeric code -- REPL widgets, plug-in scripts, user-supplied formulas --
+inside a C host process with I/O, FFI, and unsafe memory operations denied.
+
+> **Do not rely on this as a boundary against hostile code yet.** The
+> capability set is enforced for the builtin operations listed under
+> [What the Sandbox Blocks](#what-the-sandbox-blocks), but **native functions
+> are registered into every environment and almost none of them consult it**,
+> so a sandboxed environment still reaches process spawning, file open and
+> write, and raw-descriptor reads. This is tracked as S-1 in the
+> [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
+> the [Security Guide](security-guide.md#t3-the-sandboxed-interpreter) states
+> the promise and where it stands. Treat the sandbox as protection against
+> *accidents* -- a plug-in that calls `println` by mistake -- not against an
+> adversary.
 
 See [eval-api.md](eval-api.md) for the full C embedding API reference.
 
@@ -49,8 +60,14 @@ without restriction.
 
 All `println-*` variants (`println-int`, `println-float`, `println-bool`,
 `println-cstr`, `println-uint`, `println-float32`) return `TURI_ERROR` in a
-sandboxed environment.  File and socket I/O builtins (`read-async`,
-`write-async`) are similarly blocked.
+sandboxed environment.
+
+`read-async` and `write-async` are **not** blocked, despite being I/O: they are
+native functions rather than builtins, and the native dispatch does not consult
+the capability set (S-1). `read-async` performs its read eagerly, before any
+future machinery, so the `TURI_CAP_ASYNC` gate on the `(async ...)` form does
+not stop it either. Do not pass a descriptor you care about to a host that
+evaluates untrusted text.
 
 ### FFI (dynamic loading)
 
@@ -297,7 +314,7 @@ Expected output:
 
 | Capability | `TURI_CAP_*` bit | Blocked by default | What it covers |
 |---|---|---|---|
-| I/O | `TURI_CAP_IO` | yes | `println-*`, file/socket builtins |
+| I/O | `TURI_CAP_IO` | yes | `println-*`. **Not** `read-async`/`write-async` -- see S-1 above |
 | FFI | `TURI_CAP_FFI` | yes | `dlopen`, `dlsym`, `dlclose` |
 | Inline-C | `TURI_CAP_INLINE_C` | yes | `` (` ``c ... `` `) `` expressions |
 | Async | `TURI_CAP_ASYNC` | yes | `(async ...)` forms |
@@ -307,10 +324,15 @@ Expected output:
 All six capabilities are denied when you call `turi_env_new_sandboxed()`.
 Use `turi_env_allow` to selectively re-enable any subset.
 
+Denied means the *checked* operations refuse. The checks live in the builtin
+dispatch, the FFI thunk path, inline-C evaluation, the `(async ...)` form, and
+`import`. A native function reached by name is not checked (S-1).
+
 ---
 
 ## See Also
 
+- [security-guide.md](security-guide.md) -- what Turmeric promises at each trust boundary
 - [eval-api.md](eval-api.md) -- full C embedding API reference
 - [c-integration-guide.md](c-integration-guide.md) -- FFI and inline-C
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- `-X` feature flags

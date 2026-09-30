@@ -18,6 +18,12 @@
     "onDebugResolve:turmeric",
     "onDebugDynamicConfigurations:turmeric"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The debug adapter executable is taken from the workspace's launch configuration, so starting a debug session means trusting the repository. Language registration and breakpoint support are declarative and safe in an untrusted workspace."
+    }
+  },
   "contributes": {
     "languages": [
       {

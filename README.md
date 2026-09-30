@@ -20,7 +20,12 @@ Turmeric exists to explore the intersection of Lisp expressiveness and systems-l
 curl -sSf https://turmeric-lang.com/install | sh
 ```
 
-This installs the `tur` compiler via the Homebrew formula in this repo.
+This installs the `tur` compiler via the Homebrew formula in this repo. The
+formula is **`--HEAD`-only**, so this builds whatever is on `main` at that
+moment and verifies no checksum. For a pinned, checksum-verified install use
+the version manager (`tvm`) below or a release tarball -- see the
+[installation guide](docs/guides/releases-and-installation-guide.md) and
+[`SECURITY.md`](SECURITY.md).
 
 **Linux / Docker:**
 
@@ -43,7 +48,7 @@ To install, switch between, and pin multiple Turmeric releases per-shell
 
 ```sh
 sh tvm/install.sh        # bootstrap into ~/.tvm and wire up your shell rc
-tvm install 0.23.1       # download + verify + cache a prebuilt release
+tvm install 0.23.1       # download + cache a prebuilt release
 tvm use 0.23.1           # activate it for this shell
 tvm alias default 0.23.1 # make it the default for new shells
 ```
@@ -460,6 +465,28 @@ element type is itself `Eq`:
       (join t)))  ; child sees "req-1"
   0)
 ```
+
+## Security
+
+Turmeric promises different things to different inputs -- a byte string handed
+to a stdlib reader is not the same as a project tree you build. Those promises,
+and the places the implementation does not yet keep them, are written down in
+the [Security Guide](docs/guides/security-guide.md).
+
+Two worth knowing before you use it:
+
+- **Building a project runs that project's code** -- inline C, compile-time
+  macros, its Justfile, its `:link-flags`. Do not `tur build` a tree you would
+  not `make`. `tur check` and the language server aim narrower: they should not
+  execute repo-supplied code unless you asked them to, and the guide names the
+  three places that is not yet true.
+- **`Env/new-sandboxed` is not yet a boundary against hostile code.** The
+  capability set is enforced for builtins but not for native functions. Use it
+  to catch accidents, not adversaries.
+
+To report a vulnerability, use the
+[private advisory form](https://github.com/rjungemann/turmeric/security/advisories/new)
+rather than a public issue. See [`SECURITY.md`](SECURITY.md).
 
 ## Scoped Features for v1
 
