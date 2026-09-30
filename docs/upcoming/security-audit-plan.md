@@ -1090,19 +1090,38 @@ force-push and deletion locks are the load-bearing part and they are on.
 
 ### Findings the survey did not have
 
-- **A fuzz crash is filed as a PUBLIC issue.** `fuzz.yml:184` and
-  `tsan.yml:111` both run `gh issue create` on a finding, which is why both
-  workflows hold `issues: write`. WP4 deliberately gave the new parser job
-  `contents: read` and had it fail rather than file (`fuzz.yml:194-196`), and
-  section 6 item 3 of this plan says so in as many words: "The job fails,
-  rather than filing a public issue, so that a finding in an untrusted-input
-  parser is triaged privately". **Job 1 and `tsan.yml` never got that
-  treatment.** So the repo now has two policies in one file: the libFuzzer
-  parser targets triage privately, while the type-confusion fuzzer and the TSan
-  job publish a title, a seed and a reproducer to a public tracker the moment
-  they find something. That is the same disclosure gap WP1 built `SECURITY.md`
-  to close, reopened by automation. This, not injection, is what
-  `issues: write` costs, and it is the substantive half of C-6.
+- **The private-triage posture is largely symbolic on a public repository, and
+  that is the real C-6 finding.** The first draft of this section said the gap
+  was that `fuzz.yml:184` and `tsan.yml:111` file public issues while WP4's
+  parser job does not -- two policies in one file. Checked before acting, that
+  framing is wrong in the way that matters. This repo is public, so a
+  **scheduled run is already world-readable the moment it finishes**: the run
+  page returns HTTP 200 to a signed-out client, the workflow-run list is
+  anonymously readable over the API (`total_count` comes back without a
+  token), and the parser job's own failure path writes the failing target
+  names into `$GITHUB_STEP_SUMMARY` and emits `::error::parser fuzzing found
+  something in: $FAILED` -- both of which land in those public logs -- then
+  uploads `fuzz-parser-findings`, an artifact any signed-in GitHub user can
+  download. Not filing an issue withholds a **title, an index entry and a
+  notification**. It does not withhold the finding.
+
+  So the two-policy split is not an oversight to patch; it is a partial
+  mitigation whose limit was not written down. And section 6 item 3's claim
+  that a parser finding "is triaged privately" is an **overclaim of the same
+  shape as the three WP1 corrected** -- it describes an intent the mechanism
+  does not deliver. Anyone who accepts it at face value will believe a nightly
+  memory-safety finding in an untrusted-input parser is embargoed when it has
+  in fact been public since 04:30 UTC.
+
+  Genuinely private triage would mean the fuzz search not *running* in public
+  -- a private mirror of the repo, or a job whose only output is a
+  notification to the maintainer -- which is a scope and cost decision for the
+  author, not a patch. **Deliberately not changed here**: the issue-filing in
+  job 1 is something the author built on purpose after four nights of findings
+  reached nobody (the comment at `fuzz.yml:145-152` records it), and removing
+  it unilaterally would trade a working signal for a privacy guarantee the
+  platform is not providing either way. Recorded as an open question in
+  section 7 instead, with section 6 item 3 corrected to say what is true.
 - **`markdown>=3.4` is a floor with no ceiling and no hash**, and it is
   installed in `release.yml:286` -- i.e. inside the job that produces the
   published docs tarball. `pip install --upgrade` at `ci.yml:1517` takes
@@ -1620,8 +1639,15 @@ checklist, not a gate.
 2. Every section 2 row is either fixed with a fixture, filed as an open
    report, or retired with a one-line reason in this plan.
 3. `tests/fuzz/` targets run nightly under ASan and flag crashes. **Met by
-   WP4.** The job fails, rather than filing a public issue, so that a finding
-   in an untrusted-input parser is triaged privately.
+   WP4.** The job fails rather than filing a public issue.
+   **Corrected by WP7 (section 2g):** this used to end "so that a finding in
+   an untrusted-input parser is triaged privately", which the mechanism does
+   not deliver. On a public repository the scheduled run is world-readable the
+   moment it finishes -- the step summary names the failing targets, the
+   `::error::` annotation repeats them, and the findings artifact is
+   downloadable -- so not filing an issue withholds a title and a
+   notification, not the finding. Private triage of parser findings would need
+   the search not to run in public; see section 7, question 8.
 4. The generated sandbox test pins every native's capability.
 5. Release assets are attested and the installer verifies a checksum.
 6. Every workflow action is SHA-pinned with least-privilege permissions.
@@ -1675,8 +1701,30 @@ checklist, not a gate.
    or run the wasm env sandboxed too for defence in depth?
 5. **Installer:** keep Homebrew as the primary channel (with a stable
    formula), or make `tvm` the advertised path?
-6. **Release signing key:** Sigstore keyless via GitHub OIDC (no key to
-   manage; proposed), or a maintainer GPG key?
+6. ~~**Release signing key:**~~ **ANSWERED 2026-09-30 by WP7, as proposed:**
+   Sigstore keyless via GitHub OIDC. `actions/attest-build-provenance` signs
+   every release asset with a short-lived certificate minted from the release
+   job's OIDC token, so there is no long-lived key to hold, rotate or lose.
+   Tags stay annotated rather than signed, and the three `cut-*-release`
+   commands record why: the attestation is what protects a downloader, and a
+   `git tag -s` whose key is absent would turn every future cut into a hard
+   failure partway through. A maintainer GPG key can still be added later; it
+   would prove who cut a release, which is a narrower claim than where the
+   bytes came from.
 7. **Who** runs the audit -- one person over four weeks, or the packages
    handed out? WP2 and WP3 want someone who knows the driver and the
    interpreter respectively; WP4 and WP7 do not.
+8. **Is private triage of fuzz findings worth what it costs?** Raised by WP7
+   (section 2g). Today's arrangement gets the label but not the property: on a
+   public repo the nightly run's summary, error annotations and findings
+   artifact are readable as soon as it finishes, so declining to file an issue
+   withholds a notification rather than a finding. Three ways out, and this is
+   the author's call because they differ in cost, not in correctness:
+   - **Accept it.** Say plainly that fuzz findings are public on discovery,
+     drop the asymmetry, and let the parser job file an issue like the other
+     two so findings stop going unnoticed (the failure mode `fuzz.yml:145-152`
+     already records from experience).
+   - **Make it real.** Run the parser search in a private mirror and notify
+     the maintainer out of band. Genuinely private, and the most work.
+   - **Leave it.** Keep the split as partial mitigation, now that section 6
+     item 3 states its limit instead of overclaiming.
