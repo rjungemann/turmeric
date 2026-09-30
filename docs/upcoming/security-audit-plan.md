@@ -1,6 +1,7 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
-> **Status: WP1 DONE (2026-09-29); WP2-WP8 PROPOSED.** Written 2026-09-30
+> **Status: WP1 DONE (2026-09-29); WP5 DONE (2026-09-30); WP2-WP4, WP6-WP8
+> PROPOSED.** Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
 > every row there is a *candidate* until the work package that owns it
@@ -13,6 +14,11 @@
 > the section 2 rows hold as written. WP1's own verification results, three
 > re-grades and three findings the survey did not have are recorded in
 > section 2a; section 7 Q1 is answered.
+>
+> **WP5 landed 2026-09-30** against `main` @ 5fd23a65. M-5 and M-6 are fixed
+> with fixtures, the TSan job and the format-string flags are in; section 2b
+> records what the verification found, what the survey had wrong, and what was
+> handed to WP3/WP4.
 > **Type:** Security / process / tooling
 > **Depends on:** nothing that is not already in the tree. The Debug build's
 > ASan+UBSan (`CMakeLists.txt:33`), the four differential fuzzers
@@ -123,8 +129,8 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | M-2 | medium | JSON: input ending in `\` steps past the NUL terminator (compiled `stdlib/json.tur:545-563`; interpreter `src/turi/interpreter_natives.c:1211-1230`); no nesting depth limit (`json.tur:616-660`); no `\u`; error paths leak. |
 | M-3 | medium (under T5) | LSP framing parses `Content-Length` with an unchecked `atol`; `-1` wraps `body_len + 1` to 0, `malloc(0)`, then a huge `read` -- heap overflow (`src/lsp/lsp_io.c:71-96`, **verified**); `read_headers` grows unbounded (`:40-68`). DAP reuses it (`src/turi/dap.c:818, 1114, 1340`). |
 | M-4 | medium | `httpd`: `Content-Length` is `(int)strtol` into `malloc(content_len + 1)` with no cap (`stdlib/httpd.tur:293, 329, 2491`); `Transfer-Encoding` ignored (smuggling behind a proxy); static-file traversal guard is `strstr(path, "..")` with `stat` not `lstat` (`:4143-4200`); binds `INADDR_ANY` by default (`:720`). Multipart (`:2102-2176`) and Basic auth (`:1963, 2014`) unreviewed. |
-| M-5 | medium | `read-async` does `malloc((size_t)bytes + 1)` with an unchecked, possibly negative `int` (`src/turi/fiber.c:763`); `tur_string_substring`/`slice` compute `start + len > n` with signed overflow (`src/runtime/tur_string.c:183, 300`); `n_from_bytes` accepts `len > strlen` (`src/turi/string_native.c:25-30`); `sb_reserve` doubles unchecked (`tur_string.c:238-243`); `bytes-alloc` `malloc(8 + (size_t)n)` with negative `n` (`stdlib/serial.tur:56-62`); `alloca(n * 8)` with user `n` in `stdlib/sized-buf.tur:445, 484` (gated `#fx{Unsafe}`). |
-| M-6 | medium (silent UAF class) | Region escape hooks missing, per the CLAUDE.md rule: `tur_hamt_transient_set` (`src/runtime/hamt.c:1879`, from `stdlib/hamt.tur:740`), `tvar/write`/`tvar/swap` (`stdlib/stm.tur:88, 109`; `src/runtime/stm.c` has no note), `sized-buf-set!` (`sized-buf.tur:307`), `sized-matrix-set!` (`:232`), `sized-bitvec-set!` (`sized-bits.tur:139`), `httpd-resp-header-add!` (`httpd.tur:1281`). Each is a candidate use-after-rewind on the default build. |
+| M-5 | medium | **FIXED by WP5** (section 2b), with 26 more sites the sweep found. `read-async` does `malloc((size_t)bytes + 1)` with an unchecked, possibly negative `int` (`src/turi/fiber.c:763`); `tur_string_substring`/`slice` compute `start + len > n` with signed overflow (`src/runtime/tur_string.c:183, 300`); `n_from_bytes` accepts `len > strlen` (`src/turi/string_native.c:25-30`); `sb_reserve` doubles unchecked (`tur_string.c:238-243`); `bytes-alloc` `malloc(8 + (size_t)n)` with negative `n` (`stdlib/serial.tur:56-62`); `alloca(n * 8)` with user `n` in `stdlib/sized-buf.tur:445, 484` (gated `#fx{Unsafe}`). |
+| M-6 | medium (silent UAF class) | **FIXED by WP5** (section 2b): one survey site confirmed -- as a class, not a site -- three retired, and a second class the survey did not have. Region escape hooks missing, per the CLAUDE.md rule: `tur_hamt_transient_set` (`src/runtime/hamt.c:1879`, from `stdlib/hamt.tur:740`), `tvar/write`/`tvar/swap` (`stdlib/stm.tur:88, 109`; `src/runtime/stm.c` has no note), `sized-buf-set!` (`sized-buf.tur:307`), `sized-matrix-set!` (`:232`), `sized-bitvec-set!` (`sized-bits.tur:139`), `httpd-resp-header-add!` (`httpd.tur:1281`). Each is a candidate use-after-rewind on the default build. |
 | M-7 | info | The effect system is not a security boundary today: `--strict-effects` defaults off and only warns (`src/runtime/globals.c:135`); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. |
 
 ### Web (WP6)
@@ -257,6 +263,180 @@ retried here -- WP3 owns the PoC. The likeliest reason remains that
 `TURI_CAP_IMPORT` is granted only transiently around a `:for-macros` load
 (`macro_env.c:504-506`), so the module's natives are not resolvable by the time
 the macro body runs. WP3 should write down whichever it turns out to be.
+
+## 2b. WP5's verification pass and execution (2026-09-30)
+
+Everything below was read in the source, and where it could be run, run,
+against `main` @ 5fd23a65.
+
+### M-6 -- the region store hooks
+
+Every survey site was probed with `TUR_REGION_STATS=1`, the only instrument
+that sees a missed hook (stdout does not: a rewound generation is not
+necessarily reused before the read).
+
+| Survey site | Verdict |
+| --- | --- |
+| `sized-buf-set!` | **Confirmed, and it is a class, not a site.** A node stored from inside `with-region` read back the arena poison (`-2387225703656530210`; `rewinds=2 retires=0`). `sized-buf-set!` is a Turmeric-bodied wrapper over `__sized-buf-set!-raw`, and the implicit node -> `:int` erasure was noted only when the *callee* was inline C: inside the wrapper the word is already an `:int`, so the store it forwards to sees no node. Any user wrapper of that shape had the same hole. Fixed in the rule (`elab_call.c`): the erasure is now noted at any callee for a `:heap` node word, constructors excepted. |
+| `tvar/write`, `tvar/swap` | **Retired as a hook gap.** `val : ptr` -- a node reaches it only through an explicit `(:: node ptr)`, which is noted at the ascription. No runtime fixture was possible: a transaction inside any lambda does not compile ([stm-inside-closure-captured-tvar-undeclared](../reported/stm-inside-closure-captured-tvar-undeclared.md), filed). |
+| `tur_hamt_transient_set` | **Missing in C, unreachable today.** The stdlib entry takes `ptr<void>`, noted at the erasure. The C setter now carries the note as `tur_hamt_set` does, and that function's "every public setter funnels through here" comment, which was false, is corrected. |
+| `sized-matrix-set!` | **Retired.** An inline-C callee with an untyped `v`, so the existing implicit-erasure note already covers it (the probe retires). The survey cited `sized-buf.tur:232`; it is `sized-matrix.tur:232`. |
+| `sized-bitvec-set!` | **Retired, false positive.** It sets a bit; no caller word is stored. |
+| `httpd-resp-header-add!` | **Retired, false positive.** It copies both strings. |
+
+Two findings the survey did not have:
+
+- **An inline-C callee's type-variable parameter** was never noted. The
+  body-entry note skips a def-less tyvar on the theory that the node "was noted
+  at its ascription", but a generic call has no ascription. Reproduced (poison
+  read) and fixed at the call site (`emit_expr.c`), the one place the concrete
+  argument type is known.
+- **A constructor must not be noted**, learned by measurement: the first cut of
+  the widened rule noted every node field handed to a constructor and took
+  typed trees built in a bracket from 4/4 rewinds to 0/4. A constructor's box is
+  routed into the same generation (or, malloc'd, notes its own fields), so its
+  store is region-to-region. The one known remaining cost is `tcons`, whose
+  tail is `t : int`: a list built with it inside a bracket now retires, where
+  `tcons-of` (typed tail) keeps its rewind. The regions fuzz passes its
+  rewind/retire model at seeds 1 and 7.
+
+Pinned by `tests/fixtures/region-escape-via-wrapper`, a `hook.sh` fixture that
+asserts the stats line (`pushes=6 rewinds=2 retires=4`) and the
+`TUR_REGIONS=0` values; all four stores read back poison before the fix. The
+plan asked for cases in `region-escape-via-store`; they went in their own
+fixture because that one asserts stdout only, which, per
+[stdlib-region-store-hooks-unswept](../archive/stdlib-region-store-hooks-unswept.md),
+tests nothing about a hook. CLAUDE.md's hooked-set paragraph names both new
+routes.
+
+On the way: `stdlib/sized-matrix.tur` and `stdlib/sized-bits.tur` did not load
+at all (an untyped parameter handed to `size-eval`); both are typed now.
+
+### M-5 -- sizes that reach an allocation
+
+All six survey rows confirmed and fixed. The `malloc(.*\*` / `alloca(` sweep the
+package asked for covered 58 runtime sites, ~300 interpreter sites and 486
+stdlib inline-C sites, and turned up 26 more; each was re-read before it was
+fixed. `tests/fixtures/size-arith-guards` runs ten of them in their own
+processes: before the fix, a substring with a huge length and
+`(sized-buf-with-stack -1 f)` segfaulted, `fs/read-text` on a pipe was a heap
+overflow glibc's fortify happened to catch, and the other seven accepted the
+bad size silently.
+
+Fixed, by kind:
+
+- **Window arithmetic that overflowed its own clamp:** `tur_string_substring`,
+  `tur_string_slice`, `tur_slice_sub` (`off + len > n` skipped the clamp for a
+  huge `len`); `sb_reserve`'s doubling; `trace.c`'s OUTPUT record, whose 32-bit
+  `1 + 4 + n` let a user-loaded recording claim 4 GiB and stall replay;
+  `tur_hamt_show`'s 32-bit `count * 48`; r7gc's large allocation, which rounded
+  a near-`SIZE_MAX` request to zero chunks and returned a live-looking pointer.
+- **A product that wrapped to a tiny block under a huge recorded size:**
+  `sized-buf-new(-zeroed)` (stdlib and interpreter twin), `sized-matrix-new(-zeroed)`,
+  `sized-bitvec-new`, `grid-new` (twin too), `chan-new`/`async-chan-new`/`schan-new`
+  (twin too; a capacity under 1 is now 1 on both paths, as the interpreter
+  always read it), `work-queue-new-bounded`, `thread-pool-new(-dynamic)`,
+  `httpd-new-pool`'s worker count, `vec-new-filled` (interpreter),
+  `tur_uf_new`, `zipper-new`.
+- **A negative count:** `read-async` (range-checked before its narrowing to
+  `int`), `bytes-alloc`, `bytes-concat`, the `ptr<void>` Serializable pair
+  (the deserializer's `dlen` is off the wire and a negative one overflowed a
+  0-7 byte block), `sized-buf-compute`.
+- **A caller-sized `alloca`:** `sized-buf-with-stack` is range-checked and moves
+  to the heap past 512 elements, same scoped lifetime.
+- **No check at all:** `grid-get`/`grid-set!`, `#fx{}` functions that indexed
+  any `(x, y)`.
+- **`ftell`'s -1:** `fs/read-text`, `read-file` and `csv/read-file-with-delim`
+  sized a buffer by it and `fread` a pipe or FIFO into zero bytes.
+- **A panic that returned:** the interpreter's r7rs `substring` fell through
+  `turi_runtime_panic` (which returns under a catch boundary) into a
+  `SIZE_MAX` copy.
+- **A stack over-read:** the inline-C `snprintf` emulator copied `rlen + 1`
+  bytes out of a 1024-byte buffer whatever `rlen` was (the format policy is
+  still S-3's).
+- **The wire's own lengths:** `serial_cont_from_bytes`'s string and byte-field
+  readers allocated a uint32 length before checking the input held it (9 bytes
+  could ask for 4 GiB per field), and `slen + 1` wrapped. The rest of that
+  reader stays M-1's.
+- **Past a cstr's NUL:** the interpreter's `tur_string_from_bytes` native caps
+  the length at the string for a `cstr` argument (the no-FFI path the sandbox
+  and the wasm build use). The compiled and FFI paths keep the raw
+  (pointer, length) contract.
+
+Handed on, not fixed here:
+
+- `httpd`'s `Content-Length` parsed as `(int)strtol` with no body cap (DoS, no
+  corruption), and its response writer, where a failed `realloc` leaves `hlen`
+  past `hbuf_cap` -> **M-4, WP4**.
+- `lsp_read_message` -> **M-3, WP4**, unchanged.
+- Raw-pointer natives with no length to check against -- `flat-get`/`flat-set!`
+  (caller-supplied width), and the private r7rs helpers `r7rs-io-peek`,
+  `byte-ref` and `r7rs-environ-name__` (unchecked index) -> **WP3**: registered
+  in every env, they are arbitrary read/write primitives, which is S-1's
+  classification problem rather than a size check.
+
+### TSan
+
+`tests/run.sh` has had `TUR_TSAN=1` since T19, and eighteen fixtures carry
+`requires.tsan` -- which *skips* them in every ordinary run -- but nothing ran
+them. `tests/run-tsan.sh` now selects those plus the STM, async, fiber,
+channel, select, future, mutex, atomic, scheduler and thread-pool families (69
+fixtures, about 20 s), and `.github/workflows/tsan.yml` runs it nightly on a
+Release `tur` (a Debug one is ASan, which cannot share a process with TSan),
+filing an issue on a finding as `fuzz.yml` does. The first run was not green:
+
+- **A fiber read another worker's thread-local.** A sanitizer's
+  instrumentation needs a thread-local's address, so gcc computes it once and
+  reuses it across a fiber switch, exactly as clang does in every build:
+  `fiber-scheduler-mt-migration` read the first worker's slot from the second
+  (2-3 TSan reports a run). `TUR_TLS_FRESH`, the accessor clang already gets,
+  now covers `__SANITIZE_THREAD__` and `__SANITIZE_ADDRESS__`. An
+  uninstrumented gcc build on ELF still addresses each access through `%fs`
+  and is unaffected.
+- **`select`'s sleeper read `selected_idx` with a plain load** while the
+  signaller CASes it: a C11 data race. Both reads are atomic acquires.
+- **The handler-group id counter** (`g_dk_hgroup_ctr`) was a plain `++` from
+  every thread. A lost update can move it backwards and give one thread the
+  same id twice, so two handles' cases read as siblings. Atomic now; not
+  per-thread, because a fiber's chain can collect ids on more than one worker.
+- **`select-send-block` hung about one run in three, TSan or not** -- a fixture
+  bug: each consumer stopped after exactly three values, while the select may
+  route four to one channel. The consumers drain to a sentinel now.
+- **`future-basic` and `future-error` no longer built** (a local `result-free`
+  collides with the stdlib's); renamed.
+- `threads-effects-tail-resume` is excluded, with the reason in the script:
+  TSan's own trace allocator faults about 16k longjmp-driven tail resumes into
+  a worker. The race it reported first, the counter above, is fixed.
+
+### Format strings
+
+`-Wformat-security` was already clean on gcc and clang, so the exit criterion
+held before the package started. `-Wformat=2` was not: its
+`-Wformat-nonliteral` found 13 sites under gcc, and clang -- which also refuses
+a `va_list` wrapper that forwards a caller's format -- 14 more. Both flags are
+now on the three `-Werror` targets:
+
+- The printf-style wrappers carry `TUR_PRINTF_FMT` (`format(printf, ...)`,
+  off on Windows): `buf_printf`/`buf_vprintf`, `diag_emit`/`diag_emitv`/
+  `diag_emit_with_code`, `turi_errorf` and six file-local helpers. So every
+  call's arguments are checked against its format now, which is the "checked
+  and sized" list the package asked to confirm, kept by the compiler instead of
+  by a survey. Neither compiler found a call that disagreed.
+- Four sites chose a format at run time from a table of literals; each spells
+  its literal now.
+- The interpreter's `printf` and inline-C `snprintf` emulation format with the
+  *program's* string. That is S-2/S-3, open and WP3's, and those two sites are
+  silenced by name with the finding beside them.
+
+Checked with gcc and clang, Debug, with and without the JIT.
+
+### Cost
+
+Every `expected.c` snapshot moved twice: `grid.tur` and `zipper.tur` are
+prelude modules, so their new bodies are in every emitted program, and the
+preamble's thread-local guard, `select` read and handler-group counter changed.
+The split-runtime artifacts were regenerated with them. Under the 500-fixture
+coordination bar, so regenerated in the same change.
 
 ## 3. Work packages
 
@@ -406,26 +586,35 @@ targets behind that run under the ASan build CI already has.
 - **Exit:** every target runs 10 minutes clean under ASan; the fixed bugs
   each have a fixture with the crashing input.
 
-### WP5 -- Runtime memory safety (3 days)
+### WP5 -- Runtime memory safety (3 days) -- DONE 2026-09-30
 
-- **Region escape hooks (M-6):** walk every `-set!`/`-push!`/insert/store
-  primitive in `stdlib/` and `src/runtime/` against the hooked list in
-  CLAUDE.md; note the missing ones; add each to
-  `tests/fixtures/region-escape-via-store`. The rule says a missed hook is a
-  silent use-after-rewind, so this is not a style pass.
-- **Integer arithmetic on sizes (M-5):** `read-async`, string slicing,
-  `sb_reserve`, `bytes-alloc`, `alloca` in sized-buf: use `size_t`, check
-  `start + len` with `__builtin_add_overflow`, and reject negative counts
-  at the boundary. Grep `malloc(.*\*` and `alloca(` across `src/runtime`,
-  `src/turi`, `stdlib` for the rest.
-- **TSan:** the `TSan` CMake config exists and no workflow uses it; add a
-  nightly job over the STM/async/fiber fixtures (`requires.tsan` already
-  marks them).
-- **Format strings:** confirm the survey's "checked and sized" list, and
-  add `-Wformat=2 -Wformat-security` to the Debug flags so the compiler
-  polices new ones.
-- **Exit:** the region fixture covers every setter; TSan job green;
-  `-Wformat-security` clean.
+- [x] **Region escape hooks (M-6):** every survey site probed with
+  `TUR_REGION_STATS=1`. One confirmed, and it was a class (a Turmeric wrapper
+  over an inline-C store); three retired; a second class the survey missed (an
+  inline-C callee's type-variable parameter). Both routes are closed in the
+  compiler rather than per site, constructors excepted, and pinned by
+  `tests/fixtures/region-escape-via-wrapper` on the stats line. The HAMT
+  transient setter carries the note too. Section 2b.
+- [x] **Integer arithmetic on sizes (M-5):** the six survey rows plus 26 the
+  `malloc`/`alloca` sweep found, each range-checked with plain comparisons
+  (stdlib inline C goes through c2mir, so no `__builtin_*_overflow`), pinned by
+  `tests/fixtures/size-arith-guards`. Three sweep findings handed to WP3/WP4
+  with reasons. Section 2b.
+- [x] **TSan:** `tests/run-tsan.sh` + `.github/workflows/tsan.yml`, nightly on
+  Release, 69 fixtures. Its first run found a sanitizer-build thread-local
+  bug, two races in the emitted runtime and three broken fixtures, all fixed;
+  one fixture excluded with the reason in the script.
+- [x] **Format strings:** `-Wformat=2 -Wformat-security` on the `-Werror`
+  targets, the printf-style wrappers annotated so every call is checked, the
+  open S-2/S-3 sites silenced by name.
+- **Exit met.** The region fixture covers every route the survey and the
+  verification found; the TSan run is 69/69 (four runs, Debug and the workflow's Release);
+  `-Wformat=2` is clean under gcc and clang.
+
+**Left for others deliberately:** S-2/S-3's program-controlled formats (WP3),
+the raw-pointer interpreter natives (WP3's native classification), httpd's
+body cap and response-writer `realloc` (WP4, M-4), and the rest of
+`serial_cont_from_bytes` (WP4, M-1).
 
 ### WP6 -- Try Turmeric and the web worker (1-2 days)
 
@@ -490,7 +679,7 @@ targets behind that run under the ASan build CI already has.
 | --- | --- | --- |
 | 1 | WP1, WP7 (installer, tvm, workflow pins, permissions), WP4 (M-3 LSP framing; M-1 bounds checks) | The cheapest changes with the largest blast radius: what a user installs, what CI can do with its token, and the two overflows a reporter would demo first. |
 | 2 | WP2 (D-1, D-2, D-5, D-6), WP3 (S-1 choke point) | The compiler-driver injection class and the sandbox bypass. Both are one design change each plus a sweep. |
-| 3 | WP4 (harnesses, JSON, httpd), WP5 | The fuzz targets need WP4's fixes landed to seed sensibly; region hooks and integer checks are independent. |
+| 3 | WP4 (harnesses, JSON, httpd), WP5 (**done** 2026-09-30) | The fuzz targets need WP4's fixes landed to seed sensibly; region hooks and integer checks are independent. |
 | 4 | WP6, WP8, WP2/WP3 remainder, re-grade section 2 | Web hardening, the effects decision, and closing the long tail. |
 
 Roughly 22-25 engineer-days of focused work, spread over four weeks with
@@ -503,10 +692,12 @@ checklist, not a gate.
 - **Static:** the grep inventories in section 2 (subprocess, `getenv`,
   `malloc(.*\*`, `alloca`, `innerHTML`), plus `clang-tidy` with the
   `cert-*`, `bugprone-*` and `security.*` checkers over `src/` and CodeQL
-  in CI (WP7). `-Wformat=2 -Wformat-security -Wshadow` on Debug.
+  in CI (WP7). `-Wformat=2 -Wformat-security` are on the `-Werror` targets
+  (WP5); `-Wshadow` is not.
 - **Dynamic:** the Debug build's ASan+UBSan (already on, leak detection on
-  for the compiler path), the new libFuzzer targets (WP4), the TSan job
-  (WP5), `tests/run-leak-check.sh` for emitted programs.
+  for the compiler path), the new libFuzzer targets (WP4), the nightly TSan
+  job (WP5, `tests/run-tsan.sh`), `tests/run-leak-check.sh` for emitted
+  programs.
 - **Manual review checklist** for each boundary crossing: who supplies
   each byte, every length used for allocation or indexing is checked
   against the remaining input, every string that reaches a shell is
