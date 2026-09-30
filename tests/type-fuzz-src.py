@@ -180,7 +180,7 @@ BYVALUE_WRAPPERS = {"box", "adt", "opt", "res", "opt_box", "res_box"}
 CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
                  "thin_hof", "class_thru", "tyvar_run",
                  "class_nested", "class_nullary_newtype",
-                 "gid_let", "class_let"}
+                 "gid_let", "class_let", "gbody"}
 
 
 def known_bug_slug(tags):
@@ -485,12 +485,19 @@ class Gen:
 
     # -- scalars --------------------------------------------------------------
 
-    def pick_scalar(self):
-        t = self.force_scalar or \
-            self.rng.choice(["int", "int", "int", "float", "bool", "cstr"])
-        if t == "int":
+    def pick_scalar(self, narrow=False):
+        """`narrow` admits the non-word scalars (float32, int16) -- value legs
+        only.  No fuzzer had ever generated a float32: gen-unwrap at float32
+        read the low half of the yielded double, and a generic's float32
+        spec returned its carrier's bits, with nothing to notice
+        (docs/archive/generic-spec-carrier-crossings.md)."""
+        pool = ["int", "int", "int", "float", "bool", "cstr"]
+        if narrow:
+            pool += ["float32", "int16"]
+        t = self.force_scalar or self.rng.choice(pool)
+        if t in ("int", "int16"):
             return t, self.rng.randint(-20, 20)
-        if t == "float":
+        if t in ("float", "float32"):
             return t, self.rng.choice(FLOAT_LITS)
         if t == "bool":
             return t, self.rng.choice([True, False])
@@ -501,9 +508,17 @@ class Gen:
             return str(v)
         if ty == "float":
             return v
+        if ty in ("float32", "int16"):
+            return "(:: %s %s)" % (v, ty)
         if ty == "bool":
             return "true" if v else "false"
         return '"%s"' % v
+
+    def dflt(self, ty):
+        """A value of `ty` no leg ever carries -- the unwrap default."""
+        return {"int": "-9999", "float": "-999.5", "bool": "false",
+                "cstr": '"z-dflt"', "float32": "(:: -999.5 float32)",
+                "int16": "(:: -9999 int16)"}[ty]
 
     # -- wrappers -------------------------------------------------------------
     #
@@ -553,8 +568,7 @@ class Gen:
     def w_opt(self, leg, ty):
         tn = "(Option %s)" % ty
         w, u = self.name("ow"), self.name("ou")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (some x))" % (w, ty, tn))
         leg.defs.append("(defn %s [o : %s] : %s (unwrap-or o %s))"
                         % (u, tn, ty, dflt))
@@ -563,8 +577,7 @@ class Gen:
     def w_res(self, leg, ty):
         tn = "(Result %s int)" % ty
         w, u = self.name("rw"), self.name("ru")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (ok x))" % (w, ty, tn))
         leg.defs.append("(defn %s [r : %s] : %s (if (ok? r) (ok-val r) %s))"
                         % (u, tn, ty, dflt))
@@ -625,8 +638,7 @@ class Gen:
         leg.defs.append("(defstruct %s [a : %s])" % (bn, ty))
         tn = "(Option %s)" % bn
         w, u = self.name("pw"), self.name("pu")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (some (%s x)))" % (w, ty, tn, bn))
         leg.defs.append("(defn %s [o : %s] : %s (.a (unwrap-or o (%s %s))))"
                         % (u, tn, ty, bn, dflt))
@@ -639,8 +651,7 @@ class Gen:
         leg.defs.append("(defstruct %s [a : %s])" % (bn, ty))
         tn = "(Result %s int)" % bn
         w, u = self.name("qw"), self.name("qu")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (ok (%s x)))" % (w, ty, tn, bn))
         leg.defs.append("(defn %s [r : %s] : %s\n"
                         "  (if (ok? r) (.a (ok-val r)) %s))"
@@ -738,6 +749,70 @@ class Gen:
         leg.defs.append("(defn %s [A] [x : A] : A x)" % f)
         leg.defs.append("(defn %s [A] [x : A] : A (let [y (%s x)] y))" % (g, f))
         return "(%s %s)" % (g, e), "gid_let"
+
+    # Shapes a value typed as the generic's own `A` takes INSIDE a generic
+    # body, from tests/generic-spec-matrix.py's sink table (each one proven at
+    # every matrix type).  {E} is the A-typed input; each result is A.  The
+    # helper names are substituted per leg.
+    GBODY_SINKS = {
+        "let":     "(let [{L} {E}] {L})",
+        "ident":   "({ID} {E})",
+        "if":      "(if ({T}) {E} {E})",
+        "box":     "(.val ({BOX} {E}))",
+        "some":    "(match (some {E}) (Some {L}) {L} (None) {E})",
+        "vec":     "(let [{L} (vec-new)] (vec-push! {L} {E}) (vec-get {L} 0))",
+        "pair":    "(pair-fst (pair {E} 0))",
+        "lambda":  "((fn [{L} : A] : A {L}) {E})",
+        "capture": "(let [{L} {E}] ((fn [] {L})))",
+        "map":     "(map-get (map-assoc (map-new) 1 {E}) 1)",
+        "gen":     "(gen-unwrap (gen-next (gen [] (yield {E}))))",
+        "adt":     "(match ({WC} {E}) ({WC} {L}) {L})",
+        "fnret":   "(({MK} {E}))",
+        "hof":     "({APP} (fn [{L} : A] : A {L}) {E})",
+    }
+
+    def x_gbody(self, leg, tn, e):
+        """The value crosses a generic `[A] x:A -> A` whose BODY moves it:
+        through a vector, a map, a generic struct field, an Option match, a
+        lambda, a returned closure, a generator... 1-3 of them, composed.
+
+        Every other generic crossing hands `x` straight back.  The carrier
+        crossings of 2026-09-30 (docs/archive/generic-spec-carrier-crossings.md)
+        all lived in a generic body that did something with its `A`: nine
+        independent miscompiles, none of which any fuzzer could generate.
+        tests/generic-spec-matrix.py enumerates each shape once; this composes
+        them, at the fuzzer's wrapper types, along random chains.
+        """
+        g = self.name("gb")
+        names = {"ID": self.name("gbid"), "T": self.name("gbt"),
+                 "BOX": self.name("GbBox"), "WC": self.name("GbWc"),
+                 "W": self.name("GbW"), "MK": self.name("gbmk"),
+                 "APP": self.name("gbapp")}
+        leg.defs.append("(defn %s [A] [y : A] : A y)" % names["ID"])
+        leg.defs.append("(defn %s [] : bool true)" % names["T"])
+        leg.defs.append("(defstruct %s [A] [val : A])" % names["BOX"])
+        leg.defs.append("(defdata %s [A] (%s A))" % (names["W"], names["WC"]))
+        leg.defs.append("(defn %s [B] [v : B] : (fn [] B) (fn [] v))"
+                        % names["MK"])
+        leg.defs.append("(defn %s [B] [f : (fn [B] B) v : B] : B (f v))"
+                        % names["APP"])
+        body = "x"
+        chain = []
+        for _ in range(self.rng.randint(1, 3)):
+            pool = list(self.GBODY_SINKS)
+            # A generator inside a generator, and a yield inside a match arm,
+            # are v1 rejections (the matrix's EXCLUDE list).
+            if "gen" in chain:
+                pool = [k for k in pool if k not in ("gen", "some")]
+            k = self.rng.choice(pool)
+            chain.append(k)
+            loc = self.name("gbl")
+            tmpl = self.GBODY_SINKS[k]
+            for key, val in names.items():
+                tmpl = tmpl.replace("{%s}" % key, val)
+            body = tmpl.replace("{L}", loc).replace("{E}", body)
+        leg.defs.append("(defn %s [A] [x : A] : A\n  %s)" % (g, body))
+        return "(%s %s)" % (g, e), "gbody"
 
     def x_fat_hof(self, leg, tn, e):
         f = self.name("h")
@@ -889,10 +964,10 @@ class Gen:
         # included).
         if "thunk" in tags:
             return [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-                    self.x_fat_hof, self.x_thin_hof]
+                    self.x_fat_hof, self.x_thin_hof, self.x_gbody]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
               self.x_fat_hof, self.x_thin_hof, self.x_gid_let,
-              self.x_fn_field]
+              self.x_fn_field, self.x_gbody]
         if tn in ("int", "float", "bool", "cstr"):
             xs.append(self.x_fn_field_eff)
         # Thin HOF over every wrapper: scalars ride the poly carrier;
@@ -930,7 +1005,7 @@ class Gen:
 
     def leg(self):
         leg = Leg()
-        ty, val = self.pick_scalar()
+        ty, val = self.pick_scalar(narrow=True)
         tn, wrap, unwrap, tags = self.pick_wrapper(leg, ty)
         leg.tags |= tags
         leg.tags.add("scalar_" + ty)
@@ -949,7 +1024,7 @@ class Gen:
                 leg.tags.add(tag)
         e = unwrap(e)
 
-        if ty == "float":
+        if ty in ("float", "float32"):
             leg.body.append("(println (= %s %s))" % (e, self.lit(ty, val)))
             leg.expected.append("true")
         elif ty == "bool":

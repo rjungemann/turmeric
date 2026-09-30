@@ -96,11 +96,42 @@ on the elaborated type (which is the tyvar):
 After the second batch the matrix is at **0 of 1170** (baseline 256) and gates
 in ctest (`tur_generic_spec_matrix`) against an empty baseline.
 
+## Third batch: the extended axes
+
+The matrix then grew to 16 types (int16, uint8, `Result`, a `:heap` container,
+`Pair`, and function values) x 12 producers (`map-get`, a user generic ADT
+`match`, a generator) x 18 sinks (map, generator, user ADT, returned closure,
+passed HOF). That is 3456 cells, and on the compiler of the time 820 failed:
+
+| Shape | Before | Fix |
+| --- | --- | --- |
+| `(gen ...)` in a generic | cc error `conflicting types for __gen_mx_0_t`; `4.61968e+18`; interpreter printed the bits | The generator is emitted ONCE with no spec active (carrier representation). Each clone bridges its captures into `_create` and its element out of `gen-unwrap`. `gen-unwrap` keeps an element typed with a signature tyvar as that tyvar, not `int` (the name is carried on the generator type). The interpreter hands back the yielded value itself. |
+| `(app (fn [z : A] : A z) x)` at a struct / Option | garbage / `0` | The lambda's fat box is shimmed at the RESOLVED signature (it holds the spec's clone). The fat-call site asks the producer's question (`carrier_fatshim_applies`) and unboxes the carrier shim's boxed wide result. |
+| `(ident f)` with `f` a function | segfault | `emit_carrier_bridge` treats a function value as the pointer leaf it is. |
+| `((mk x))` in the carrier base | lint F2I, fnsan trap (dead code) | Closure-head spec resolution only honours a specialized-call recording made in the CURRENT clone. |
+| CPS: `(app f (ident x))` | cc error | The CPS clone lookup's result discriminator derives a wrapped call's result from the callee's result tyvar under the call's own binding. |
+| `(map-assoc (map-new) 1 x)` | `tur check` rejects | Checker gap, filed then; resolved in the fourth batch (`docs/archive/generic-map-assoc-rejects-sig-tyvar-value.md`). |
+
+## Fourth batch: behind the map sink, and function values
+
+The third batch left 227 of 3440 cells failing: 192 `map` sink cells refused at
+check time, 16 `gen/gen/*` (a generator nested in a generator, rejected as a v1
+limitation and now listed in the matrix's `EXCLUDE`), and 19 segfaults with a
+function-valued `A`.
+
+| Shape | Before | Fix |
+| --- | --- | --- |
+| `(thunk)` producer at a function type | segfault, the concrete twin too | A captureless lambda returning a function returned its bare code pointer where every consumer reads a fat handle. Lambdas now get fn-value-fat-normalization stage 2, as defns do. See `docs/archive/lambda-thin-fn-result-read-as-fat.md`. |
+| `(map-assoc (map-new) 1 x)` | refused; then a segfault at a function | The self-binding `V := V` of `(map-new)` accepts, and becomes, a later signature tyvar. See `docs/archive/generic-map-assoc-rejects-sig-tyvar-value.md`. |
+| `(let [w (vec-new)] (vec-push! w (vec-get v 0)) ...)` at a function | segfault | S4 forward element inference peeled the tyvar wrapper and read the carrier `int` under it, pinning `w` to `(Vec int)`. `elab_defn` then replaced the generic's declared `A` result with the body's `int`, and the caller thin-called the fat handle. The peel now stops at the tyvar wrapper, whose type is the true one. |
+| a colored generic, spec at a heap handle | cc error `redefinition of mx__cps` | `emit_cps_ir_try_fn` rendered the TEMPLATE a second time, under the base name, for a spec clone that `mono_sig_ok` refuses. Such a clone now keeps the direct path under its own clone name. |
+
 ## Verified
 
 - `tests/fixtures/generic-spec-carrier-crossings` (compiled and `--interpret`)
   and `tests/fixtures/gen-yield-float32-interp`.
 - Full suite green, snapshots regenerated.
-- `tests/fixtures/generic-spec-carrier-crossings-2` pins the second batch.
+- `tests/fixtures/generic-spec-carrier-crossings-2` and `-3` pin the second
+  and third batches.
 - `tests/generic-spec-matrix.py`: 0 of 1170 cells failing (baseline compiler:
   256), compiled, interpreted and linted.

@@ -1336,10 +1336,25 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * value's BITS -- `(int64_t)` on a double was a value conversion
              * (7.25 -> 7); a pointer is cast, a bool widened.  The typed
              * `gen-unwrap` reinterprets the same way on the way out. */
-            indent_buf(body, ctx->indent);
-            char *ybits = emit_word_slot_bits(&e->as.yield_.value->type, yval);
-            buf_printf(body, "*__opt = %s;\n", ybits);
-            free(ybits);
+            /* Inside a spec the value is the clone's concrete `A`: take its
+             * bits at the RESOLVED type (a tyvar-typed double went in by value
+             * conversion), and box a by-value aggregate the way a container
+             * element is boxed -- `gen-unwrap` bridges the word back. */
+            Type yt = emit_resolve_type(ctx, e->as.yield_.value->type);
+            const char *ytc = emit_type_c_name(ctx, yt);
+            if (ytc && strncmp(ytc, "tur_adt_", 8) == 0 && !strchr(ytc, '*') &&
+                !type_is_heap_adt(yt) && !type_is_heap_struct(yt)) {
+                char *boxed = emit_carrier_bridge_escaping(ctx, body, strdup(yval),
+                                                           CK_CONCRETE, CK_CARRIER, yt);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*__opt = %s;\n", boxed);
+                free(boxed);
+            } else {
+                indent_buf(body, ctx->indent);
+                char *ybits = emit_word_slot_bits(&yt, yval);
+                buf_printf(body, "*__opt = %s;\n", ybits);
+                free(ybits);
+            }
             indent_buf(body, ctx->indent);
             buf_puts(body, "return (void *)__opt;\n");
             ctx->indent -= 4;

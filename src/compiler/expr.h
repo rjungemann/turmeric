@@ -60,6 +60,7 @@ struct Binding {
      * that reads the binding.  gen_elem_set false otherwise. */
     TypeKind      gen_elem_kind;
     bool          gen_elem_set;
+    const char   *gen_elem_tyvar;   /* generator-in-generic: see TY_GENERATOR */
     bool          is_mut;
     bool          is_global;     /* top-level def vs. local let */
     bool          is_param;      /* function/extern parameter binding */

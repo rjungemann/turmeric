@@ -1889,6 +1889,25 @@ char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
  * a typed consumer untouched.  Results other than a b4box aggregate or a plain
  * int64 carrier decline too -- a `double` result would need a conversion here,
  * not a reinterpret, and no caller has asked for one. */
+/* The gate ensure_carrier_fatshim applies, as a question: does a boxing site
+ * with this (resolved) signature get the CARRIER shim -- slot 0 spelled
+ * `int64_t (*)(void *, int64_t...)`, a wide result boxed?  The fat-call
+ * emitter asks it so the consumer reads slot 0 the way the producer filled it
+ * (generic-hof-option-result-read-by-value). */
+bool carrier_fatshim_applies(Type result_type, const Type *param_types,
+                             uint8_t n_params) {
+    bool any_b4box_param = false;
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
+            return false;
+        if (type_is_b4box_closure_slot(param_types[i])) any_b4box_param = true;
+    }
+    if (!any_b4box_param) return false;
+    if (type_is_b4box_closure_slot(result_type)) return true;
+    return thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/false) &&
+           strcmp(type_c_name(result_type), "int64_t") == 0;
+}
+
 char *ensure_carrier_fatshim(EmitCtx *ctx,
                              Type result_type, Type *param_types, uint8_t n_params) {
     if (!ctx) return NULL;
@@ -6134,7 +6153,23 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
               type_is_byvalue_adt_product(recovered)) &&
              !type_is_heap_struct(recovered) && !type_is_heap_adt(recovered) &&
              rec_c && strcmp(rec_c, "int64_t") != 0);
-        if (recovered_byvalue) {
+        /* generic-hof-scalar-result-minted-on-the-carrier: the same collapse
+         * for a SCALAR the carrier does not hold by value -- a float, float32,
+         * bool or sub-word integer.  `(mx-app f x)` at A := float minted
+         * `mx_app__spec__int64_t_int64_t_double`, a clone RETURNING the carrier;
+         * the CPS lookup (correctly wanting `double`) then matched nothing and
+         * called the base, reading the result by value conversion (0).  A spec
+         * that returns the concrete scalar is what every consumer bridges
+         * against: the EX_REINTERPRET arm skips its bit-cast when the matched
+         * spec already returns `e->type` (KB-015), and the tyvar arm passes a
+         * temp recorded as the concrete type through. */
+        bool recovered_scalar =
+            (recovered.kind == TY_FLOAT || recovered.kind == TY_FLOAT64 ||
+             recovered.kind == TY_FLOAT32 || recovered.kind == TY_BOOL ||
+             recovered.kind == TY_INT8 || recovered.kind == TY_INT16 ||
+             recovered.kind == TY_INT32 || recovered.kind == TY_UINT8 ||
+             recovered.kind == TY_UINT16 || recovered.kind == TY_UINT32);
+        if (recovered_byvalue || recovered_scalar) {
             result_type = recovered;
         }
     }
@@ -7894,6 +7929,26 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         case EX_CATCH_PANIC_OF:
             emit_abi_scan_expr(ctx, e->as.catch_panic_of_.thunk, items, n_items);
+            break;
+        /* generator-in-generic: the calls inside a generator body were never
+         * registered, so a spec's generator called the CARRIER base of every
+         * generic it used (`ok_hyval` on a by-value Result -- and, the base
+         * never being live, a link error). */
+        case EX_GEN:
+            if (e->as.gen_.def)
+                emit_abi_scan_expr(ctx, e->as.gen_.def->body, items, n_items);
+            break;
+        case EX_YIELD:
+            emit_abi_scan_expr(ctx, e->as.yield_.value, items, n_items);
+            break;
+        case EX_GEN_NEXT:
+            emit_abi_scan_expr(ctx, e->as.gen_next_.gen_expr, items, n_items);
+            break;
+        case EX_GEN_UNWRAP:
+            emit_abi_scan_expr(ctx, e->as.gen_unwrap_.ptr_expr, items, n_items);
+            break;
+        case EX_GEN_DONE:
+            emit_abi_scan_expr(ctx, e->as.gen_done_.gen_expr, items, n_items);
             break;
         default:
             break;
@@ -19208,6 +19263,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_cap_ctypes[i]);
     free(ctx.env_struct_cap_ctypes);
     free(ctx.env_struct_names);
+    for (uint32_t gi = 0; gi < ctx.n_emitted_gen_defs; gi++) free((void *)ctx.emitted_gen_defs[gi]);
+    free(ctx.emitted_gen_defs);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
      * closes, so only the backing arrays outlive emission. */
@@ -20759,6 +20816,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_cap_ctypes[i]);
     free(ctx.env_struct_cap_ctypes);
     free(ctx.env_struct_names);
+    for (uint32_t gi = 0; gi < ctx.n_emitted_gen_defs; gi++) free((void *)ctx.emitted_gen_defs[gi]);
+    free(ctx.emitted_gen_defs);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
      * closes, so only the backing arrays outlive emission. */

@@ -12682,10 +12682,34 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
+    /* lambda-thin-fn-result-read-as-fat: fn-value-fat-normalization stage 2
+     * for a LAMBDA whose result is a concrete effect-free fn type, under the
+     * guards the defn path uses.  Stage 2 marks such a result `boxed` inside
+     * every fn-typed parameter annotation, so a consumer of
+     * `(f : (fn [] (fn [int] int)))` -- and of a generic `(fn [] A)` at a
+     * function -- reads `(f)` as a fat handle.  A defn producer returns one;
+     * a captureless lambda returned its bare code pointer, and `((f) 41)`
+     * dereferenced that pointer as a closure box: SIGSEGV.  Normalizing the
+     * tail leaves and marking the result makes the lambda say, and be, what
+     * its consumers read. */
+    {
+        Type *rft = fn_type.as.fn.result_full_type;
+        if (body && rft && rft->kind == TY_FN && !rft->as.fn.boxed &&
+            !fn_type.as.fn.result_fat &&
+            rft->as.fn.result_kind != TY_FN &&
+            rft->as.fn.result_kind != TY_UNKNOWN &&
+            fn_result_type_is_fat_normalized(rft)) {
+            elab_normalize_fn_tail_leaves(e, &body, rft, NULL);
+            rft->as.fn.boxed = true;
+        }
+    }
     /* let-bound-sf-loses-outer-arg-type: see the defn path -- record whether the
      * lambda's return *value* is a fat closure box vs a thin fn pointer. */
     b->returns_boxed_closure = (body && body->type.kind == TY_FN &&
-                                body->type.as.fn.boxed);
+                                body->type.as.fn.boxed) ||
+                               (fn_type.as.fn.result_full_type &&
+                                fn_type.as.fn.result_full_type->kind == TY_FN &&
+                                fn_type.as.fn.result_full_type->as.fn.boxed);
     /* fn-typed-tyvar-drops-a-capturing-closure: the defn path's
      * boxed-fn-typed-closure-return marking, mirrored.  A lambda declared
      * `: (fn [int] int)` whose body yields a CAPTURING closure returns a fat

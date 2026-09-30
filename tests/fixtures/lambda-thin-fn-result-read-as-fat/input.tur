@@ -1,0 +1,34 @@
+;; lambda-thin-fn-result-read-as-fat -- a captureless lambda returning a
+;; function value, handed to a parameter typed `(fn [] (fn [int] int))` or to a
+;; generic `(fn [] A)`.
+;;
+;; fn-value-fat-normalization stage 2 marks a concrete effect-free fn result
+;; `boxed` inside every fn-typed parameter annotation, so the consumer reads
+;; `(f)` as a fat closure handle.  A defn producer returned one; a lambda
+;; returned its bare code pointer, and `((f) 41)` dereferenced the code as a
+;; closure box -- SIGSEGV, in the concrete and the generic consumer alike.
+;; Found by tests/generic-spec-matrix.py (its thunk producer at the fn type).
+
+(defn call0i [f : (fn [] (fn [int] int))] : int ((f) 41))
+(defn call0  [A] [f : (fn [] A)] : A (f))
+(defn call1  [f : (fn [int] (fn [float] float))] : float ((f 2) 7.1))
+(defn mk     [] : (fn [int] int) (fn [n : int] : int (+ n 1)))
+
+(defn main [] : int
+  ;; concrete consumer, captureless producer
+  (println (call0i (fn [] (fn [n : int] : int (+ n 1)))))          ; 42
+  ;; concrete consumer, capturing producer returning one of two thin fns
+  (let [k 1]
+    (println (call0i (fn [] (if (= k 1)
+                              (fn [n : int] : int (+ n 1))
+                              (fn [n : int] : int (- n 1)))))))    ; 42
+  ;; generic consumer: A := (fn [int] int)
+  (println ((call0 (fn [] (fn [n : int] : int (+ n 1)))) 41))      ; 42
+  ;; a float signature behind the returned function
+  (println (call1 (fn [j : int] (fn [x : float] : float (* x 2.0))))) ; 14.2
+  ;; a defn producer (already fat) keeps working
+  (println (call0i mk))                                            ; 42
+  ;; a let-bound lambda called directly: the result is fat, and read as fat
+  (let [g (fn [] (fn [n : int] : int (* n 2)))]
+    (println ((g) 21)))                                            ; 42
+  0)

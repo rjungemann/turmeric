@@ -5383,6 +5383,26 @@ static const Type *cps_call_result_discriminator(EmitCtx *ctx,
                                                  Type *store) {
     if (!ctx || !call_expr || !store) return NULL;
     Type rt = emit_resolve_type(ctx, call_expr->type);
+    /* generic-call-result-in-generic-collapses-to-int: a call whose callee
+     * declares a bare tyvar result is typed with the carrier `int` under its
+     * tyvar wrapper, which named no spec (every by-value clone's result
+     * mismatched it) and dropped `(mx-app f (mx-id x))` to the carrier base.
+     * Its real result is the callee's result tyvar under the call's own
+     * binding, resolved in this clone. */
+    if (rt.kind == TY_INT && call_expr->kind == EX_CALL &&
+        call_expr->as.call_.fn_binding &&
+        call_expr->as.call_.fn_binding->type.kind == TY_FN) {
+        const Type *rft = call_expr->as.call_.fn_binding->type.as.fn.result_full_type;
+        if (rft && rft->kind == TY_TYVAR && rft->as.tyvar_.name) {
+            for (uint8_t k = 0; k < call_expr->as.call_.n_abi_bindings; k++) {
+                const AbiTypeBinding *ab = &call_expr->as.call_.abi_bindings[k];
+                if (!ab->name || strcmp(ab->name, rft->as.tyvar_.name) != 0) continue;
+                Type bt = emit_resolve_type(ctx, ab->type);
+                if (bt.kind != TY_TYVAR && bt.kind != TY_UNKNOWN) rt = bt;
+                break;
+            }
+        }
+    }
     switch (rt.kind) {
         case TY_TYVAR:
             return NULL;
@@ -10434,6 +10454,16 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
          * no fiber peer shares the effect).  Colored callers route to `__cps`. */
         mono_emit = ok && (island_mono || se->mono_template);
     }
+
+    /* A spec clone of an in-S template that is NOT mono-emittable -- its
+     * concrete signature is refused by mono_sig_ok (a heap handle result, say:
+     * `(defn mx [A] [f : (fn [] A)] : A ...)` at `A := MxH`) -- is a SIG
+     * rejection of that clone, and the clone keeps the direct path under its
+     * own clone name, which is what its callers call.  Falling through here
+     * rendered the TEMPLATE a second time under the BASE name: `redefinition of
+     * mx__cps` / `mx`, found by tests/generic-spec-matrix.py (thunk/map/heap). */
+    if (!mono_emit && spec && spec->fn == fd && spec->clone_name && se && se->in_s)
+        return false;
 
     if (!mono_emit && (!se || !se->in_s)) {
         /* N6.5 gate: a COLORED function that falls back to the direct emitter must

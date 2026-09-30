@@ -3149,6 +3149,9 @@ struct TuriGen {
     bool         done;        /* has the body run to completion? */
     int64_t      box;         /* storage for the yielded value; gen-next
                                * returns &box as the ptr<void> ABI result */
+    TuriValue    box_val;     /* the yielded value itself, tag and all: a
+                               * generic's element (`A`) has no static kind to
+                               * re-tag `box` by, so gen-unwrap hands this back */
     /* eval context (valid for the generator's whole lifetime) */
     TuriEnv     *env;
     EvalFrame   *frame;       /* body scope (child of the creating frame) */
@@ -13076,6 +13079,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue v = eval_expr(env, frame, e->as.yield_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
         g->box = v.as_int;
+        g->box_val = v;
         /* Swap back to the caller (gen-next); resumes here on the next advance. */
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
@@ -13104,6 +13108,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue pv = eval_expr(env, frame, e->as.gen_unwrap_.ptr_expr);
         if (turi_is_error(pv) || env_signaled(env)) return pv;
         int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
+        /* generator-in-generic: the element is the enclosing generic's `A`,
+         * which the tree-walker never monomorphizes -- there is no kind to
+         * re-tag the bits by, and the default arm printed 7.1's bits as an
+         * integer.  The pointer is always `&g->box` (gen_advance), so the
+         * yielded value itself is right beside it. */
+        if (pv.as_int && (e->as.gen_unwrap_.elem == TY_TYVAR ||
+                          e->as.gen_unwrap_.elem == TY_UNKNOWN)) {
+            const TuriGen *og = (const TuriGen *)(
+                (const char *)(intptr_t)pv.as_int - offsetof(TuriGen, box));
+            return og->box_val;
+        }
         switch (e->as.gen_unwrap_.elem) {
             case TY_FLOAT: case TY_FLOAT64: {
                 TuriValue r = turi_float(0.0);

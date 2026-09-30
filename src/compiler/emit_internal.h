@@ -554,6 +554,11 @@ typedef struct EmitCtx {
     const char  *gen_var_name;           /* "__g" when inside _next function (NULL outside) */
     const char  *gen_struct_type;        /* struct type name when inside _next (NULL outside) */
     bool         gen_hdr_emitted;        /* true once __tur_gen_hdr_t typedef is in ctx->file */
+    /* generator-in-generic-emitted-per-clone: the GenDefs whose struct and
+     * functions are already out.  A generator is emitted ONCE, on the carrier
+     * representation, however many clones of its enclosing fn create it. */
+    const void **emitted_gen_defs;
+    uint32_t     n_emitted_gen_defs, cap_emitted_gen_defs;
     EmitAbiSpecialization *abi_specializations;
     uint32_t     n_abi_specializations;
     uint32_t     cap_abi_specializations;
@@ -1570,6 +1575,8 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
  * the `int64_t (*)(void *, int64_t...)` spelling the erased call site casts to,
  * unboxing each b4box parameter and boxing a wide result.  NULL when the
  * signature is not in that set (the generic `__tur_fatshim<arity>` stands). */
+bool carrier_fatshim_applies(Type result_type, const Type *param_types,
+                             uint8_t n_params);
 char *ensure_carrier_fatshim(EmitCtx *ctx,
                              Type result_type, Type *param_types, uint8_t n_params);
 /* hkt-generic-forwarded-bind-continuation-segfaults: slot-0 shim that boxes a

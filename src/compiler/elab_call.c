@@ -1410,6 +1410,11 @@ static bool call_ground_open_app_args_to_any(Arena *a, Type *t) {
     return changed;
 }
 
+/* The elaborator whose enclosing signature call_collect_type_bindings may
+ * consult (generic-map-assoc-rejects-sig-tyvar-value); set only around the
+ * argument check, NULL everywhere else. */
+static const Elab *g_call_cb_elab = NULL;
+
 static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
@@ -1471,6 +1476,26 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                 if (bindings[idx].type.kind == TY_TYVAR &&
                     bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
                     actual.kind != TY_TYVAR) {
+                    return true;
+                }
+                /* generic-map-assoc-rejects-sig-tyvar-value: the same
+                 * self-binding (V := V, from `(map-new) : (Map K V)`, whose
+                 * slots nothing fixed) against a later argument typed with
+                 * the ENCLOSING signature's own variable -- `(map-assoc
+                 * (map-new) 1 x)` with `x : A` inside `[A]`.  That variable is
+                 * as fixed as a concrete type is in each instantiation, and it
+                 * becomes the binding: the call's result then says `(Map K A)`,
+                 * as the ascribed `(:: (map-new) (Map int A))` spelling does.
+                 * Left as the self-binding, `(map-get ...)` of the result read
+                 * back the unfixed V, which collapsed to `int` and retyped the
+                 * enclosing generic's declared `A` result -- so at `A := (fn
+                 * ...)` its caller thin-called the fat handle it returned. */
+                if (bindings[idx].type.kind == TY_TYVAR &&
+                    bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
+                    actual.kind == TY_TYVAR && actual.as.tyvar_.name &&
+                    actual.as.tyvar_.name != expected->as.tyvar_.name &&
+                    g_call_cb_elab && ng_tyvar_in_sig(g_call_cb_elab, actual.as.tyvar_.name)) {
+                    bindings[idx].type = actual;
                     return true;
                 }
                 /* fmap-over-underdetermined-constructor-is-a-defless-shell: an
@@ -8001,8 +8026,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 call_collect_forall_outer_bindings(
                     expected_full, args[i]->type, type_bindings, &n_type_bindings);
             } else if (expected_full && call_type_has_named_tyvar(expected_full)) {
-                arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
-                                                    type_bindings, &n_type_bindings);
+                {
+                    const Elab *saved_cb_elab = g_call_cb_elab;
+                    g_call_cb_elab = e;
+                    arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
+                                                        type_bindings, &n_type_bindings);
+                    g_call_cb_elab = saved_cb_elab;
+                }
                 /* nullary-generic-call-under-tyvar-expectation: `(wrap 3
                  * (box-nil))` against `[v : A b : (Box A)]`, or `(make-struct
                  * W 8 (none))` against `(opt (Option A))`.  Arg 1 bound
@@ -9748,8 +9778,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * forwarded element type is the TRUE pushed type (float/bool/cstr),
              * not the int64 carrier -- otherwise `(Vec float)` is mis-resolved to
              * `(Vec int)` and the next element conflicts. */
+            /* Not through the TYVAR wrapper (generic-spec-carrier-crossings):
+             * its TYPE is the true one -- the enclosing signature's `A` -- and
+             * the call under it is the carrier `int`.  Peeling it pinned
+             * `(let [w (vec-new)] (vec-push! w (vec-get v 0)) ...)` to
+             * `(Vec int)`, which retyped the generic's result `int` and lost
+             * the function-value dispatch at `A := (fn ...)` (a thin call of
+             * a fat handle: SIGSEGV). */
             Expr *ae = args[i];
-            while (ae && ae->kind == EX_REINTERPRET) ae = ae->as.reinterpret_.expr;
+            while (ae && ae->kind == EX_REINTERPRET &&
+                   ae->as.reinterpret_.target_kind != TY_TYVAR)
+                ae = ae->as.reinterpret_.expr;
             Type at = ae ? ae->type : args[i]->type;
             if (at.kind != TY_UNKNOWN && !call_type_has_named_tyvar(&at)) {
                 uint8_t dummy;

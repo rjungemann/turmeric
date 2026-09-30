@@ -6034,7 +6034,11 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * spilled the pointer to a stack temp and passed the temp's ADDRESS.
      * The M3 audit above already names these leaves "cross with no
      * reinterpret"; this arm is what makes that true. */
-    switch (concrete_ty.kind) {
+    /* A function value rides the carrier as its (fat-box or code) POINTER, so
+     * it is the same leaf: `(mx-id f)` at A := (fn [int] int) dereferenced the
+     * word as a boxed aggregate and called through garbage. */
+    bool fn_leaf = concrete_ty.kind == TY_FN && cname && strchr(cname, '*') != NULL;
+    switch (fn_leaf ? TY_PTR_VOID : concrete_ty.kind) {
         case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
         case TY_INT: case TY_INT64: case TY_UINT64: {
             bool ptr = cname && strchr(cname, '*') != NULL;

@@ -1368,6 +1368,7 @@ typedef struct GenContext {
     uint32_t          n_yields;         /* number of (yield ...) forms seen so far */
     TypeKind          element_kind;     /* TypeKind of the first yield (TY_UNKNOWN until set) */
     bool              element_kind_set; /* true once first yield is elaborated */
+    const char       *element_tyvar;    /* first yield typed with a signature tyvar */
     struct GenContext *parent;          /* enclosing GenContext (NULL for outermost) */
     /* CF5: true when the enclosing function calls itself inside this gen body */
     bool              is_recursive;

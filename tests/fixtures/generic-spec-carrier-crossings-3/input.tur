@@ -1,0 +1,44 @@
+;; generic-spec-carrier-crossings-3 -- the extended tests/generic-spec-matrix.py
+;; axes (generators, higher-order calls, function values, returned closures):
+;;
+;;   gen      a (gen ...) inside a generic defn was emitted once PER CLONE
+;;            (`conflicting types for __gen_mx_0_t`), and gen-unwrap collapsed
+;;            the element `A` to `int` (compiled 4.61968e+18; the interpreter
+;;            printed 7.1's bits as an integer)
+;;   hof      `(app (fn [z : A] : A z) x)` at a struct: the lambda was boxed
+;;            with the word shim (garbage), and at an Option the carrier
+;;            shim's boxed result was read by value (0)
+;;   fn       a function value through `(ident f)`: the carrier word was
+;;            dereferenced as a boxed aggregate (segfault)
+;;   fnret    the carrier BASE dispatched the base producer's closure to a
+;;            spec clone's thunk (dead code, but a lint F2I and an fnsan trap)
+;;
+;; See docs/archive/generic-spec-carrier-crossings.md.
+
+(defstruct Pt [x : int y : float])
+
+(defn ident [A] [x : A] : A x)
+(defn app   [B] [f : (fn [B] B) v : B] : B (f v))
+(defn mk    [B] [v : B] : (fn [] B) (fn [] v))
+
+(defn gen-id  [A] [x : A] : A (gen-unwrap (gen-next (gen [] (yield x)))))
+(defn hof-id  [A] [x : A] : A (app (fn [z : A] : A z) x))
+(defn hof-id2 [A] [x : A] : A (app (fn [z : A] : A z) (ident x)))
+(defn fn-id   [A] [x : A] : A (ident x))
+(defn ret-id  [A] [x : A] : A ((mk x)))
+
+(defn main [] : int
+  (println (gen-id 7.1))
+  (println (gen-id (:: 7.1 float32)))
+  (println (gen-id "hi"))
+  (println (.y (gen-id (Pt 3 4.5))))
+  (println (unwrap-or (gen-id (some 2.5)) 0.5))
+  (println (.y (hof-id (Pt 3 4.5))))
+  (println (.y (hof-id2 (Pt 3 4.5))))
+  (println (unwrap-or (hof-id (some 2.5)) 0.5))
+  (println (hof-id 7.1))
+  (println ((fn-id (fn [n : int] : int (+ n 1))) 41))
+  (println ((hof-id (fn [n : int] : int (* n 2))) 21))
+  (println (ret-id 7.1))
+  (println (.y (ret-id (Pt 1 2.25))))
+  0)

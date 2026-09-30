@@ -592,6 +592,15 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
                 actual = cur->type;
             } else {
                 while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
+                /* A reinterpret typed as the enclosing generic's own tyvar is
+                 * an `A`-typed value -- resolve it in this clone, never read
+                 * the wrapped call's carrier `int` (which matched no spec, so
+                 * `(mx-app f (mx-id x))` fell to the carrier base and passed it
+                 * a by-value struct). */
+                if (cur && cur->kind == EX_REINTERPRET &&
+                    cur->as.reinterpret_.target_kind == TY_TYVAR)
+                    actual = emit_resolve_type(ctx, cur->type);
+                else
                 actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
                     ? cur->as.reinterpret_.expr->type
                     : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
@@ -4718,10 +4727,83 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     return result ? result : atom_nil();
 }
 
+
+/* map-value-boxed-twice: does the HAMT-inserter arm (the `tur_hamt_box_key`
+ * refcounted box below, for a spec'd inline-C `val : V` carrier whose value is
+ * a wide by-value aggregate or a narrow boxed element with a heap-container
+ * sibling) take argument `i` of `e`?  Asked by the generic escaping-box rules
+ * so exactly ONE rule boxes the value: both boxed a `(Map int (Option float))`
+ * value -- the plain malloc box then spilled into an aggregate temp as if it
+ * were the value, invalid C in plain `main`. */
+static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
+static bool map_value_box_key_applies(EmitCtx *ctx, const Expr *e, uint32_t i,
+                                      const Expr *emit_arg, const Binding *fn_binding,
+                                      const EmitAbiSpecialization *matched_spec) {
+    if (!matched_spec || !emit_arg || i >= matched_spec->n_args) return false;
+    if (strcmp(emit_type_c_name(ctx, matched_spec->arg_types[i]), "int64_t") != 0)
+        return false;
+    if (!fn_binding || fn_binding->type.kind != TY_FN || !fn_binding->body_is_inline_c)
+        return false;
+    if (expr_is_pbp_param(ctx, emit_arg)) return false;
+    Type rarg = emit_resolve_type(ctx, emit_arg->type);
+    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+    uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
+        : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
+    TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+    if (!(pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS)) return false;
+    if (type_is_heap_struct(rarg) || type_is_heap_adt(rarg)) return false;
+    if (type_is_wide_byval_adt(rarg)) return true;
+    if (!type_is_boxed_container_elem(rarg)) return false;
+    for (uint32_t j = 0; j < e->as.call_.n_args; j++) {
+        if (j == i) continue;
+        Type st = emit_resolve_type(ctx, e->as.call_.args[j]->type);
+        if (type_is_heap_adt(st) || type_is_heap_struct(st)) return true;
+    }
+    return false;
+}
 /* GF1: Emit the C struct typedef, _create function, and _next function for a generator.
  * Written to ctx->pending_handler_fns so they are flushed to file scope before the
  * enclosing function definition (same pattern as algebraic-effect handler functions). */
+/* generator-in-generic-emitted-per-clone: the C name a generator's struct /
+ * `_next` / `_create` takes in the CURRENT clone -- the GenDef's own name in a
+ * base (or non-generic) body, suffixed with the spec clone's name inside a
+ * spec.  A (gen ...) inside a generic defn is reached once per clone, and each
+ * clone's generator is its own C code (its captures and element are that
+ * clone's concrete types): emitting them all under one name was a hard cc
+ * error, `conflicting types for __gen_mx_0_t`. */
+static char *gen_clone_name(const EmitCtx *ctx, const char *base) {
+    const char *cl = ctx->current_abi_specialization
+        ? ctx->current_abi_specialization->clone_name : NULL;
+    Buf b; buf_init(&b);
+    buf_puts(&b, base);
+    if (cl) {
+        buf_puts(&b, "__");
+        for (const char *q = cl; *q; q++)
+            buf_putc(&b, (isalnum((unsigned char)*q) || *q == '_') ? *q : '_');
+    }
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
+}
+
 static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
+    char *g_sname = gen_clone_name(ctx, def->struct_name);
+    char *g_nname = gen_clone_name(ctx, def->next_fn);
+    char *g_cname = gen_clone_name(ctx, def->create_fn);
+    for (uint32_t i = 0; i < ctx->n_emitted_gen_defs; i++)
+        if (strcmp((const char *)ctx->emitted_gen_defs[i], g_sname) == 0) {
+            free(g_sname); free(g_nname); free(g_cname);
+            return;
+        }
+    if (ctx->n_emitted_gen_defs >= ctx->cap_emitted_gen_defs) {
+        uint32_t nc = ctx->cap_emitted_gen_defs ? ctx->cap_emitted_gen_defs * 2 : 8;
+        const void **nd = (const void **)realloc(ctx->emitted_gen_defs, nc * sizeof(void *));
+        if (!nd) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->emitted_gen_defs = nd;
+        ctx->cap_emitted_gen_defs = nc;
+    }
+    ctx->emitted_gen_defs[ctx->n_emitted_gen_defs++] = (const void *)strdup(g_sname);
     /* Use pending_handler_fns so generator structs/functions land at file scope
      * before the function that creates them (emit_fn_def drains this buffer). */
     Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file;
@@ -4737,16 +4819,16 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     for (uint32_t i = 0; i < def->n_struct_bindings; i++) {
         Binding *b = def->struct_bindings[i];
         char *fn = raw_name_for_binding(b);
-        buf_printf(out, " %s %s;", type_c_name(b->type), fn);
+        buf_printf(out, " %s %s;", emit_type_c_name(ctx, b->type), fn);
         free(fn);
     }
-    buf_printf(out, " } %s;\n", def->struct_name);
+    buf_printf(out, " } %s;\n", g_sname);
 
     /* Forward-declare _next before _create so _create can take its address */
-    buf_printf(out, "static void *%s(void *__gv);\n", def->next_fn);
+    buf_printf(out, "static void *%s(void *__gv);\n", g_nname);
 
     /* _create function */
-    buf_printf(out, "static void *%s(", def->create_fn);
+    buf_printf(out, "static void *%s(", g_cname);
     if (def->n_captures == 0) {
         buf_puts(out, "void");
     } else {
@@ -4754,15 +4836,15 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
             if (i > 0) buf_puts(out, ", ");
             Binding *b = def->captures[i];
             char *fn = raw_name_for_binding(b);
-            buf_printf(out, "%s %s", type_c_name(b->type), fn);
+            buf_printf(out, "%s %s", emit_type_c_name(ctx, b->type), fn);
             free(fn);
         }
     }
     buf_puts(out, ") {\n");
     buf_printf(out, "    %s *__g = (%s *)malloc(sizeof(%s));\n",
-               def->struct_name, def->struct_name, def->struct_name);
+               g_sname, g_sname, g_sname);
     buf_printf(out, "    __g->__state = 0;\n");
-    buf_printf(out, "    __g->__next_fn = %s;\n", def->next_fn);
+    buf_printf(out, "    __g->__next_fn = %s;\n", g_nname);
     for (uint32_t i = 0; i < def->n_captures; i++) {
         Binding *b = def->captures[i];
         char *fn = raw_name_for_binding(b);
@@ -4775,8 +4857,8 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     /* _next function body -- built into a separate buf, then appended */
     Buf fn_body;
     buf_init(&fn_body);
-    buf_printf(&fn_body, "static void *%s(void *__gv) {\n", def->next_fn);
-    buf_printf(&fn_body, "    %s *__g = (%s *)__gv;\n", def->struct_name, def->struct_name);
+    buf_printf(&fn_body, "static void *%s(void *__gv) {\n", g_nname);
+    buf_printf(&fn_body, "    %s *__g = (%s *)__gv;\n", g_sname, g_sname);
 
     /* State dispatch at top -- jump to resume label for each yield point */
     for (uint32_t i = 0; i < def->n_yield_points; i++) {
@@ -4794,10 +4876,31 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     ctx->gen_struct_bindings   = def->struct_bindings;
     ctx->n_gen_struct_bindings = def->n_struct_bindings;
     ctx->gen_var_name          = "__g";
-    ctx->gen_struct_type       = def->struct_name;
+    ctx->gen_struct_type       = g_sname;
     ctx->indent                = 4;
+    /* The `_next` body is its OWN C function (`void *` result): a panic
+     * propagating out of it returns a null box, not a zero of the ENCLOSING
+     * function's return type (`return ((double)0);` in a `void *` function
+     * was a cc error once the generator sat inside a float spec), and the
+     * enclosing function's defer frames / loop routing are not its own. */
+    const char *gen_saved_ret = ctx->current_fn_ret_ctype;
+    const char *gen_saved_frame = ctx->frame_var;
+    bool gen_saved_brk = ctx->panic_signal_is_break;
+    /* ...nor are its pass-by-pointer parameters: a captured `r` that the
+     * enclosing spec takes as `const T *` is a plain carrier field here, and
+     * reading it as the spec's pbp param spilled the word and passed its
+     * ADDRESS (`ok_hyval(&__t)`). */
+    uint32_t gen_saved_npbp = ctx->n_pbp_params;
+    ctx->current_fn_ret_ctype = "void *";
+    ctx->frame_var = NULL;
+    ctx->panic_signal_is_break = false;
+    ctx->n_pbp_params = 0;
 
     emit_stmt(ctx, &fn_body, def->body);
+    ctx->current_fn_ret_ctype = gen_saved_ret;
+    ctx->frame_var = gen_saved_frame;
+    ctx->panic_signal_is_break = gen_saved_brk;
+    ctx->n_pbp_params = gen_saved_npbp;
 
     /* After body: mark done and return NULL */
     buf_printf(&fn_body, "    __g->__state = -1;\n");
@@ -4815,6 +4918,7 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     buf_putc(&fn_body, '\0');
     buf_puts(out, fn_body.data);
     buf_free(&fn_body);
+    free(g_sname); free(g_nname); free(g_cname);
 }
 
 
@@ -9462,8 +9566,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         src = src->as.ascribe_.inner;
                     const char *outer_clone = NULL;
                     if (src && src->kind == EX_CALL) {
+                        /* Only a recording made in THIS clone: the head init's
+                         * Expr is shared by a generic's carrier base and every
+                         * spec of it, so the first recording for it may be a
+                         * spec's -- and the carrier base then dispatched the
+                         * base producer's closure to the SPEC clone's thunk
+                         * (`mx` calling `__fn_22__spec__double_void__` on an
+                         * int64 box: a lint F2I and an fnsan trap). */
+                        const char *cur_outer = ctx->current_abi_specialization
+                            ? ctx->current_abi_specialization->clone_name : NULL;
                         for (uint32_t si = 0; si < ctx->n_specialized_calls; si++) {
-                            if (ctx->specialized_call_exprs[si] == src) {
+                            if (ctx->specialized_call_exprs[si] == src &&
+                                ctx->specialized_call_outer[si] == cur_outer) {
                                 outer_clone = ctx->specialized_call_names[si];
                                 break;
                             }
@@ -9942,6 +10056,27 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * widened; convert back to the declared type. */
                     const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
                     bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    /* generic-hof-option-result-read-by-value: when the boxing
+                     * site filled slot 0 with the CARRIER shim (typed shim
+                     * declined, a wide by-value parameter), slot 0 returns a
+                     * wide result BOXED in the int64 word -- that shim's stated
+                     * contract.  Reading it as the aggregate by value took the
+                     * box pointer for the value (`(Option float)` through
+                     * `mx-app` printed 0).  Ask the producer's own question. */
+                    bool carrier_unbox = false;
+                    if (!thunk_typedef && n <= MAX_FN_ARITY) {
+                        Type rres = emit_resolve_type(ctx, disp_result);
+                        Type rargs[MAX_FN_ARITY];
+                        for (uint32_t i = 0; i < n; i++)
+                            rargs[i] = emit_resolve_type(ctx, arg_types[i]);
+                        carrier_unbox = type_is_b4box_closure_slot(rres) &&
+                            carrier_fatshim_applies(rres, rargs, (uint8_t)n);
+                    }
+                    if (carrier_unbox) {
+                        buf_printf(&out, "(*(%s *)(intptr_t)", ret_c);
+                        slot_rc = "int64_t";
+                        narrow_back = false;
+                    }
                     if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (thunk_typedef) {
                         /* TS1: typed fat-closure layout -- slot 0 is a typed thunk ptr. */
@@ -10016,6 +10151,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     buf_puts(&out, ")");
                     if (narrow_back) buf_puts(&out, ")");
+                    if (carrier_unbox) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -11743,7 +11879,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
                     if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
-                        (fn_binding->body_is_inline_c || !matched_spec)) {
+                        (fn_binding->body_is_inline_c || !matched_spec) &&
+                        !map_value_box_key_applies(ctx, e, i, emit_arg,
+                                                   fn_binding, matched_spec)) {
                         /* vec-push-byvalue-aggregate-element-stores-dangling-
                          * stack-address: this carrier sink is a heap container
                          * insert (vec-push! / map-set! / set-add!, all inline-C
@@ -13543,7 +13681,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    !strchr(_aggc, '*') &&
                                    !type_is_heap_adt(_agg) &&
                                    !type_is_heap_struct(_agg));
-                            if (_agg_ok)
+                            if (_agg_ok &&
+                                !map_value_box_key_applies(ctx, e, i, emit_arg,
+                                                           fn_binding, matched_spec))
                                 raw = fn_binding->body_is_inline_c
                                     ? emit_carrier_bridge_escaping(ctx, body, raw,
                                           CK_CONCRETE, CK_CARRIER, _agg)
@@ -16287,6 +16427,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (fnty.as.fn.is_variadic && (uint32_t)i + 1 == (uint32_t)arity)
                     fnt_params[i] = emit_type_from_kind(TY_INT);
             }
+            /* generic-lambda-boxed-with-the-word-shim: inside a spec the box's
+             * slot-1 function is the lambda's CLONE for this spec -- its `A`s are
+             * concrete (`__fn_31__spec__tur_adt_MxP_tur_adt_MxP` takes and
+             * returns a struct) -- so the shim must be chosen at the RESOLVED
+             * signature.  At the written `(fn [A] A)` every slot looked like a
+             * word, the generic `__tur_fatshim1` was taken, and a struct was
+             * read out of an int64 (garbage, 6.9e-310). */
+            if (ctx->current_abi_specialization) {
+                fnt_result = emit_resolve_type(ctx, fnt_result);
+                for (uint8_t i = 0; i < arity && i < MAX_FN_ARITY; i++)
+                    if (!(fnty.as.fn.is_variadic && (uint32_t)i + 1 == (uint32_t)arity))
+                        fnt_params[i] = emit_resolve_type(ctx, fnt_params[i]);
+            }
             char *typed_shim = NULL;
             /* An erased-result sink reads slot 0's result as a carrier: box a
              * by-value aggregate result there
@@ -18851,8 +19004,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             const GenDef *def = e->as.gen_.def;
             emit_gen_functions(ctx, def);
             char *tmp = fresh_tmp(ctx);
+            char *g_create = gen_clone_name(ctx, def->create_fn);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "void *%s = %s(", tmp, def->create_fn);
+            buf_printf(body, "void *%s = %s(", tmp, g_create);
+            free(g_create);
             for (uint32_t i = 0; i < def->n_captures; i++) {
                 if (i > 0) buf_puts(body, ", ");
                 char *cap_name = name_for_binding(ctx, def->captures[i]);
@@ -18913,8 +19068,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     rc = emit_type_c_name(ctx, e->type);
                     snprintf(rexpr, sizeof rexpr, "(%s)(intptr_t)(%s)", rc, raw);
                     break;
-                default:
+                default: {
+                    /* A generic's element (`A`): the slot holds the carrier
+                     * word the once-emitted generator body yielded; inside a
+                     * spec `A` is concrete, so bridge it back. */
+                    Type ut = emit_resolve_type(ctx, e->type);
+                    const char *uc = emit_type_c_name(ctx, ut);
+                    if (uc && strcmp(uc, "int64_t") != 0 &&
+                        ut.kind != TY_TYVAR && ut.kind != TY_UNKNOWN) {
+                        char *br = emit_carrier_bridge(ctx, body, strdup(raw),
+                                                       CK_CARRIER, CK_CONCRETE, ut);
+                        char *typed = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = %s;\n", uc, typed, br);
+                        emit_localvar_record_ctype(typed, uc);
+                        free(br); free(raw);
+                        return typed;
+                    }
                     break;
+                }
             }
             if (rc) {
                 char *typed = fresh_tmp(ctx);

@@ -72,6 +72,13 @@ TYPES = {
     "struct":  ("MxP", "(MxP 3 4.5)", "(.y %s)", "4.5"),
     "heap":    ("MxH", "(MxH 5 2.25)", "(.y %s)", "2.25"),
     "opt":     ("(Option float)", "(some 2.5)", "(unwrap-or %s 0.5)", "2.5"),
+    "int16":   ("int16", "(:: 300 int16)", "%s", "300"),
+    "uint8":   ("uint8", "(:: 200 uint8)", "%s", "200"),
+    "res":     ("(Result float int)", "(:: (ok 1.5) (Result float int))",
+                "(ok-val %s)", "1.5"),
+    "vec":     ("(Vec int)", "(mx-vec2 4 5)", "(vec-get %s 1)", "5"),
+    "pairv":   ("(Pair float cstr)", '(pair 1.25 "p")', "(pair-fst %s)", "1.25"),
+    "fn":      ("(fn [int] int)", "(fn [n : int] : int (+ n 1))", "(%s 41)", "42"),
 }
 
 PRELUDE = """\
@@ -80,6 +87,11 @@ PRELUDE = """\
 (defstruct MxBox [A] [val : A])
 (defn mx-id [A] [y : A] : A y)
 (defn mx-true [] : bool true)
+(defdata MxW [A] (MxWc A))
+(defn mx-vec2 [a : int b : int] : (Vec int)
+  (let [v (:: (vec-new) (Vec int))] (vec-push! v a) (vec-push! v b) v))
+(defn mx-mk [B] [v : B] : (fn [] B) (fn [] v))
+(defn mx-app [B] [f : (fn [B] B) v : B] : B (f v))
 """
 
 # -- producers ---------------------------------------------------------------
@@ -106,25 +118,57 @@ PRODUCERS = {
                  lambda L, T: "(pair %s 0)" % L),
     "thunk":    ("f : (fn [] A)", "(f)",
                  lambda L, T: "(fn [] %s)" % L),
+    "mapget":   ("m : (Map int A)", "(map-get m 1)",
+                 lambda L, T: "(map-assoc (:: (map-new) (Map int %s)) 1 %s)" % (T, L)),
+    "adtmatch": ("w : (MxW A)", "(match w (MxWc q) q)",
+                 lambda L, T: "(MxWc %s)" % L),
+    "gen":      ("x : A", "(gen-unwrap (gen-next (gen [] (yield x))))",
+                 lambda L, T: L),
 }
 
 # -- sinks -------------------------------------------------------------------
 # name -> template over E (an A-typed expression); result must be A.
 SINKS = {
     "tail":    "{E}",
-    "let":     "(let [y {E}] y)",
+    "let":     "(let [mxs-y {E}] mxs-y)",
     "ident":   "(mx-id {E})",
     "if":      "(if (mx-true) {E} {E})",
     "do":      "(do (mx-true) {E})",
     "box":     "(.val (MxBox {E}))",
-    "boxlet":  "(let [b (MxBox {E})] (.val b))",
-    "some":    "(match (some {E}) (Some q) q (None) {E})",
-    "vec":     "(let [w (vec-new)] (vec-push! w {E}) (vec-get w 0))",
+    "boxlet":  "(let [mxs-b (MxBox {E})] (.val mxs-b))",
+    "some":    "(match (some {E}) (Some mxs-q) mxs-q (None) {E})",
+    "vec":     "(let [mxs-w (vec-new)] (vec-push! mxs-w {E}) (vec-get mxs-w 0))",
     "pair":    "(pair-fst (pair {E} 0))",
-    "lambda":  "((fn [z : A] : A z) {E})",
-    "capture": "(let [c {E}] ((fn [] c)))",
-    "mut":     "(let [^mut c {E}] (set! c {E}) c)",
+    "lambda":  "((fn [mxs-z : A] : A mxs-z) {E})",
+    "capture": "(let [mxs-c {E}] ((fn [] mxs-c)))",
+    "mut":     "(let [^mut mxs-c {E}] (set! mxs-c {E}) mxs-c)",
+    "map":     "(map-get (map-assoc (map-new) 1 {E}) 1)",
+    "gen":     "(gen-unwrap (gen-next (gen [] (yield {E}))))",
+    "adt":     "(match (MxWc {E}) (MxWc mxs-q) mxs-q)",
+    "fnret":   "((mx-mk {E}))",
+    "hof":     "(mx-app (fn [mxs-z : A] : A mxs-z) {E})",
 }
+
+
+# Cells that test a documented LANGUAGE limitation rather than a
+# representation decision.  Never a place to park a bug: each row names the
+# diagnostic the checker gives, and the summary prints how many were skipped.
+EXCLUDE = [
+    # `yield` inside a `match` arm is TUR-E0702 (a 1.0 limitation); the `some`
+    # sink puts the producer's expression in the (None) arm.
+    ("gen/some/*", "TUR-E0702: yield inside a match arm is a 1.0 limitation"),
+    # The `gen` producer inside the `gen` sink is a (gen ...) nested in a
+    # (gen ...) body, which elab_forms.c rejects as a v1 limitation.
+    ("gen/gen/*", "nested generators are not supported in v1"),
+]
+
+
+def excluded(cell):
+    key = "%s/%s/%s" % cell
+    for pat, why in EXCLUDE:
+        if fnmatch.fnmatch(key, pat):
+            return why
+    return None
 
 
 def gen(producer, sink, tyname):
@@ -217,6 +261,8 @@ def main():
 
     cells = [(p, s, t) for p in PRODUCERS for s in SINKS for t in TYPES
              if fnmatch.fnmatch("%s/%s/%s" % (p, s, t), args.only)]
+    n_excluded = sum(1 for c in cells if excluded(c))
+    cells = [c for c in cells if not excluded(c)]
     workdir = args.keep or tempfile.mkdtemp(prefix="gsm-")
     os.makedirs(workdir, exist_ok=True)
     try:
@@ -251,9 +297,10 @@ def main():
             for k in sorted(failing):
                 f.write(k + "\n")
 
-    print("generic-spec-matrix: %d cells, %d failing (%d new, %d known), %d fixed"
+    print("generic-spec-matrix: %d cells, %d failing (%d new, %d known), %d fixed, "
+          "%d excluded as language limitations (see EXCLUDE)"
           % (len(results), len(failing), len(new), len(failing) - len(new),
-             len(fixed)))
+             len(fixed), n_excluded))
     # A FIXED cell fails too: the baseline is a ratchet, and a stale row would
     # let the cell regress unnoticed.
     return 1 if (new or fixed) else 0
