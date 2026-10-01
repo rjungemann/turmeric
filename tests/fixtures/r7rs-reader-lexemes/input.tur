@@ -9,8 +9,11 @@
 ;; (docs/archive/r7rs-turmeric-syntax-leaks.md, items 1 and 7); it is plain
 ;; Scheme now, so the values print in Scheme's spelling (`#t`, `10.0`).
 ;;
-;; The directive is the enable (D11), so this file prints TUR-W0061 to stderr;
-;; the harness compares stdout only.
+;; r7rs GRADUATED at 0.57.0, so the directive is all that is needed and
+;; nothing is printed to stderr: no EXPERIMENTS[] row, `--enable=r7rs` a
+;; TUR-W0063 no-op, no manifest able to refuse the dialect, and no TUR-W0061
+;; (this file used to print one per compile, which the harness ignored because
+;; it compares stdout only).
 (import (scheme base) (scheme write) (scheme char))
 (define (show x) (display x) (newline))
 ;; R7RS 6.3 booleans, both spellings.

@@ -372,51 +372,48 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * `Semigroup` instance (plan 4.1).  That audit is SC8 and is still open;
      * graduation deferred it, it did not remove it.  The name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op). */
-    /* r7rs -- R7RS-small Scheme as a `#lang` base over the Turmeric runtime
-     * (Saffron's dynamic substrate under a Scheme reader).
+    /* r7rs GRADUATED 2026-10-01, at 0.57.0 (introduced 0.52.0; prototype
+     * until 2026-09-27, beta for the 0.56->0.57 soak, graduated on the
+     * advisory expires_at rather than past it).  `#lang r7rs` is an ordinary
+     * base dialect now, on the same footing as `#lang turmeric` and
+     * `#lang saffron`: no row here, no enable, no TUR-W0061 on every compile,
+     * and no way for a project manifest to refuse a directive the file itself
+     * carries.  `tur dialects` reports all ten bases as `stable` and the
+     * playground drops the chip, both off `LangBaseDescriptor.experiment`
+     * going NULL again (lang_dialects.c).
      *
-     * BETA since 2026-09-27 (0.56.0).  It was prototype while the plan was
-     * staged and unfinished; that condition is gone.  r7rs-lang-plan's R0-R10
-     * and its Section 9 T0-T8 have all landed, r7rs-srfi-plan's S0-S7 with
-     * them, and R10's exit criterion -- the conformance suite reports a
-     * number -- is met: `tur_r7rs_conformance` runs chibi-scheme's R7RS suite
+     * `g_opt_r7rs` SURVIVES and keeps its name -- the same call saffron's
+     * graduation made for `g_opt_saffron`, and for the same reason: it was
+     * never only an enable bit.  emit_module.c's `r7rs_gc_active` reads it to
+     * pick which collector opt-out governs the program (`--no-r7rs-gc` versus
+     * Saffron's `--no-saffron-gc`), and both dialects set `g_opt_dynamic_any`,
+     * so that bit cannot tell them apart.  What moves is the WRITER:
+     * `lang_dialect_apply` sets it off the new `LangTraits.scheme_runtime`
+     * bit instead of through `experiment_enable`, at exactly the moment the
+     * gate used to -- the reading of the `#lang` line -- so the emitted C is
+     * unchanged either side of this change, measured on both arms of both
+     * dynamic dialects (see the graduation commit).  The name moves to
+     * GRADUATED[] below, so `--enable=r7rs` is a TUR-W0063 no-op and the
+     * directive is the only writer there has ever been in practice.
+     *
+     * What graduation claims: the checklist the beta note named -- a
+     * conforming program getting a wrong answer or failing to build -- is
+     * empty.  The four reports it listed closed 2026-09-27, and
+     * r7rs-reentrant-callcc-wrong-with-eval, the one of that kind still open
+     * at beta, closed 2026-10-01 (`7c90e00b8`; see
+     * docs/archive/r7rs-reentrant-callcc-wrong-with-eval.md).  R10's exit
+     * criterion holds: `tur_r7rs_conformance` runs chibi-scheme's R7RS suite
      * and 1223 test invocations pass on BOTH back ends, 2 are settled as
-     * differences kept on purpose (T7) and none fail, of the 1216 tests the
-     * suite writes.  The surface is frozen; beta is the soak, not more design.
-     *
-     * What beta does NOT claim, and why this is not GRADUATED[] yet: four open
-     * reports in docs/reported/ still describe a conforming program getting a
-     * wrong answer or failing to build --
-     *   - r7rs-raise-musttail-fails-under-clang-x86-64 (every program that
-     *     reaches `raise` fails to build under clang on x86-64 Linux; CI does
-     *     not see it, because Linux CI is gcc and macOS CI is arm64),
-     *   - r7rs-too-few-arguments-returns-a-procedure (an under-saturated call
-     *     is a Turmeric partial application, not R7RS's error),
-     *   - r7rs-type-errors-are-uncatchable-panics (`(car 5)` aborts instead of
-     *     being `guard`-able; narrowed by S6, not closed),
-     *   - r7rs-turmeric-syntax-leaks (Turmeric's forms, reader extensions and
-     *     auto-loaded stdlib names are live in Scheme source, taking lexical
-     *     space R7RS gives the program).
-     * Those are the graduation checklist.  All four closed on 2026-09-27 and
-     * are archived under docs/archive/ (r7rs-programs-compile-slowly, still
-     * open, is a build-time cost, not a wrong answer).  What remains is the
-     * beta soak: at graduation, move the name to GRADUATED[] below and drop
-     * the row.
-     *
-     * The `#lang r7rs` line is itself the enable (D11): lang_dialect_apply
-     * enables this row at CLI precedence when it reads the directive, so no
-     * `--enable=r7rs` is needed and no manifest can refuse it.  Long-lived by
-     * design, and therefore the row most likely to be misread as a release
-     * gate: `expires_at` is ADVISORY and never blocks a cut (plan R4) --
-     * graduate early, or bump it with a one-line rationale, but never refuse
-     * a version bump over it. */
-    { "r7rs",
-      "R7RS-small Scheme as a `#lang` base (Saffron's dynamic substrate under a Scheme reader)",
-      "docs/upcoming/r7rs-lang-plan.md",
-      "0.52.0",                  /* introduced */
-      "0.57.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_BETA,
-      &g_opt_r7rs },
+     * differences kept on purpose (T7) and none fail.  The four `#lang r7rs`
+     * reports still open are none of them a wrong answer --
+     * r7rs-callcc-memory-never-freed (the interpreter retains re-entrant
+     * stack images for the life of the process, by design elsewhere too),
+     * r7rs-conformance-program-emits-megabytes-of-c (build cost; nothing is
+     * miscompiled), r7rs-library-file-shape-and-export-rename (a decided
+     * design question held as a report) and
+     * r7rs-prelude-split-wrong-symbols-on-windows (fix landed; the split
+     * stays off on Windows pending one run on a Windows host).  The plan is
+     * archived at docs/archive/r7rs-lang-plan.md. */
     /* reflected-measures -- `^reflect` on a defn opts a pure, structurally
      * recursive, exhaustively matching function INTO the refinement logic: its
      * defining equation is admitted by bounded ground unfolding, so
@@ -526,6 +523,14 @@ static const char *const GRADUATED[] = {
      * `tur experiments` row for a full release, which is enough for a
      * build.tur somewhere to name it. */
     "saffron",
+    /* graduated 2026-10-01, at 0.57.0 (introduced 0.52.0).  Same case as
+     * `saffron` directly above and kept for the same reason: the `#lang r7rs`
+     * line was always its own enable (D11), so a hand-written
+     * `--enable=r7rs` only ever duplicated the directive -- but it shipped as
+     * a listed `tur experiments` row for five minor lines, which is enough
+     * for a build.tur or an experiments.tur somewhere to name it.  Eligible
+     * to age out at 0.58.0.  See docs/archive/r7rs-lang-plan.md. */
+    "r7rs",
     /* graduated 2026-09-25, in the 0.53 line (introduced 0.49.0, carrying an
      * advisory expires_at of 0.55.0 -- graduating early is routine).  Source
      * syntax someone had to write into a file and then enable, so a lingering

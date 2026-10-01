@@ -49,6 +49,18 @@ typedef struct LangTraits {
      * rule also counts `nil` as false, and the two are the one place the
      * dialects disagree, so it is a trait rather than inherited. */
     bool        scheme_truthiness;
+    /* A compiled program of this language runs on the SCHEME runtime, which
+     * is a per-BUILD fact rather than the per-file ones above: it sets
+     * `g_opt_r7rs`, and emit_module.c's `r7rs_gc_active` reads that to pick
+     * which collector opt-out governs the program (`--no-r7rs-gc` versus
+     * Saffron's `--no-saffron-gc`).  Both dialects set `g_opt_dynamic_any`,
+     * so that bit cannot tell them apart.
+     *
+     * This is the writer that `experiment_enable("r7rs", ...)` used to be:
+     * r7rs graduated at 0.57.0, and the side effect its gate carried
+     * incidentally moved here, set at exactly the same moment -- the reading
+     * of the `#lang` line -- so the emitted C is unchanged either side. */
+    bool        scheme_runtime;
     const char *prelude;          /* stdlib autoload tail (e.g. "saffron/prelude.tur"), or NULL */
     const char *experiment;       /* gating EXPERIMENTS[] row, or NULL when stable (D11) */
 } LangTraits;

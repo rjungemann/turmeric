@@ -27,13 +27,13 @@ tur run fact.tur          # compile and run
 tur --interpret fact.tur  # the tree-walking interpreter
 ```
 
-The dialect is in **beta**: the plan is complete and the surface is frozen,
-and what remains before it graduates is the soak (the four reports that
-gated it closed on 2026-09-27). The
-`#lang r7rs` line is its own enable, so no `--enable=` flag is needed, but
-every compile prints the lifecycle warning TUR-W0061. The stages, design
-decisions and known gaps live in
-[docs/upcoming/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md).
+The dialect **graduated in v0.57.0** and is an ordinary base dialect, on the
+same footing as `#lang turmeric` and `#lang saffron`: `tur dialects` lists it
+as `stable`, nothing needs enabling, a project manifest cannot refuse it, and
+no lifecycle warning is printed (`--enable=r7rs` is accepted as a no-op for a
+release, with a TUR-W0063 notice). The stages, design decisions and known gaps
+live in
+[docs/archive/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md).
 
 The single-file examples in this guide are compiled and run, on both back
 ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
@@ -703,5 +703,5 @@ floor in `tests/run-r7rs-conformance.sh` when the count goes up.
 - [saffron-guide.md](saffron-guide.md) -- the dynamically typed Turmeric
   dialect whose substrate `#lang r7rs` shares.
 - [syntax-guide.md](syntax-guide.md) -- the `#lang` line and every base dialect.
-- [docs/upcoming/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md)
+- [docs/archive/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)
   -- the plan, stage by stage, with what shipped.

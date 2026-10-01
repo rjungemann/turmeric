@@ -71,7 +71,7 @@ it.
 
 **Where this came from.** r7rs-lang-plan R1 kept these on purpose:
 "keywords, `[...]`, `#map{...}`, inline C and `^tailcall` all still read,
-and `true`/`false`/`nil` are still literals" (docs/upcoming/r7rs-lang-plan.md,
+and `true`/`false`/`nil` are still literals" (docs/archive/r7rs-lang-plan.md,
 the R1 "What shipped" note). R9 added Turmeric forms typed at an r7rs REPL
 prompt. This report reverses R1's choice for *user* Scheme source.
 
