@@ -11081,10 +11081,62 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
     if (threadable_has(fd->binding)) {
+        /* fnsan-e2a-registry-typed-entry: the E2a call site casts a looked-up
+         * entry to `int64_t (*)([void *,] W0.., DK *)` with every Wi the word
+         * except a float kind, which travels at its own type (e2a_cast).  An
+         * entry declared with a POINTER (or narrow) parameter --
+         * `__fn_7__cps(const char *msg, DK *)` -- was called through that
+         * cast: an indirect call through the wrong function type (a
+         * -fsanitize=function trap, a call_indirect trap on WASM).  Register
+         * an adapter in the call site's convention instead. */
+        bool e2_adapt = false, e2_ok = true;
+        const char *e2pc[MAX_FN_ARITY];
+        uint32_t e2n = fd->n_params;
+        if (e2n > MAX_FN_ARITY) e2_ok = false;
+        for (uint32_t i = 0; e2_ok && i < e2n; i++) {
+            const char *pc = emit_param_ctype(ctx, fd, i);
+            e2pc[i] = pc;
+            if (!pc) { e2_ok = false; break; }
+            size_t pL = strlen(pc);
+            bool env = fd->closure && i == 0;
+            bool flt = strcmp(pc, "double") == 0 || strcmp(pc, "float") == 0;
+            bool word = strcmp(pc, "int64_t") == 0;
+            bool ptr = pL >= 1 && pc[pL - 1] == '*';
+            bool narrow = strcmp(pc, "bool") == 0 || strcmp(pc, "int8_t") == 0 ||
+                          strcmp(pc, "int16_t") == 0 || strcmp(pc, "int32_t") == 0 ||
+                          strcmp(pc, "uint8_t") == 0 || strcmp(pc, "uint16_t") == 0 ||
+                          strcmp(pc, "uint32_t") == 0;
+            if (env || flt || word) continue;
+            if (ptr || narrow) { e2_adapt = true; continue; }
+            e2_ok = false;              /* an aggregate: keep the direct entry */
+        }
+        if (e2_ok && e2_adapt) {
+            buf_printf(file, "static int64_t %s__e2w(", cn);
+            for (uint32_t i = 0; i < e2n; i++) {
+                const char *pc = e2pc[i];
+                bool keep = (fd->closure && i == 0) || strcmp(pc, "double") == 0 ||
+                            strcmp(pc, "float") == 0 || strcmp(pc, "int64_t") == 0;
+                buf_printf(file, "%s a%u, ", keep ? pc : "int64_t", i);
+            }
+            buf_printf(file, "DK *__k) {\n    return %s__cps(", cn);
+            for (uint32_t i = 0; i < e2n; i++) {
+                const char *pc = e2pc[i];
+                size_t pL = strlen(pc);
+                bool keep = (fd->closure && i == 0) || strcmp(pc, "double") == 0 ||
+                            strcmp(pc, "float") == 0 || strcmp(pc, "int64_t") == 0;
+                if (keep)
+                    buf_printf(file, "a%u, ", i);
+                else if (pc[pL - 1] == '*')
+                    buf_printf(file, "(%s)(intptr_t)a%u, ", pc, i);
+                else
+                    buf_printf(file, "(%s)a%u, ", pc, i);
+            }
+            buf_puts(file, "__k);\n}\n");
+        }
         buf_printf(file,
             "static void __tur_e2reg_%s(void) {\n"
-            "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s__cps);\n"
-            "}\n", cn, cn, cn);
+            "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s%s);\n"
+            "}\n", cn, cn, cn, (e2_ok && e2_adapt) ? "__e2w" : "__cps");
         /* S1b: the direct->CPS registry must be populated before a threaded
          * call site looks up its CPS variant.  A dropped constructor here was
          * the SIGSEGV in findings 3.1. */
