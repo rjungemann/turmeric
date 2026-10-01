@@ -23,6 +23,6 @@
 #   python3 -c "import urllib.request,json; d=json.load(urllib.request.urlopen('https://pypi.org/pypi/markdown/<ver>/json')); [print(f['digests']['sha256'], f['filename']) for f in d['urls']]"
 # Both digests are listed because pip picks the wheel or the sdist depending on
 # the host, and --require-hashes checks whichever it actually downloaded.
-markdown==3.10 \
-    --hash=sha256:b5b99d6951e2e4948d939255596523444c0e677c669700b1d17aa4a8a464cb7c \
-    --hash=sha256:37062d4f2aa4b2b6b32aefb80faa300f82cc790cb949a35b8caede34f2b68c0e
+markdown==3.11 \
+    --hash=sha256:180224db6aed87ba9ce1f2781ebcd5826253de8ff637112090e24b84502bbf9f \
+    --hash=sha256:cd6c89e7eb308c8b332ed673215a52d208a43f8bacc030b1419376129408719e
