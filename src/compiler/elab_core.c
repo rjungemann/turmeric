@@ -2879,6 +2879,105 @@ bool return_type_carrier_aggregate_conflict(Type declared, Type body) {
     return false;
 }
 
+/* committed-applied-return-vs-scalar: a by-value APPLIED type against a
+ * concrete scalar in a committed return position.
+ *
+ * return_type_carrier_aggregate_conflict leaves TY_APP out on purpose -- "a
+ * parametric return position has a carrier crossing that grounds it" -- and
+ * that is true where there IS a crossing: a generic, an `#{Unsafe}` defn, an
+ * instance method.  A monomorphic defn has none, and the check compares the
+ * declared return by KIND only, so `(defn h [x : float] : cstr (some x))`,
+ * `: int (pair x 1)` and `: (Option int) 7` all type-checked, and the program
+ * then reached `cc` with two C types for one value -- or, where `cc` lets a
+ * pointer pass for an integer, handed back an address as the answer.
+ *
+ * Fires when one side is a GROUND applied type whose C spelling is a real
+ * aggregate (not the transparent `int64_t` of an opaque-over-:int app, which
+ * stays a bridge, as the bare-ADT check above tolerates it) and the other is a
+ * pinned scalar.  Floats are already the register-class check's.  The caller
+ * gates it on the committed class. */
+static bool ac_type_is_ground(const Type *t, int depth) {
+    if (!t || depth > 32) return false;
+    switch (t->kind) {
+        case TY_TYVAR: case TY_UNKNOWN: case TY_ANY: case TY_NEVER:
+            return false;
+        case TY_APP:
+            return ac_type_is_ground(t->as.app.fn, depth + 1) &&
+                   ac_type_is_ground(t->as.app.arg, depth + 1);
+        default:
+            return true;
+    }
+}
+/* The application's head ADT, when it is a by-value sum or record with real
+ * constructors: every instantiation of it, ground or not, is a C aggregate.
+ * An opaque newtype head (n_ctors == 0) is the int64 carrier and a :heap head
+ * is a typed pointer (the aggregate check's), so neither qualifies. */
+static const AdtDef *ac_byvalue_head(Type t) {
+    if (t.kind != TY_APP) return NULL;
+    const Type *h = &t;
+    while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+    if (h->kind != TY_ADT || !h->as.adt_.def) return NULL;
+    const AdtDef *d = h->as.adt_.def;
+    if (d->is_opaque || d->is_heap || d->n_ctors == 0) return NULL;
+    return d;
+}
+static bool ac_is_byvalue_app(Type t) {
+    /* Not exempt under the interpreter, unlike rv_is_noncarrier_aggregate:
+     * this is a TYPE mismatch the program states, and turi printed the same
+     * box address the compiled program did. */
+    if (!ac_byvalue_head(t)) return false;
+    if (type_is_heap_adt(t) || type_is_transparent_int_newtype(t)) return false;
+    if (!ac_type_is_ground(&t, 0)) return true;   /* `(Result float E)` */
+    const char *cn = type_c_name(t);
+    return cn && strncmp(cn, "tur_adt_", 8) == 0;
+}
+static bool ac_is_pinned_word_scalar(Type t) {
+    return ps_is_integer_scalar_kind(t.kind) || t.kind == TY_CSTR;
+}
+/* Any application whose head is a real (non-opaque) ADT, :heap included. */
+static const AdtDef *ac_real_head(Type t) {
+    if (t.kind != TY_APP) return NULL;
+    const Type *h = &t;
+    while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+    if (h->kind != TY_ADT || !h->as.adt_.def) return NULL;
+    const AdtDef *d = h->as.adt_.def;
+    return (d->is_opaque || d->n_ctors == 0) ? NULL : d;
+}
+bool applied_type_conflict(Type want, Type got) {
+    /* `(Vec int)` claimed, `(Option float)` given: different types whatever
+     * either one's representation. */
+    const AdtDef *wh = ac_real_head(want), *gh = ac_real_head(got);
+    if (wh && gh && wh != gh) return true;
+    /* One head, both ground, different arguments: `(Vec int)` claimed,
+     * `(Vec float)` given. */
+    if (wh && gh && ac_type_is_ground(&want, 0) && ac_type_is_ground(&got, 0) &&
+        !type_eq(want, got))
+        return true;
+    /* A :heap app is a typed pointer: never a bool, string or float.  (An
+     * integer stays accepted -- `0` is the nil of the cons-list family.) */
+    if (wh && wh->is_heap &&
+        (got.kind == TY_BOOL || got.kind == TY_CSTR || rc_is_float_kind(got.kind)))
+        return true;
+    if (ac_is_byvalue_app(want)) {
+        if (ac_is_pinned_word_scalar(got) || rc_is_float_kind(got.kind))
+            return true;
+        if (!ac_is_byvalue_app(got)) return false;
+        /* Different heads are different types, ground or not; two ground
+         * apps of one head are two C aggregates -- `(Option int)` and
+         * `(Option float)` share no layout. */
+        if (ac_byvalue_head(want) != ac_byvalue_head(got)) return true;
+        return ac_type_is_ground(&want, 0) && ac_type_is_ground(&got, 0) &&
+               !type_eq(want, got);
+    }
+    return ac_is_pinned_word_scalar(want) && ac_is_byvalue_app(got);
+}
+bool return_type_applied_scalar_conflict(const Type *declared_app,
+                                         TypeKind ret_kind, Type body) {
+    if (declared_app) return applied_type_conflict(*declared_app, body);
+    Type d; memset(&d, 0, sizeof d); d.kind = ret_kind;
+    return applied_type_conflict(d, body);
+}
+
 /* carrier-aware-return-unification: single dispatcher over the return-position
  * predicates -- see elab_internal.h.  Runs them in the established order
  * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)

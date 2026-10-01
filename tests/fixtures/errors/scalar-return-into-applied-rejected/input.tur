@@ -1,0 +1,4 @@
+;; An integer where a monomorphic defn declares an applied type: there is no
+;; crossing to ground it, and the caller reads the 7 as an Option.
+(defn h [] : (Option int) 7)
+(defn main [] : int (println (unwrap-or (h) 0)) 0)

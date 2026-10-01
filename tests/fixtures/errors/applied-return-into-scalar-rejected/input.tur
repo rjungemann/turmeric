@@ -1,0 +1,6 @@
+;; A by-value applied type returned where a monomorphic defn declares a
+;; scalar.  The return check compared the declared return by KIND and left
+;; every applied type out, so this type-checked and reached cc with two C types
+;; for one value (or, under an int return, handed back the box's address).
+(defn h [x : float] : cstr (some x))
+(defn main [] : int (println (h 7.1)) 0)

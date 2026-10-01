@@ -1750,6 +1750,20 @@ bool return_type_bool_integer_conflict(TypeKind declared, Type body);
  * return has a crossing that grounds it. */
 bool return_type_carrier_aggregate_conflict(Type declared, Type body);
 
+/* committed-applied-return-vs-scalar: a ground by-value applied type (`(Option
+ * float)`, `(Pair float int)`) against a concrete int-family / bool / cstr
+ * return, either direction.  `declared_app` is the declared return when it is
+ * an applied type (NULL otherwise; `ret_kind` then names the scalar).  Only a
+ * committed (monomorphic, non-`#{Unsafe}`) defn has no crossing to ground the
+ * applied side, so the caller gates it on RET_CLASS_COMMITTED. */
+bool return_type_applied_scalar_conflict(const Type *declared_app,
+                                         TypeKind ret_kind, Type body);
+/* The same question for any position that states a type and receives a value
+ * (a let annotation, a declared parameter): `want` a ground by-value applied
+ * type and `got` a scalar or a DIFFERENT ground applied type, or `want` an
+ * int-family / bool / cstr scalar and `got` a ground by-value applied type. */
+bool applied_type_conflict(Type want, Type got);
+
 /* carrier-aware-return-unification: classify a return position so the shared
  * dispatcher knows how much to reject against the int64 carrier ABI.
  *   RET_CLASS_COMMITTED -- a genuinely committed position: a monomorphic,

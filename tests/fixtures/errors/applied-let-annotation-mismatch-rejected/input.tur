@@ -1,0 +1,7 @@
+;; An applied let annotation was parsed and never compared: the binding took
+;; the initializer's type, so `o` here was an `(Option float)` while the
+;; source said `(Option int)`.
+(defn main [] : int
+  (let [o : (Option int) (some 7.1)]
+    (println (unwrap-or o 0)))
+  0)

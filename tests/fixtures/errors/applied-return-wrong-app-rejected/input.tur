@@ -1,0 +1,5 @@
+;; Two ground applied types are two C aggregates: `(Option int)` and
+;; `(Option float)` share no layout, so a body of one under a declared return
+;; of the other is a mismatch, not a bridge.
+(defn h [x : float] : (Option int) (some x))
+(defn main [] : int (println (unwrap-or (h 7.1) 0)) 0)

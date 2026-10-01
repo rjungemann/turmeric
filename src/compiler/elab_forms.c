@@ -1376,6 +1376,22 @@ Expr *elab_let(Elab *e, const Form *call) {
                         typekind_to_string(ak), typekind_to_string(ik));
                     rc = -1; break;
                 }
+                /* committed-applied-let-annotation: an applied annotation was
+                 * parsed and then not compared at all, so `[o : (Option int)
+                 * (some 7.1)]`, `[o : (Vec int) (some 1)]` and `[o : (Option
+                 * int) 7]` were accepted -- the binding silently took the
+                 * initializer's type, or an int where an Option was claimed. */
+                if (!primitive && applied_type_conflict(*ann_ty, init->type)) {
+                    Buf ab; buf_init(&ab); type_print(&ab, *ann_ty); buf_putc(&ab, '\0');
+                    Buf ib; buf_init(&ib); type_print(&ib, init->type); buf_putc(&ib, '\0');
+                    diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
+                        TUR_E0001_TYPE_MISMATCH,
+                        "let binding '%s': type annotation does not match "
+                        "initializer (annotated %s, got %s)",
+                        name->name, ab.data, ib.data);
+                    buf_free(&ab); buf_free(&ib);
+                    rc = -1; break;
+                }
             }
             /* gadt-length-index-not-enforced: an annotated GADT index is a
              * claim about the initializer -- `[v : (Vec (Succ Zero)) (VNil)]`

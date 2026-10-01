@@ -1,0 +1,6 @@
+;; A by-value `(Option int)` handed back under a monomorphic `: int` return.
+;; return-type-carrier-bridges-still-accepted used to pin this as a tolerated
+;; carrier bridge, but it compiled only while nothing called it: the call was
+;; "aggregate value used where an integer was expected" from cc.
+(defn opt-carrier [o : (Option int)] : int o)
+(defn main [] : int (println (opt-carrier (some 5))) 0)

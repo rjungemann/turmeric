@@ -4253,6 +4253,26 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     impl_body_start = 3;
                 }
             }
+            /* A compound result annotation, `: (Option float)`, `: (Vec int)`:
+             * only a bare symbol reached the `kw` path, so this fell through to
+             * the body and came back as "type annotation ': type' is only valid
+             * after a parameter name" -- while the same form is accepted on a
+             * method PARAMETER and on the class declaration.  Resolve it the
+             * way a parameter annotation is resolved. */
+            if (!kw && impl_body_start == 2 && ret_or_body->tag == F_TYPE_ANN &&
+                ret_or_body->as.list.len == 1 &&
+                ret_or_body->as.list.items[0]->tag != F_CONTRACT_TYPE) {
+                Type *ft = type_expr_from_form(e, ret_or_body->as.list.items[0],
+                                               NULL, NULL, NULL, 0);
+                if (!ft) {
+                    diag_emit(DIAG_ERROR, ret_or_body->span,
+                              "unsupported type form in method return annotation");
+                    return NULL;
+                }
+                ret_was_class_var = false;
+                return_type = *ft;
+                impl_body_start = 3;
+            }
             if (kw) {
                 /* carrier-aware-return-unification Phase 3: an explicit instance
                  * return annotation replaces the substituted class-var return, so

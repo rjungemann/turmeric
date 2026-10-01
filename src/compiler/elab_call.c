@@ -7982,6 +7982,22 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             /* Phase HKT §3: Allow passing a partially-applied type (TY_APP) where int64_t
              * is expected.  Partial type application values are opaque int64_t at runtime. */
             arg_ok = true;
+            /* committed-applied-arg-into-int: but not a GROUND by-value app
+             * (`(Option float)`, `(Pair float int)`) into a Turmeric-bodied
+             * callee whose parameter is a declared `int`.  That value is a real
+             * C aggregate, not an int64 word; the call boxed it and the callee
+             * read the box's ADDRESS as its integer -- `(f (some 7.1))` on
+             * `[o : int]` printed 140721223092080, in both engines.  An inline-C
+             * callee's `:int` is a deliberate erasure (noted below), and a
+             * forward-declared callee's `int` may be a placeholder for a compound
+             * parameter (no elaborated param yet), so both stay accepted. */
+            uint32_t fpi = fn_binding->closure_fn_binding ? i + 1 : i;
+            const FnDef *sfd = fn_binding->source_fn_def;
+            if (!fn_binding->body_is_inline_c && sfd && sfd->params &&
+                fpi < sfd->n_params && sfd->params[fpi] &&
+                sfd->params[fpi]->type.kind == TY_INT &&
+                return_type_applied_scalar_conflict(NULL, TY_INT, args[i]->type))
+                arg_ok = false;
         }
         /* stdlib-region-store-hooks-unswept: a typed node handed to an inline-C
          * callee's erased `:int` parameter is an ERASURE, exactly as `(:: x :int)`

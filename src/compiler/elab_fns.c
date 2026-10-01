@@ -10439,8 +10439,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
             ? RET_CONFLICT_NONE
             : return_position_conflict(return_adt_def, return_kind, body->type,
                                        ret_cls, check_nil_body);
+        /* committed-applied-return-vs-scalar: the dispatcher compares the
+         * declared return by kind, so an applied side never met a scalar one.
+         * A monomorphic defn has no crossing to ground it. */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            ret_cls == RET_CLASS_COMMITTED && !return_adt_def &&
+            return_type_applied_scalar_conflict(
+                return_kind == TY_APP ? return_app_type : NULL,
+                return_kind, body->type))
+            rc = RET_CONFLICT_CARRIER_AGGREGATE;
         if (rc != RET_CONFLICT_NONE) {
+            Buf wb; buf_init(&wb);
+            if (!return_adt_def && return_kind == TY_APP && return_app_type)
+                type_print(&wb, *return_app_type);
+            buf_putc(&wb, '\0');
             const char *want = return_adt_def ? return_adt_def->name
+                             : (wb.data && wb.data[0]) ? wb.data
                              : typekind_to_string(return_kind);
             Buf gb; buf_init(&gb);
             type_print(&gb, body->type);
@@ -10520,6 +10534,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }
             buf_free(&gb);
+            buf_free(&wb);
             e->scope = inner.parent;
             scope_free(&inner);
             return NULL;
