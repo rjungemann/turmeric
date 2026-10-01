@@ -3526,7 +3526,26 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
         }
         if (is_gen_field) {
-            buf_printf(body, "%s = %s;\n", bn, iv);
+            /* gen-local-fn-field-int-conversion: the frame field is declared
+             * by emit_type_c_name, which spells a function value as the int64
+             * word, while the initializer is a function pointer (a lifted
+             * lambda's C name).  Every non-generator let converts it (the
+             * branches below); the field assignment did not -- an int-conversion
+             * error under clang and gcc 14 (found by the type fuzzer's gbody
+             * crossing: a lambda called inside a generator). */
+            const char *fct = emit_type_c_name(ctx, b->type);
+            size_t fL = fct ? strlen(fct) : 0;
+            const char *ivc = emit_localvar_lookup_ctype(iv);
+            if (fct && strcmp(fct, "int64_t") == 0 &&
+                (b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID))
+                buf_printf(body, "%s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+            else if (fL >= 1 && fct[fL - 1] == '*' && ivc &&
+                     strcmp(ivc, "int64_t") == 0)
+                /* A concrete-pointer field (a spec's `tur_adt_Vec__float *`)
+                 * fed the int64 word a carrier primitive returned. */
+                buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", bn, fct, iv);
+            else
+                buf_printf(body, "%s = %s;\n", bn, iv);
         } else if (b->type.kind == TY_FN && (b->is_fat || b->type.as.fn.boxed)) {
             /* closure-representation-unification (Phase 0): a fn-typed ^fat alias
              * holds a fat-closure box, not a bare function pointer.  CRU B-1: a
@@ -4878,6 +4897,19 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
     ctx->gen_var_name          = "__g";
     ctx->gen_struct_type       = g_sname;
     ctx->indent                = 4;
+    /* Each frame field's spelling, recorded under the `__g->name` access the
+     * body uses, so the bridges that key on a local's recorded C type see a
+     * field declared `tur_adt_Vec__float *` for what it is. */
+    for (uint32_t i = 0; i < def->n_struct_bindings; i++) {
+        char *fn = raw_name_for_binding(def->struct_bindings[i]);
+        Buf ab; buf_init(&ab);
+        buf_printf(&ab, "__g->%s", fn);
+        buf_putc(&ab, '\0');
+        emit_localvar_record_ctype(ab.data,
+            emit_type_c_name(ctx, def->struct_bindings[i]->type));
+        buf_free(&ab);
+        free(fn);
+    }
     /* The `_next` body is its OWN C function (`void *` result): a panic
      * propagating out of it returns a null box, not a zero of the ENCLOSING
      * function's return type (`return ((double)0);` in a `void *` function
@@ -5295,6 +5327,22 @@ static bool catch_thunk_owns_fat_box(const Expr *thunk) {
 }
 
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
+
+/* tvar-float-payload-value-converted: a TVar slot is one `void *` word, and
+ * every payload crossed into it through `(void*)(intptr_t)v` -- a VALUE
+ * conversion for a float: `(tvar/new 7.1)` stored 7, and `(tvar/cas t 7.4
+ * ...)` against it SUCCEEDED (7 == 7) where the interpreter, which keeps the
+ * double, correctly failed it.  Put the payload in as its BITS, the rule the
+ * future and generator slots already follow. */
+static char *tvar_payload_word(EmitCtx *ctx, Buf *body, const Expr *v) {
+    char *raw = emit_value(ctx, body, v);
+    Type vt = v ? emit_resolve_type(ctx, v->type) : TYPE_INT;
+    if (vt.kind != TY_FLOAT && vt.kind != TY_FLOAT64 && vt.kind != TY_FLOAT32)
+        return raw;
+    char *w = emit_word_slot_bits(&vt, raw);
+    free(raw);
+    return w;
+}
 
 /* async-await-payload-is-int64-only / generator-yield-payload-is-int64-only:
  * the C expression that puts a value of type `t` (spelled by `v`) into an
@@ -8963,12 +9011,46 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * all speak now.  Spelling the aggregate here called a
                          * shim that derefs a0 with the aggregate VALUE in the
                          * register -- a SIGSEGV, not a type error, because this
-                         * cast is exactly what hid the disagreement. */
-                        slot_is_wide[i] = type_is_wide_byval_adt(arg_slot_ty[i]);
+                         * cast is exactly what hid the disagreement.
+                         * fn-field-carrier-shim-read-typed: the slot question
+                         * is type_is_b4box_closure_slot, the one every shim and
+                         * the typed-thunk typedef ask -- it also covers a
+                         * parametric monomorph (`(Result float int)`, `(Option
+                         * int)`), which the narrower wide-ADT test passed by
+                         * value to a shim that dereferenced it. */
+                        slot_is_wide[i] = type_is_b4box_closure_slot(arg_slot_ty[i]);
                         arg_ct[i] = slot_is_wide[i]
                                         ? "int64_t"
                                         : emit_type_c_name(ctx, arg_slot_ty[i]);
                         if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
+                    }
+                    /* fn-field-carrier-shim-read-typed: ask the PRODUCER's
+                     * question.  When the boxing site declined the typed shim
+                     * and filled slot 0 with the CARRIER shim (a by-value
+                     * aggregate parameter at or below 16 bytes -- `(Result
+                     * float int)`), slot 0 takes EVERY b4box parameter as its
+                     * int64 box pointer and returns a b4box result boxed.  The
+                     * `wide` test above only boxes past 16 bytes, so the call
+                     * passed the aggregate by value to a shim that
+                     * dereferenced it: SIGSEGV (found by the type fuzzer's
+                     * typed fn-field crossing over a Result). */
+                    bool carrier_unbox = false;
+                    {
+                        Type rres = emit_resolve_type(ctx, e->type);
+                        Type ps[4];
+                        for (uint32_t i = 0; i < n && i < 4; i++) ps[i] = arg_slot_ty[i];
+                        if (!use_typed_thunk_abi(rres, ps, (uint8_t)n) &&
+                            carrier_fatshim_applies(rres, ps, (uint8_t)n)) {
+                            any_aggregate = false;
+                            for (uint32_t i = 0; i < n && i < 4; i++) {
+                                if (type_is_b4box_closure_slot(arg_slot_ty[i])) {
+                                    slot_is_wide[i] = true;
+                                    arg_ct[i] = "int64_t";
+                                }
+                                if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
+                            }
+                            carrier_unbox = type_is_b4box_closure_slot(rres);
+                        }
                     }
                     Buf out; buf_init(&out);
                     /* narrow-closure-result-read-through-int64-carrier: slot
@@ -8976,6 +9058,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * convert back to the declared type. */
                     const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
                     bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (carrier_unbox) {
+                        buf_printf(&out, "(*(%s *)(intptr_t)(", ret_c);
+                        slot_rc = "int64_t";
+                        narrow_back = false;
+                    }
                     if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (!any_aggregate) {
                         buf_printf(&out, "TUR_APPLY%u_T(%s", n, slot_rc);
@@ -9033,6 +9120,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_puts(&out, "))");
                     }
                     if (narrow_back) buf_puts(&out, ")");
+                    if (carrier_unbox) buf_puts(&out, "))");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -13693,6 +13781,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
                 ctx->ce_word_store_sink = ce_sink_prev;
+                /* cps-direct-arg-follows-emitted-signature, the direct half: a
+                 * local RECORDED as a concrete pointer (a CPS helper's capture
+                 * load, `tur_adt_Vec__float * w`) into a parameter the callee
+                 * is EMITTED with as the int64 word (an inline-C primitive's
+                 * `(Vec A)` receiver).  The word is the pointer; passing it
+                 * bare was an int-conversion error under clang and gcc 14. */
+                if (fn_binding && !fn_binding->closure_fn_binding && raw &&
+                    (emit_str_is_bare_ident(raw) ||
+                     (strncmp(raw, "__g->", 5) == 0 &&
+                      emit_str_is_bare_ident(raw + 5)))) {
+                    const char *sp = emit_sig_lookup_param_ctype(fn_name, i);
+                    const char *rc = emit_localvar_lookup_ctype(raw);
+                    size_t rL = rc ? strlen(rc) : 0;
+                    if (sp && strcmp(sp, "int64_t") == 0 && rL >= 1 &&
+                        rc[rL - 1] == '*') {
+                        Buf pb; buf_init(&pb);
+                        buf_printf(&pb, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&pb, '\0');
+                        free(raw);
+                        raw = strdup(pb.data);
+                        buf_free(&pb);
+                    }
+                }
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
@@ -15101,7 +15212,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_TVAR_NEW: {
             /* (TVar::new init) - create a new TVar */
-            char *init_val = emit_value(ctx, body, e->as.tvar_new_.init);
+            char *init_val = tvar_payload_word(ctx, body, e->as.tvar_new_.init);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             /* For now, we emit a malloc-based TVar - proper impl needs TypeInfo */
@@ -15121,7 +15232,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_TVAR_WRITE: {
             /* (TVar::write tvar value) - write to a TVar within a transaction */
             char *tvar_val = emit_value(ctx, body, e->as.tvar_write_.tvar);
-            char *val_val = emit_value(ctx, body, e->as.tvar_write_.value);
+            char *val_val = tvar_payload_word(ctx, body, e->as.tvar_write_.value);
             indent_buf(body, ctx->indent);
             buf_printf(body, "tur_tvar_write(tur_stm_current_tx(), (TVar*)%s, (void*)(intptr_t)%s);\n", tvar_val, val_val);
             free(tvar_val);
@@ -15145,7 +15256,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_TVAR_SWAP: {
             /* (TVar::swap tvar new) - swap value and return old */
             char *tvar_val = emit_value(ctx, body, e->as.tvar_swap_.tvar);
-            char *new_val = emit_value(ctx, body, e->as.tvar_swap_.new_val);
+            char *new_val = tvar_payload_word(ctx, body, e->as.tvar_swap_.new_val);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "void *%s = tur_tvar_swap(tur_stm_current_tx(), (TVar*)%s, (void*)(intptr_t)%s);\n", tmp, tvar_val, new_val);
@@ -15156,8 +15267,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_TVAR_CAS: {
             /* (TVar::cas tvar old new) - compare-and-swap */
             char *tvar_val = emit_value(ctx, body, e->as.tvar_cas_.tvar);
-            char *old_val = emit_value(ctx, body, e->as.tvar_cas_.old_val);
-            char *new_val = emit_value(ctx, body, e->as.tvar_cas_.new_val);
+            char *old_val = tvar_payload_word(ctx, body, e->as.tvar_cas_.old_val);
+            char *new_val = tvar_payload_word(ctx, body, e->as.tvar_cas_.new_val);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "bool %s = tur_tvar_cas(tur_stm_current_tx(), (TVar*)%s, (void*)(intptr_t)%s, (void*)(intptr_t)%s);\n", tmp, tvar_val, old_val, new_val);
@@ -16872,6 +16983,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * carrier->concrete here.  (int/bool/cstr/struct elements need no
              * reinterpret -- their carrier bits ARE the value -- so only the
              * float widths take this path.) */
+            /* tvar-float-payload-value-converted: a pointer-sized WORD
+             * (`ptr`, a TVar read, a raw cell) ascribed to `float32` carries
+             * the float's bits in its low half -- what emit_word_slot_bits
+             * put there.  A narrower target is not a same-size REINTERPRET,
+             * so it lands here, where the erased ascription emitted the raw
+             * `void *` into a float context: a cc error. */
+            if (e->type.kind == TY_FLOAT32) {
+                Type from = emit_resolve_type(ctx, e->as.ascribe_.inner->type);
+                if (from.kind == TY_PTR_VOID) {
+                    Buf wb; buf_init(&wb);
+                    buf_printf(&wb, "(int64_t)(intptr_t)(%s)", inner_val);
+                    buf_putc(&wb, '\0');
+                    char *w = strdup(wb.data);
+                    buf_free(&wb);
+                    free(inner_val);
+                    /* The bridge owns (frees or returns) its operand. */
+                    return emit_carrier_bridge(ctx, body, w, CK_CARRIER,
+                                               CK_CONCRETE, e->type);
+                }
+            }
             if (e->type.kind == TY_TYVAR &&
                 e->as.ascribe_.inner->type.kind == TY_INT &&
                 ctx->current_abi_specialization) {

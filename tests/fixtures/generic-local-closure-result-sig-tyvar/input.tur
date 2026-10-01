@@ -1,0 +1,21 @@
+;; generic-local-closure-result-sig-tyvar -- inside a generic, a closure bound
+;; from `(mk x)` (x : A) is typed `(fn [] A)`, but calling it took the result
+;; from the inner lambda's own thunk signature, `(fn [] B)`: a callee tyvar the
+;; enclosing body cannot resolve, so `(f)` fell back to the carrier `int` and
+;; `(pair (f) 0)` minted `(Pair int int)` in every spec -- invalid C at a float,
+;; a Result or a struct.  Found by the type fuzzer's gbody crossing.
+
+(defstruct Pt [x : int y : float])
+(defn mk [B] [v : B] : (fn [] B) (fn [] v))
+
+(defn via-let [A] [x : A] : A (let [f (mk x)] (pair-fst (pair (f) 0))))
+(defn via-head [A] [x : A] : A (pair-fst (pair ((mk x)) 0)))
+(defn via-box [A] [x : A] : A (let [f (mk x)] (pair-fst (pair (some (f)) 0)) (f)))
+
+(defn main [] : int
+  (println (via-let 0.5))                                        ; 0.5
+  (println (via-head 7.1))                                       ; 7.1
+  (println (.y (via-let (Pt 1 2.5))))                            ; 2.5
+  (println (ok-val (via-head (:: (ok 1.25) (Result float int)))))  ; 1.25
+  (println (via-box "hi"))                                       ; hi
+  0)

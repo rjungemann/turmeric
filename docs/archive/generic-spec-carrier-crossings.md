@@ -126,12 +126,38 @@ function-valued `A`.
 | `(let [w (vec-new)] (vec-push! w (vec-get v 0)) ...)` at a function | segfault | S4 forward element inference peeled the tyvar wrapper and read the carrier `int` under it, pinning `w` to `(Vec int)`. `elab_defn` then replaced the generic's declared `A` result with the body's `int`, and the caller thin-called the fat handle. The peel now stops at the tyvar wrapper, whose type is the true one. |
 | a colored generic, spec at a heap handle | cc error `redefinition of mx__cps` | `emit_cps_ir_try_fn` rendered the TEMPLATE a second time, under the base name, for a spec clone that `mono_sig_ok` refuses. Such a clone now keeps the direct path under its own clone name. |
 
+## Fifth batch: composed generic bodies (the type fuzzer's gbody crossing)
+
+The matrix enumerates each producer x sink pair once. The type fuzzer's new
+`x_gbody` crossing chains one to three of the same sink shapes inside one
+generic body, at the fuzzer's own wrapper types. Its first 1200 cases found
+eight more defects:
+
+| Shape | Before | Fix |
+| --- | --- | --- |
+| `(let [f (mk x)] (pair (f) 0))` | invalid C (`Pair__int__int` at a float) | The call through a local closure took its result from the inner lambda's thunk signature `(fn [] B)`. The existing recovery that grafts the binding's own result onto the thunk now also accepts a result that names only the enclosing signature's tyvars. |
+| a lambda called inside a generator | int-conversion error | The frame field assignment converts a function value to the field's int64 word, as every non-generator let already does. |
+| a cps→direct call of a resolved clone returning a struct | invalid C | The int64 binder takes the aggregate as a reaped heap box, and a float as its bits (the `emit_letraw` rule). |
+| a CPS call into a carrier primitive (`vec-push-ex`) | int-conversion / invalid C | The CPS argument path follows the callee's EMITTED signature (`emit_sig_lookup_param_ctype`), not the generic annotation resolved through the active spec. A by-value aggregate into an int64 slot is heap-boxed, and a float is passed as its bits. |
+| a pointer-typed CPS binder or generator frame field fed the int64 word | int-conversion error | The assignment casts through `intptr_t`. Capture loads and frame fields record their C spelling, and the direct argument chain casts a local recorded as a pointer into an int64 parameter. |
+| a TVar holding a float | silent wrong answer | `docs/archive/tvar-float-payload-value-converted.md` |
+| a typed fn field over `(Result float int)` | segfault | `docs/archive/fn-field-carrier-shim-read-typed.md` |
+
+The int-conversion rows are warnings under gcc 13 (the suite's ratchet fails
+on them) and hard errors under clang and gcc 14. Every one is pinned by
+`tests/fixtures/generic-spec-carrier-crossings-5`.
+
 ## Verified
 
 - `tests/fixtures/generic-spec-carrier-crossings` (compiled and `--interpret`)
   and `tests/fixtures/gen-yield-float32-interp`.
-- Full suite green, snapshots regenerated.
-- `tests/fixtures/generic-spec-carrier-crossings-2` and `-3` pin the second
-  and third batches.
-- `tests/generic-spec-matrix.py`: 0 of 1170 cells failing (baseline compiler:
-  256), compiled, interpreted and linted.
+- `tests/fixtures/generic-spec-carrier-crossings-2` to `-5` pin the second
+  to fifth batches. `lambda-thin-fn-result-read-as-fat` and
+  `generic-map-assoc-sig-tyvar-value` pin the two fourth-batch reports.
+- Full suite green (3452 compiled, 2495 interpreted), with no snapshot drift.
+- `tests/generic-spec-matrix.py`: **0 of 3424 cells failing**, compiled,
+  interpreted and linted. On the same axes the compiler before this work
+  failed 820. 32 cells are excluded as the two v1 language limitations the
+  matrix names. The ctest gate (`tur_generic_spec_matrix`) runs it against an
+  empty baseline: about 1000 s on the sanitized build with 4 cores, and 681 s
+  unsanitized.

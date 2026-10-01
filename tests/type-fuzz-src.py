@@ -79,7 +79,8 @@ data structure and read back later by different emitted code:
     async/await            (future slot)
     perform/resume         (fiber slot)          -- correct; positive control
     any + cast             (tagged box)          -- correct; positive control
-    tvar write/cas         (transactional cell)  -- correct; positive control
+    tvar write/cas/read    (transactional cell)  -- was "correct" until the
+                                                    value oracle: floats truncated
 
 The runtime slot has ONE C type, so the payload is cast in and out, and a plain
 C cast of a `double` is a value conversion that TRUNCATES.  This axis exists
@@ -1232,18 +1233,27 @@ class Gen:
         return leg
 
     def seam_tvar(self, leg):
-        """STM transactional cell.  CORRECT for round-trip: the payload is
-        ptr-carried and survives bit-exact, which `tvar/cas` observes.  Note
-        the oracle differs -- it asserts the round trip, not the value, because
-        `tvar/read` hands back `ptr<void>` and the payload's type is GONE
-        (a typing hole, but not a wrong answer)."""
+        """STM transactional cell.  `tvar/read` hands back `ptr<void>` (the
+        payload's type is GONE -- a typing hole), so the value is read back
+        through an ascription to the payload type and PRINTED, after the CAS
+        round trip.
+
+        This seam was listed as a correct positive control, and asserted only
+        the CAS.  That hid tvar-float-payload-value-converted: every payload
+        crossed into the slot through `(void*)(intptr_t)v`, so a float was
+        stored as its truncation -- consistently on every side, so the CAS
+        still matched.  `(tvar/cas t 7.4 ...)` against 7.1 succeeded, and the
+        read-back printed 3.45846e-323.  The emitted-C lint is what caught
+        it; the printed read-back makes the same defect a wrong ANSWER."""
         tn, mk, read, exp = self.payload(leg, "scalar")
         tv = self.name("tv")
         leg.body.append("(let [%s (tvar/new %s)]\n"
                         "    (println (atomically (stm (tvar/write %s %s)\n"
-                        "                              (tvar/cas %s %s %s)))))"
-                        % (tv, mk, tv, mk, tv, mk, mk))
+                        "                              (tvar/cas %s %s %s))))\n"
+                        "    (println (:: (atomically (stm (tvar/read %s))) %s)))"
+                        % (tv, mk, tv, mk, tv, mk, mk, tv, tn))
         leg.expected.append("true")
+        leg.expected.append(exp)
         leg.tags.add("oracle_roundtrip")
         return leg
 

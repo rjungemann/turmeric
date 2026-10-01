@@ -1410,6 +1410,19 @@ static bool call_ground_open_app_args_to_any(Arena *a, Type *t) {
     return changed;
 }
 
+static void call_collect_tyvar_names(const Type *t, const char **names, uint8_t *n, uint8_t cap);
+/* Does `t` name type variables, every one of them quantified by the
+ * enclosing signature?  (A type naming none answers false.) */
+static bool call_type_tyvars_all_in_sig(const Elab *e, const Type *t) {
+    const char *names[16];
+    uint8_t n = 0;
+    call_collect_tyvar_names(t, names, &n, 16);
+    if (n == 0) return false;
+    for (uint8_t i = 0; i < n; i++)
+        if (!ng_tyvar_in_sig(e, names[i])) return false;
+    return true;
+}
+
 /* The elaborator whose enclosing signature call_collect_type_bindings may
  * consult (generic-map-assoc-rejects-sig-tyvar-value); set only around the
  * argument check, NULL everywhere else. */
@@ -6847,11 +6860,19 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * result refines the thunk's tyvar-bearing result, unify the two result
          * types (`(PRes A)` vs `(PRes int)` -> `A = int`) and substitute so the
          * call's result type grounds. */
+        /* ...and when that result names only the ENCLOSING signature's own
+         * variables (`f : (fn [] A)` from `(mk x)`, `x : A`, where the thunk
+         * says `(fn [] B)`): those are as fixed as a concrete type in each
+         * instantiation.  Left as `B`, a callee tyvar the enclosing body
+         * cannot resolve, `(f)` fell back to the carrier `int`, and `(pair (f)
+         * 0)` minted `(Pair int int)` in every spec -- invalid C at a float
+         * (found by the type fuzzer's gbody crossing). */
         if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type &&
             call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
             fn_binding->type.kind == TY_FN &&
             fn_binding->type.as.fn.result_full_type &&
-            !call_type_has_named_tyvar(fn_binding->type.as.fn.result_full_type)) {
+            (!call_type_has_named_tyvar(fn_binding->type.as.fn.result_full_type) ||
+             call_type_tyvars_all_in_sig(e, fn_binding->type.as.fn.result_full_type))) {
             CallTypeBinding cbind[16];
             uint8_t n_cbind = 0;
             if (call_collect_type_bindings(fn_type.as.fn.result_full_type,

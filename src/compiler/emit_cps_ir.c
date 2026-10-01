@@ -6441,6 +6441,26 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             size_t sL = sty ? strlen(sty) : 0;
             if (sty && sL >= 1 && sty[sL - 1] == '*')
                 pty = sty;
+            /* The clone's recorded signature, when it has one: a by-value
+             * aggregate or float parameter of the clone is exactly that, not
+             * the generic binding's carrier word (the boxing and bit rules
+             * below key on an int64 parameter). */
+            const char *sp = spec->clone_name
+                ? emit_sig_lookup_param_ctype(spec->clone_name, i) : NULL;
+            if (sp) pty = sp;
+        } else if (fn) {
+            /* cps-direct-arg-follows-emitted-signature: an unspecialized callee
+             * (a carrier base, an inline-C primitive) is emitted with its
+             * carrier parameters, while cps_call_param_ctype resolves the
+             * GENERIC annotation through the ACTIVE spec -- `vec-push-ex`'s
+             * `(Vec A)` came back `tur_adt_Vec__Result__int__int *` inside a
+             * `(Result int int)` clone, and the receiver was cast to it for an
+             * `int64_t` parameter (an int-conversion error under clang and gcc
+             * 14).  The recorded emitted signature is the callee's truth. */
+            char *fcn = raw_name_for_binding(fn);
+            const char *sp = fcn ? emit_sig_lookup_param_ctype(fcn, i) : NULL;
+            if (sp) pty = sp;
+            free(fcn);
         }
         size_t L = pty ? strlen(pty) : 0;
         bool param_is_ptr = pty && L >= 1 && pty[L - 1] == '*';
@@ -6526,6 +6546,31 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             ce_line(ce, "tur_tagged_t *__anybox_%d = (tur_tagged_t *)malloc(sizeof(tur_tagged_t));", abx);
             ce_line(ce, "*__anybox_%d = %s;", abx, a);
             buf_printf(&b, "(int64_t)(intptr_t)__anybox_%d", abx);
+        }
+        else if (arg_is_byval_agg && param_is_i64 && arg_cty &&
+                 strncmp(arg_cty, "tur_adt_", 8) == 0) {
+            /* cps-direct-arg-follows-emitted-signature: the same bridge for any
+             * by-value aggregate into an int64 carrier slot -- the direct
+             * emitter's argument chain heap-boxes it for a carrier parameter
+             * (`(vec-push! w (app f x))` at `A := (Result int int)` passed the
+             * struct bare: invalid C).  Not reaped, for the reason above: a
+             * container that keeps the word owns the box. */
+            int abx = ce->ctx->tmp_n++;
+            ce_line(ce, "%s *__aggbox_%d = (%s *)malloc(sizeof(%s));",
+                    arg_cty, abx, arg_cty, arg_cty);
+            ce_line(ce, "*__aggbox_%d = %s;", abx, a);
+            ce_line(ce, "TUR_REGION_NOTE_WORDS(__aggbox_%d, sizeof *__aggbox_%d);", abx, abx);
+            buf_printf(&b, "(int64_t)(intptr_t)__aggbox_%d", abx);
+        }
+        else if (param_is_i64 && arg_cty &&
+                 (strcmp(arg_cty, "double") == 0 || strcmp(arg_cty, "float") == 0)) {
+            /* A float into an int64 carrier slot crosses as its BITS; the
+             * intptr_t cast below would value-convert it. */
+            Type ft = emit_type_from_kind(strcmp(arg_cty, "float") == 0 ? TY_FLOAT32
+                                                                        : TY_FLOAT);
+            char *w = emit_word_slot_bits(&ft, a);
+            buf_puts(&b, w);
+            free(w);
         }
         else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
@@ -6945,7 +6990,31 @@ static void emit_term(CE *ce, const CTerm *t) {
                 size_t bL = bct ? strlen(bct) : 0;
                 bool bct_bridgeable = bct && (strcmp(bct, "int64_t") == 0 ||
                                               (bL >= 1 && bct[bL - 1] == '*'));
-                if (bct_bridgeable)
+                /* cps-direct-mono-clone-aggregate-result: the resolved clone
+                 * of a generic whose result is a by-value aggregate (`id` at
+                 * `A := B1`) returns the struct, and an int64 binder cannot
+                 * take it through intptr_t -- invalid C (found by the type
+                 * fuzzer's gbody crossing).  Pack it the way emit_letraw
+                 * does: a reaped heap box, and a float's bits. */
+                const char *rct_mc = emit_sig_lookup_ret_ctype(fn);
+                bool bct_i64 = bct && strcmp(bct, "int64_t") == 0;
+                if (bct_i64 && rct_mc && strncmp(rct_mc, "tur_adt_", 8) == 0 &&
+                    !strchr(rct_mc, '*'))
+                    ce_line(ce, "%s = __dk_reap_ptr((intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = %s(%s); __bx; })); /* cps->direct */",
+                            bn, rct_mc, rct_mc, rct_mc, fn, argv);
+                else if (bct_i64 && rct_mc &&
+                         (strcmp(rct_mc, "double") == 0 || strcmp(rct_mc, "float") == 0)) {
+                    Buf cb; buf_init(&cb);
+                    buf_printf(&cb, "%s(%s)", fn, argv);
+                    buf_putc(&cb, '\0');
+                    char *br = emit_carrier_bridge(ce->ctx, ce->out, strdup(cb.data),
+                        CK_CONCRETE, CK_CARRIER,
+                        emit_type_from_kind(strcmp(rct_mc, "float") == 0 ? TY_FLOAT32
+                                                                         : TY_FLOAT));
+                    buf_free(&cb);
+                    ce_line(ce, "%s = %s; /* cps->direct */", bn, br);
+                    free(br);
+                } else if (bct_bridgeable)
                     ce_line(ce, "%s = (%s)(intptr_t)%s(%s); /* cps->direct */", bn, bct, fn, argv);
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
@@ -7737,6 +7806,19 @@ static void emit_letraw(CE *ce, const CTerm *t) {
                 bridged_ok = true;
             }
         }
+        /* cps-letraw-pointer-binder-from-carrier: the binder is a concrete
+         * POINTER (a spec clone's `tur_adt_Vec__float *` local) and the value is
+         * a temp recorded as the int64 carrier word (`vec_hynew()`'s result).
+         * The word IS the pointer; assigning it raw was an int-conversion error
+         * under clang and gcc 14 (gcc 13 only warns). */
+        if (!bridged_ok && rhs && bct && emit_str_is_bare_ident(rhs)) {
+            size_t bL = strlen(bct);
+            const char *rc = emit_localvar_lookup_ctype(rhs);
+            if (bL >= 1 && bct[bL - 1] == '*' && rc && strcmp(rc, "int64_t") == 0) {
+                ce_line(ce, "%s = (%s)(intptr_t)(%s);", bn, bct, rhs);
+                bridged_ok = true;
+            }
+        }
         if (!bridged_ok)
             ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
     }
@@ -8007,6 +8089,11 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "%s %s = __cap->f%d;\n", cap_ctype(ce->ctx, caps, i), cn, i);
+            /* The direct emitter, which renders this helper's delegated
+             * expressions, keys its bridges on a local's RECORDED spelling;
+             * without it a capture declared `tur_adt_Vec__float *` here was
+             * passed bare into an inline-C callee's int64 parameter. */
+            emit_localvar_record_ctype(cn, cap_ctype(ce->ctx, caps, i));
             /* E1 (Option A): an owning capture admitted into a multi-shot
              * continuation is CLONED (increfed) on read-out, so each invocation of
              * this helper owns its own +1 that the body's drop balances.  The env's

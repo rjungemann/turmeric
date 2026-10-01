@@ -1,0 +1,46 @@
+;; generic-spec-carrier-crossings-5 -- what the type fuzzer's gbody crossing
+;; (generic bodies chaining the matrix's sink shapes) found once composed:
+;;
+;;   closure  `(let [f (mk x)] (pair (f) 0))`: the call took its result from
+;;            the inner lambda's thunk signature `(fn [] B)`, not the local's
+;;            `(fn [] A)`, fell back to the carrier `int` and minted
+;;            `(Pair int int)` in every spec (invalid C)
+;;   gen      a lambda called inside a generator: the frame field holding the
+;;            call head was assigned a function pointer uncast
+;;   cps      `(id (let [y (app f x)] ((fn [] y))))` at a struct: a cps->direct
+;;            call of the resolved clone put the struct through intptr_t
+;;   cps-arg  `(vec-push! w (app f x))` at a Result: the CPS argument path
+;;            typed the receiver from the generic annotation, not the callee's
+;;            emitted signature, and passed the struct bare
+;;   frame    a vec local inside a generator, at a Result: a pointer-typed frame
+;;            field fed and read as the int64 word
+;;
+;; Each was an int-conversion (or aggregate) error in the emitted C.
+;; See docs/archive/generic-spec-carrier-crossings.md.
+
+(defstruct B1 [a : int])
+(defn id  [A] [y : A] : A y)
+(defn mk  [B] [v : B] : (fn [] B) (fn [] v))
+(defn app [B] [f : (fn [B] B) v : B] : B (f v))
+
+(defn via-closure [A] [x : A] : A (let [f (mk x)] (pair-fst (pair (f) 0))))
+(defn via-gen-lambda [A] [x : A] : A
+  (gen-unwrap (gen-next (gen [] (yield ((fn [z : A] : A z) x))))))
+(defn via-cps-direct [A] [x : A] : A
+  (id (let [y (app (fn [z : A] : A z) x)] ((fn [] y)))))
+(defn via-cps-arg [A] [x : A] : A
+  (let [w (vec-new)] (vec-push! w (app (fn [z : A] : A z) x)) (vec-get w 0)))
+(defn via-gen-frame [A] [x : A] : A
+  (gen-unwrap (gen-next (gen [] (yield (let [w (vec-new)] (vec-push! w x) (vec-get w 0)))))))
+
+(defn main [] : int
+  (println (via-closure 0.5))                                             ; 0.5
+  (println (.a (via-closure (B1 3))))                                     ; 3
+  (println (via-gen-lambda "c3"))                                         ; c3
+  (println (via-gen-lambda 7.1))                                          ; 7.1
+  (println (.a (via-cps-direct (B1 14))))                                 ; 14
+  (println (via-cps-direct 2.25))                                         ; 2.25
+  (println (ok-val (via-cps-arg (:: (ok -18) (Result int int)))))         ; -18
+  (println (via-cps-arg 7.1))                                             ; 7.1
+  (println (ok-val (via-gen-frame (:: (ok 1.5) (Result float int)))))     ; 1.5
+  0)

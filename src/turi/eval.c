@@ -7537,6 +7537,12 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             union { int64_t i; double d; } u; u.i = v.as_int;
             return turi_float(u.d);
         }
+        /* tvar-float-payload-value-converted: `(:: w cstr)` of a same-size
+         * word -- a `ptr` read back out of a TVar, say -- elaborates to a
+         * REINTERPRET, not the ascription whose arm below re-tags a cstr.  The
+         * word printed as the string's address. */
+        if (rk == TY_CSTR && v.tag == TURI_INT)
+            return turi_cstr((const char *)(intptr_t)v.as_int);
         return v;
     }
     case EX_ASCRIBE:
@@ -7561,7 +7567,14 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             }
             return v;
         case TY_FLOAT32:
-            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
+            /* The same bit REINTERPRET as the float arm above: the tree-walker
+             * holds every float kind as a double, so a float32 riding a word
+             * carries the double's bits.  `(double)v.as_int` value-converted
+             * those bits into 4.6e18 (tvar-float-payload-value-converted). */
+            if (v.tag == TURI_INT) {
+                union { int64_t i; double d; } u; u.i = v.as_int;
+                return turi_float((double)(float)u.d);
+            }
             return v;
         case TY_INT: case TY_INT64:
             if (v.tag == TURI_FLOAT) {

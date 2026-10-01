@@ -1,0 +1,33 @@
+;; fn-field-carrier-shim-read-typed -- a typed fn field whose signature has a
+;; parametric by-value aggregate (`(Result float int)`, `(Option int)`) was
+;; called with that aggregate BY VALUE, while the boxing site had filled slot 0
+;; with a shim (typed or carrier) that takes it as an int64 box pointer and
+;; dereferences it: SIGSEGV.  The call site now asks the shims' own slot
+;; question (type_is_b4box_closure_slot) and unboxes a carrier shim's boxed
+;; result.  Found by the type fuzzer's typed fn-field crossing over a Result.
+
+(defstruct P [x : int y : float])
+(defstruct F0 :copy [app : (fn [(Result float int)] (Result float int))])
+(defstruct F1 :copy [app : (fn [(Result float int)] float)])
+(defstruct F2 :copy [app : (fn [P] P)])
+(defstruct F3 :copy [app : (fn [(Result float int) int] (Result float int))])
+(defstruct F4 :copy [app : (fn [(Option int)] int)])
+(defstruct F5 :copy [app : (fn [float] (Option float))])
+(defstruct F6 :copy [app : (fn [(Result bool int)] (Result bool int))])
+(def k 2)
+
+(defn main [] : int
+  (println (ok-val (.app (make-struct F0 (fn [r : (Result float int)] : (Result float int) r))
+                         (:: (ok 7.1) (Result float int)))))                       ; 7.1
+  (println (.app (make-struct F1 (fn [r : (Result float int)] : float (ok-val r)))
+                 (:: (ok 7.1) (Result float int))))                                 ; 7.1
+  (println (.y (.app (make-struct F2 (fn [p : P] : P p)) (P 1 2.5))))              ; 2.5
+  (println (ok-val (.app (make-struct F3 (fn [r : (Result float int) n : int] : (Result float int) r))
+                         (:: (ok 3.25) (Result float int)) 4)))                    ; 3.25
+  (println (.app (make-struct F4 (fn [o : (Option int)] : int (unwrap-or o 0))) (some 42))) ; 42
+  (println (unwrap-or (.app (make-struct F5 (fn [x : float] : (Option float) (some x))) 7.1)
+                      0.5))                                                          ; 7.1
+  (println (ok-val (.app (make-struct F6 (fn [v : (Result bool int)] : (Result bool int)
+                                           (if (= k 2) v v)))
+                         (:: (ok false) (Result bool int)))))                      ; false
+  0)
