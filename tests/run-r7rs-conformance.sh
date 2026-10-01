@@ -10,10 +10,11 @@
 # Raise the floor when the count goes up.
 #
 #   R7RS_CONFORMANCE_BACKEND  both (default) | interp | compiled
-#                             The whole suite as one program per round: about
-#                             a minute on the interpreter and one C build (a
-#                             minute) on the compiled back end.
+#                             The whole suite as one program per round: a few
+#                             seconds on the interpreter, and one large build
+#                             on the compiled back end (see the timeout below).
 #   R7RS_CONFORMANCE_FLOOR    override the floor (applied to each back end).
+#   R7RS_CONFORMANCE_TIMEOUT  seconds per program run (default 480).
 #
 # Skips cleanly (exit 0) without python3 or the built binary.
 
@@ -37,5 +38,22 @@ fi
 FLOOR="${R7RS_CONFORMANCE_FLOOR:-1223}"
 BACKEND="${R7RS_CONFORMANCE_BACKEND:-both}"
 
+# The per-program timeout.  The harness's own default (240 s) is sized for a
+# small program; this one is not.  The compiled round builds the whole suite as
+# one program -- ~94 KB of Scheme, ~5.6 MB of emitted C -- and under the
+# sanitized Debug `tur` that is ~95 s of emit-c and ~150 s of single-threaded
+# `cc -O2` on an idle 4-core box, 248 s end to end.  In CI it shares the
+# runner's cores with the other r7rs suites (it is not RUN_SERIAL), and on the
+# slower ubuntu runners it ran 187-247 s: three main runs on 09-30 died at the
+# 240 s cap with "round 1: timeout -- 1181 form(s) not run" and 0 passed.
+# 480 s leaves room for that, and one round plus the interpreter pass still
+# fits well inside ctest's TIMEOUT 720 (CMakeLists.txt), which stays the guard
+# against a real hang.  A second compiled round would not fit, but one only
+# happens after a form crashes the program, and with the floor at today's full
+# pass count such a run is almost certainly below it already.  Why the build
+# is this large:
+# docs/reported/r7rs-conformance-program-emits-megabytes-of-c.md.
+TIMEOUT="${R7RS_CONFORMANCE_TIMEOUT:-480}"
+
 exec python3 tests/r7rs/run-conformance.py --tur "$TUR" --backend "$BACKEND" \
-    --min-pass "$FLOOR"
+    --min-pass "$FLOOR" --timeout "$TIMEOUT"

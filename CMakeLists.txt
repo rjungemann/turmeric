@@ -1163,7 +1163,9 @@ add_test(
 set_tests_properties(tur_init_r7rs PROPERTIES TIMEOUT 600)
 # r7rs-lang-plan R10: chibi-scheme's R7RS test suite, as a pass COUNT with a
 # floor, so a regression fails and progress only needs the floor raised.  Both
-# back ends, about two minutes together.  Skips cleanly without python3.
+# back ends; the compiled one is a single build of the whole suite, 2-4 minutes
+# under the Debug `tur`, and the runner's per-program timeout is sized for it
+# (tests/run-r7rs-conformance.sh).  Skips cleanly without python3.
 #
 # NOT RUN_SERIAL.  It was, on the grounds that "the compiled pass is one large
 # C build" -- but one large single-threaded `cc` is the case RUN_SERIAL serves
