@@ -11786,7 +11786,65 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             ctx->sum_drop_admit = ac;
                     }
                 }
+                /* fnsan-sink-aware-fat-box: a bare fn boxed for this
+                 * argument is called by the callee THIS call selects -- a
+                 * spec clone at the spec's types, a carrier base or inline-C
+                 * body at words wherever the parameter's fn type has a type
+                 * variable.  Hand the box that spelling (see EX_FN_TO_FAT). */
+                const Type *fbs_prev_t = ctx->fat_box_sink_type;
+                uint64_t fbs_prev_m = ctx->fat_box_sink_erased_mask;
+                bool fbs_prev_r = ctx->fat_box_sink_erased_res;
+                ctx->fat_box_sink_type = NULL;
+                {
+                    const Expr *fb = emit_arg;
+                    while (fb && fb->kind == EX_ASCRIBE) fb = fb->as.ascribe_.inner;
+                    uint32_t pi = (fn_binding && fn_binding->closure_fn_binding) ? i + 1 : i;
+                    const Type *decl = (fb && fb->kind == EX_FN_TO_FAT && fn_binding &&
+                                        fn_binding->type.kind == TY_FN &&
+                                        fn_binding->type.as.fn.arg_full_types &&
+                                        pi < fn_binding->type.as.fn.arity)
+                        ? fn_binding->type.as.fn.arg_full_types[pi] : NULL;
+                    /* An UNTYPED `^fat` parameter (`vec-eq?`'s `cmp-fn`) has
+                     * no fn type to read: an inline-C body may call it at
+                     * words (TUR_APPLY) or typed (TUR_APPLY1_T(double, ...)),
+                     * so nothing here can say which -- it keeps the default. */
+                    if (decl && decl->kind == TY_FN &&
+                               !emit_repr_type_mentions_tyvar(decl)) {
+                        /* A concrete parameter type: every callee reads it so. */
+                        ctx->fat_box_sink_type = decl;
+                        ctx->fat_box_sink_erased_mask = 0;
+                        ctx->fat_box_sink_erased_res = false;
+                    } else
+                    if (decl && decl->kind == TY_FN && emit_repr_type_mentions_tyvar(decl)) {
+                        if (matched_spec && !fn_binding->body_is_inline_c) {
+                            Type *rt = (Type *)arena_alloc(ctx->type_arena, sizeof(Type));
+                            *rt = emit_type_through_spec(ctx, decl, matched_spec);
+                            if (rt->kind == TY_FN && !emit_repr_type_mentions_tyvar(rt)) {
+                                ctx->fat_box_sink_type = rt;
+                                ctx->fat_box_sink_erased_mask = 0;
+                                ctx->fat_box_sink_erased_res = false;
+                            }
+                        } else if (!matched_spec || fn_binding->body_is_inline_c) {
+                            uint64_t m = 0;
+                            for (uint32_t k = 0; k < decl->as.fn.arity; k++)
+                                if (emit_repr_type_mentions_tyvar(
+                                        decl->as.fn.arg_full_types
+                                            ? decl->as.fn.arg_full_types[k] : NULL) ||
+                                    (decl->as.fn.arg_kinds &&
+                                     decl->as.fn.arg_kinds[k] == TY_TYVAR))
+                                    m |= ARG_IDX_BIT(k);
+                            ctx->fat_box_sink_type = decl;
+                            ctx->fat_box_sink_erased_mask = m;
+                            ctx->fat_box_sink_erased_res =
+                                emit_repr_type_mentions_tyvar(decl->as.fn.result_full_type) ||
+                                decl->as.fn.result_kind == TY_TYVAR;
+                        }
+                    }
+                }
                 char *raw = emit_value(ctx, body, emit_arg);
+                ctx->fat_box_sink_type = fbs_prev_t;
+                ctx->fat_box_sink_erased_mask = fbs_prev_m;
+                ctx->fat_box_sink_erased_res = fbs_prev_r;
                 ctx->sum_drop_admit = admit_prev;
                 if (rgn_erased && raw) {
                     if (emit_str_is_bare_ident(raw)) {
@@ -17040,6 +17098,50 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     typed_shim = ensure_variadic_rest_fatshim(ctx, fnt_result,
                                                               fnt_params,
                                                               (uint8_t)arity, rest_c);
+            }
+            /* fnsan-sink-aware-fat-box: the call site that boxes this fn
+             * knows which callee reads the slot (ctx->fat_box_sink_type, set
+             * in the call-argument loop) -- a spec clone at its types, or a
+             * carrier base / inline-C body at words where the parameter's fn
+             * type is a variable.  When the box's default choice (the typed
+             * shim at the FUNCTION's own types, else all words) would spell
+             * slot 0 differently, store an adapter at the reader's spelling.
+             * Scalar and pointer positions only; aggregates keep their shims. */
+            if (!typed_shim && ctx->fat_box_sink_type &&
+                ctx->fat_box_sink_type->kind == TY_FN &&
+                ctx->fat_box_sink_type->as.fn.arity == arity &&
+                !fnty.as.fn.is_variadic && !e->as.fn_to_fat_.erased_result &&
+                arity <= MAX_FN_ARITY && fnptr && emit_str_is_bare_ident(fnptr)) {
+                const Type *sk = ctx->fat_box_sink_type;
+                const char *rrc = emit_sig_lookup_ret_ctype(fnptr);
+                const char *rpc[MAX_FN_ARITY], *apc[MAX_FN_ARITY], *dpc[MAX_FN_ARITY];
+                bool have = rrc && *rrc;
+                for (uint8_t i = 0; i < arity && have; i++) {
+                    rpc[i] = emit_sig_lookup_param_ctype(fnptr, i);
+                    if (!rpc[i] || !*rpc[i]) have = false;
+                }
+                Type srt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sk));
+                if (have && srt.kind != TY_NIL) {
+                    bool typed_ok = use_typed_thunk_abi(fnt_result, fnt_params, arity);
+                    bool differs = false;
+                    for (uint8_t i = 0; i < arity; i++) {
+                        Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sk, i));
+                        apc[i] = (ctx->fat_box_sink_erased_mask & ARG_IDX_BIT(i))
+                                     ? "int64_t"
+                                     : (type_is_b4box_closure_slot(pt) ? "int64_t"
+                                                                       : type_c_name(pt));
+                        dpc[i] = typed_ok ? thunk_param_slot_c_name(fnt_params[i]) : "int64_t";
+                        if (strcmp(apc[i], dpc[i]) != 0) differs = true;
+                    }
+                    const char *arc = ctx->fat_box_sink_erased_res
+                        ? "int64_t" : thunk_result_slot_c_spelling(type_c_name(srt));
+                    const char *drc = typed_ok ? thunk_result_slot_c_name(fnt_result) : "int64_t";
+                    if (strcmp(arc, drc) != 0) differs = true;
+                    if (differs)
+                        typed_shim = ensure_call_adapter_ex(
+                            ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file,
+                            EMIT_ADAPT_BARE_SLOT1, rrc, rpc, arc, apc, (uint8_t)arity);
+                }
             }
             /* An erased-result sink reads slot 0's result as a carrier: box a
              * by-value aggregate result there

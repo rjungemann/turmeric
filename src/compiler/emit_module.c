@@ -1793,6 +1793,19 @@ char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
     return ensure_call_adapter_ex(ctx, out, callee, crc, cpc, arc, apc, n);
 }
 
+static Type emit_abi_instantiate_type(const Type *t,
+                                      const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                      Arena *arena);
+/* A type instantiated through a matched spec's own bindings (the CALLEE's,
+ * not the active spec's that emit_resolve_type applies). */
+Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
+                            const struct EmitAbiSpecialization *spec) {
+    if (!t) return emit_type_from_kind(TY_UNKNOWN);
+    if (!spec || spec->n_bindings == 0) return *t;
+    return emit_abi_instantiate_type(t, spec->bindings, spec->n_bindings,
+                                     ctx->type_arena);
+}
+
 /* `callee` NULL: the callee is slot 0 of the fat box the adapter receives as
  * its env -- a capturing closure's thunk, called with that box.  `callee`
  * EMIT_ADAPT_BARE_SLOT1: slot 1 holds a BARE function (an EX_FN_TO_FAT box),

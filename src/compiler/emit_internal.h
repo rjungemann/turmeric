@@ -307,6 +307,14 @@ typedef struct EmitCtx {
      * ABI with the SELECTED entry point instead of guessing from receiver
      * abstractness (result-monad-bind-typed-boundary-miscompiles). */
     bool  poly_wrap_callee_carrier;
+    /* fnsan-sink-aware-fat-box: while emitting an EX_FN_TO_FAT argument, the
+     * declared fn type of the parameter it is headed for, as the CALLEE that
+     * this call selects reads it -- instantiated through a matched spec, or
+     * the declared type with `fat_box_sink_erased_*` marking the positions a
+     * carrier base / inline-C body reads as words.  NULL otherwise. */
+    const struct Type *fat_box_sink_type;
+    uint64_t fat_box_sink_erased_mask;
+    bool     fat_box_sink_erased_res;
     /* Phase 2: when emitting a function body, these are the parameter bindings
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
@@ -1601,6 +1609,9 @@ char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
                                 const char *crc, const char **cpc,
                                 const char *arc, const char **apc, uint8_t n);
 extern const char EMIT_ADAPT_BARE_SLOT1[];
+struct EmitAbiSpecialization;
+Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
+                            const struct EmitAbiSpecialization *spec);
 char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
                              const char *crc, const char **cpc,
                              const char *arc, const char **apc, uint8_t n);
