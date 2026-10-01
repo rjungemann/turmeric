@@ -84,6 +84,8 @@ const char *tur_image_strerror(TurImageError err)
         case IMAGE_BAD_CRC:         return "header CRC mismatch (corrupted)";
         case IMAGE_TRUNCATED:       return "truncated image (short header)";
         case IMAGE_IO_ERROR:        return "I/O error";
+        case IMAGE_BAD_FLAGS:       return "unknown header flags (newer or corrupted image)";
+        case IMAGE_BAD_PAYLOAD:     return "payload truncated or corrupted";
     }
     return "unknown image error";
 }
@@ -152,6 +154,17 @@ TurImageError tur_image_read_header(FILE *f, TurImageHeader *out)
     if (version != TUR_IMAGE_VERSION)
         return IMAGE_BAD_VERSION;
 
+    uint32_t flags = get_u32(hdr + OFF_FLAGS);
+    if (flags & ~TUR_IMAGE_FLAGS_KNOWN)
+        return IMAGE_BAD_FLAGS;
+
+    /* globals_offset, when present, must land inside the payload. */
+    uint64_t payload_len = get_u64(hdr + OFF_PAYLOAD_LEN);
+    uint64_t goff = get_u64(hdr + OFF_GLOBALS_OFF);
+    if (goff != 0 && (goff < TUR_IMAGE_HEADER_SIZE ||
+                      goff - TUR_IMAGE_HEADER_SIZE > payload_len))
+        return IMAGE_BAD_PAYLOAD;
+
     if (out) {
         memset(out, 0, sizeof *out);
         out->magic           = magic;
@@ -162,6 +175,29 @@ TurImageError tur_image_read_header(FILE *f, TurImageHeader *out)
         out->globals_offset  = get_u64(hdr + OFF_GLOBALS_OFF);
         out->flags           = get_u32(hdr + OFF_FLAGS);
         out->header_crc32    = stored_crc;
+    }
+    return IMAGE_OK;
+}
+
+TurImageError tur_image_verify_payload(FILE *f, const TurImageHeader *h)
+{
+    uint8_t chunk[4096];
+    uint64_t left = h->payload_len;
+    uint32_t crc = 0;
+    while (left > 0) {
+        size_t want = left < sizeof chunk ? (size_t)left : sizeof chunk;
+        size_t got = fread(chunk, 1, want, f);
+        if (got != want)
+            return ferror(f) ? IMAGE_IO_ERROR : IMAGE_BAD_PAYLOAD;
+        crc = image_crc32(crc, chunk, got);
+        left -= got;
+    }
+    if (h->flags & TUR_IMAGE_FLAG_PAYLOAD_CRC) {
+        uint8_t tail[4];
+        if (fread(tail, 1, 4, f) != 4)
+            return ferror(f) ? IMAGE_IO_ERROR : IMAGE_BAD_PAYLOAD;
+        if (get_u32(tail) != crc)
+            return IMAGE_BAD_PAYLOAD;
     }
     return IMAGE_OK;
 }

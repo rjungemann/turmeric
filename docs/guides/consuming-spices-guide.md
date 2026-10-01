@@ -402,21 +402,22 @@ Turmeric library so CMake projects can consume it), see the
 
 ## Security
 
-- **`tur.lock`'s hash is trust-on-first-use, not a pin.** It is recomputed and
-  overwritten on every fetch, so it records what you last downloaded rather
-  than what you agreed to. It can therefore catch a local edit to `spices/`
-  after a fetch; it cannot catch upstream changing under you. The one
-  comparison in the tree runs in `tur run` only -- **`tur build` does not
-  check** -- and is skipped when the dependency directory is absent (that path
-  fetches and rewrites the hash) and when the recorded hash predates the
-  current algorithm. Tightening this is tracked as C-3 in the
-  [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
+- **`tur.lock`'s hash is checked, not just recorded.** A fetch that brings back
+  a tree differing from the recorded hash **fails**, naming both hashes and
+  pointing at `tur fetch --update` as the deliberate way to accept the change.
+  A refused fetch leaves the recorded hash alone, so the failure does not
+  evaporate on the next run. `tur run`, `tur build` and `tur audit` all re-hash
+  the trees they are about to use, so an edit made to `spices/` after a fetch
+  is caught by whichever you reach for.
+- **It still cannot check out the commit it recorded.** A clone tracks the
+  branch or tag named in `:ref`; `:resolved` is recorded but never used to
+  check out. So a branch-shaped `:ref` re-fetches to wherever that branch now
+  points, and you are asked to approve the change rather than held to the
+  commit you locked. **Prefer a tag over a branch for `:ref`**, and read a new
+  spice before you add it. Tracked as
+  [lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/reported/lock-tracks-ref-not-resolved-commit.md);
   see the [Security Guide](https://github.com/rjungemann/turmeric/blob/main/docs/guides/security-guide.md)
   for the promise this is measured against.
-- Because of the above, **use git tags (not branch names) for `:ref`** and read
-  a new spice before you add it. A tag is the pin `tur.lock` does not give you.
-  A clone tracks the branch or tag in `:ref`; the `:resolved` commit is
-  recorded but not used to check out.
 - Any `:cmake-deps` entry is a trust decision equivalent to executing build
   scripts from that repository. Audit before adding.
 - `tur audit` lists every origin the build fetches code from -- Turmeric
@@ -429,9 +430,11 @@ Turmeric library so CMake projects can consume it), see the
   tur audit
   ```
 
-  It **lists; it does not verify.** There is no signature or maintainer-key
-  checking -- an earlier version of this bullet promised GPG keys, and no key
-  infrastructure exists to check them against. A `:path` dep is reported but
+  It also **verifies**: every dependency that is present on disk and pinned in
+  `tur.lock` is re-hashed and compared, and the `Integrity:` section says
+  whether they all match. What it still does not do is check a **signature** --
+  there is no maintainer-key infrastructure, so the hashes tell you the tree is
+  the one `tur.lock` recorded, not who wrote it. A `:path` dep is reported but
   not flagged as unpinned: it resolves from local source and has nothing to
   pin, and flagging it would train you to ignore the warning that matters.
 

@@ -20,6 +20,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>   /* pkg_cmake_manifest_name's strcmp */
 #include "buf.h"
 
 /* ------------------------------------------------------------------ */
@@ -61,9 +62,77 @@ typedef struct PkgCmakeDep {
     int           n_link_flags;
     PkgCmakeOpt  *opts;
     int           n_opts;
+    /* `:wasm-options #map{...}` -- cache variables set ONLY when the dep is
+     * configured for Emscripten.  Needed because a dep's web backend is
+     * usually selected by a variable whose native value must not change:
+     * raylib's `PLATFORM` defaults to `Desktop` and has no Emscripten
+     * autodetect, so a plain `:options :PLATFORM "Web"` would break the
+     * native build while its absence fails the wasm configure with a
+     * misleading `Could NOT find X11`.  Emitted inside `if(EMSCRIPTEN)` in the
+     * generated CMakeLists, so one generated file serves both arms and CMake
+     * -- not tur -- decides which applies. */
+    PkgCmakeOpt  *wasm_opts;
+    int           n_wasm_opts;
 } PkgCmakeDep;
 
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* `:web` -- what a program needs of the browser it runs in            */
+/* ------------------------------------------------------------------ */
+
+/* The GL level, and the reason this is ONE key rather than two.
+ *
+ * A raylib web build picks its GL level twice: once in raylib's own cmake
+ * (`GRAPHICS`/`OPENGL_VERSION`, via `:wasm-options`) and once on the emcc
+ * link line (`-sMAX_WEBGL_VERSION`).  Those are set at different times by
+ * different tools and neither validates the other.  Mismatched, the link
+ * SUCCEEDS and the program dies in the browser with
+ *
+ *   WARNING: SHADER: Compile error: '' : unsupported shader version 300
+ *   TypeError: Failed to execute 'attachShader' on 'WebGLRenderingContext':
+ *              parameter 2 is not of type 'WebGLShader'.
+ *
+ * which names neither WebGL nor the option that was wrong.  So `:gl` is the
+ * single source of truth: it composes the link flag, and
+ * `pkg_web_check_gl_agreement` rejects a `:wasm-options` that contradicts it
+ * before anything is built. */
+typedef enum { PKG_WEB_GL_ES3 = 0, PKG_WEB_GL_ES2 } PkgWebGl;
+
+typedef struct PkgWebOpts {
+    bool      present;     /* a `:web` key was in the manifest at all */
+    PkgWebGl  gl;          /* default ES3 == WebGL2 */
+    bool      canvas;      /* mount a canvas; pulls in the GLFW port */
+    bool      audio;       /* wire Web Audio; needs the heap-view export */
+    bool      threads;     /* -pthread; needs COOP/COEP, off by default */
+    long      heap;        /* -sINITIAL_MEMORY; 0 selects memory growth */
+    char     *main_loop;   /* "callback" (default) | "asyncify" | "none" */
+} PkgWebOpts;
+
+void pkg_web_opts_defaults(PkgWebOpts *w);
+void pkg_web_opts_free(PkgWebOpts *w);
+
+/* Append the emcc link flags `w` implies to `out` (space-separated, each
+ * token already safe to splice). */
+void pkg_web_compose_link_flags(const PkgWebOpts *w, Buf *out);
+
+/* Reject a `:wasm-options` GL selection that contradicts `:web :gl`.
+ * Returns false (having emitted a diagnostic) on disagreement. */
+bool pkg_web_check_gl_agreement(const PkgWebOpts *w,
+                                const PkgCmakeDep *deps, int n_deps);
+
+/* The cmake dep manifest the generated CMakeLists writes at configure time.
+ * One per arm: both arms share the generated CMakeLists but resolve every dep
+ * to different -I/-L/-l paths, so a single filename let a wasm configure
+ * clobber the native link flags. `pkg_cmake_manifest_name(target)` maps a
+ * build target ("wasm" or NULL) onto the right one. */
+#define PKG_CMAKE_MANIFEST_NATIVE "spice-deps-manifest.json"
+#define PKG_CMAKE_MANIFEST_WASM   "spice-deps-manifest-wasm.json"
+
+static inline const char *pkg_cmake_manifest_name(const char *target) {
+    return (target && strcmp(target, "wasm") == 0)
+             ? PKG_CMAKE_MANIFEST_WASM : PKG_CMAKE_MANIFEST_NATIVE;
+}
+
 /* Parsed spice-deps-manifest.json entry                               */
 /* ------------------------------------------------------------------ */
 
@@ -155,6 +224,9 @@ typedef struct PkgManifest {
     char       **c_includes;
     int          n_c_includes;
     bool         no_stdlib;
+    /* `:web #map{...}` -- what this program needs of a browser. Read only on
+     * the wasm arm; `present` is false for every native build. */
+    PkgWebOpts   web;
     /* RM4: reader-macro files loaded implicitly for every source file in
      * this spice. Paths are stored as written in build.tur (relative to
      * the manifest directory unless absolute). */
@@ -513,6 +585,16 @@ void pkg_cmake_deps_free(PkgCmakeDep *deps, int n);
  * Prints a diagnostic and returns false if a mismatch is found. */
 bool pkg_cmake_verify_lock(const char *project_dir,
                             const PkgLockFile *lock);
+
+/* C-3: verify every PRESENT, lock-pinned spice tree against its recorded tree
+ * hash.  Prints a diagnostic naming `cmd` and returns false on a mismatch.
+ * A missing directory is NOT a failure -- the caller decides what absence
+ * means -- and a hash an older tur wrote is skipped rather than reported as
+ * tampering (see pkg_hash_comparable). */
+bool pkg_verify_locked_spices(const char *project_dir,
+                              const PkgManifest *manifest,
+                              const PkgLockFile *lock,
+                              const char *cmd);
 
 /* Parse cmake/spice-deps-manifest.json.
  * Returns true on success (file not present is not an error -- returns true

@@ -1840,6 +1840,10 @@ const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
  * struct path -- free with free_struct_app_type). */
 bool         type_extract_adt_app(const Type *t, struct AdtDef **out_def,
                                   Type *out_args, uint8_t *out_n);
+/* The stdlib collections (Vec, Map, Set, MutableMap) whose `:heap` handle is
+ * inline-C `malloc`, never region memory.  Defined in emit_expr.c; the
+ * elaborator's implicit-erasure note (elab_call.c) asks it too. */
+bool         region_def_is_malloc_collection(const struct AdtDef *def);
 Type         substitute_adt_app_type(const Type *t,
                                      const struct AdtDef *def,
                                      const Type *args);

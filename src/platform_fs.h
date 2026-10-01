@@ -384,16 +384,17 @@ static inline const char *tur_temp_dir(void) {
 
 /* ---- Executables and shell quoting (all platforms) ------------------------
  *
- * TUR_SHQ -- the quote character for a path inside a system() command string.
- * POSIX sh takes '...'; cmd.exe treats a single quote as an ordinary character
- * and chokes on the result with "The filename, directory name, or volume label
- * syntax is incorrect."  Anything handed to system() must use this.
+ * There was a TUR_SHQ here -- the platform's quote CHARACTER, wrapped around a
+ * path by hand as `TUR_SHQ "%s" TUR_SHQ`.  It is gone (WP2 of the security
+ * audit, D-7): a quote character is not quoting.  It got the platform right
+ * and the escaping wrong, so a path or an argument containing the quote
+ * character itself simply ended the argument early, and nothing escaped the
+ * `\` or the `$` a POSIX double-quote would still expand.
+ *
+ * Use `tur_shell_quote` (platform_proc.h), which does the `'\''` break-out on
+ * POSIX and the CRT's backslash-doubling rule on Windows -- or, in a Buf,
+ * main.c's `buf_put_quoted`.
  */
-#ifdef _WIN32
-#define TUR_SHQ "\""
-#else
-#define TUR_SHQ "'"
-#endif
 
 /*
  * Give an executable path the platform's extension.

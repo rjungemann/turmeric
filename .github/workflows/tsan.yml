@@ -1,0 +1,143 @@
+name: TSan
+
+# The concurrency fixtures under ThreadSanitizer (security-audit-plan WP5).
+#
+# tests/run.sh has carried a TUR_TSAN=1 mode and a TSan CMake config since
+# T19, and eighteen fixtures carry a `requires.tsan` marker -- which SKIPS them
+# in every ordinary run -- but nothing ever ran them.  The first run found two
+# of them bit-rotted past building, one that hung a third of the time on its
+# own logic, two races in the emitted runtime, and a fiber thread-local that a
+# sanitized build read from the wrong worker.  This is where they run now;
+# tests/run-tsan.sh is the selection and runs the same locally.
+#
+# Deliberately NOT on push/pull_request, for the reason fuzz.yml gives: a race
+# is a finding to triage, and this project's standing position is that a red
+# suite never blocks landing.  Findings go to an issue, not only to a red X.
+
+on:
+  schedule:
+    # 05:10 UTC daily -- off the hour, and clear of the 04:30 fuzz run.
+    - cron: "10 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: tsan
+  cancel-in-progress: false
+
+# `issues: write` is gone with the `gh issue create` step it existed for:
+# findings go to Sentry now (section 7 question 8 of the security audit plan).
+permissions:
+  contents: read
+
+jobs:
+  tsan:
+    name: TSan concurrency fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          # Mirrors ci.yml: the runner image's Google Chrome apt source has
+          # served a stale index and killed jobs before any step ran.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      # Release, not the default Debug: that one is ASan-instrumented, and the
+      # fixture programs link the runtime archives beside `tur` -- ASan and
+      # TSan cannot share a process.
+      - name: Configure (Release)
+        run: cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build-tsan -j
+
+      - name: Smoke check (tur --version must not hang)
+        run: timeout 60 ./build-tsan/tur --version
+
+      # CLAUDE.md: every suite run carries the 12-minute timeout.
+      - name: Run the concurrency fixtures under TSan
+        id: run
+        env:
+          TUR: ./build-tsan/tur
+        run: |
+          set +e
+          timeout 720 bash tests/run-tsan.sh 2>&1 | tee tsan.log
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          grep -E '^FAIL ' tsan.log | sort -u > tsan-failures.txt || true
+          exit 0
+
+      # A race report goes to Sentry, not to a public issue.
+      #
+      # A TSan finding is a concurrency defect in the runtime with a stack
+      # trace attached, which is a thing to triage before it is a thing to
+      # publish. It also repeats: the same race surfaces night after night
+      # until it is fixed, and `gh issue create` opened a fresh issue each
+      # time. Sentry groups on the failing fixtures instead, so a standing race
+      # is one issue with a count. Section 7 question 8 of
+      # docs/upcoming/security-audit-plan.md.
+      - name: Report the findings to Sentry
+        id: report
+        if: steps.run.outputs.rc != '0'
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          RC: ${{ steps.run.outputs.rc }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Group on the SET of failing fixtures, not on the run or the date --
+          # the same standing race must land in the same Sentry issue every
+          # night. Sorted and hashed so the order the harness happened to emit
+          # them in cannot fork the group.
+          sig="$(sort -u tsan-failures.txt 2>/dev/null | sha256sum | cut -c1-16)"
+          rc=0
+          python3 tools/ci/sentry-report.py \
+            --kind tsan \
+            --target tsan \
+            --title "TSan: nightly run failed (exit $RC)" \
+            --fingerprint tsan "$sig" \
+            --tag exit_code="$RC" \
+            --run-url "$RUN_URL" \
+            --note "An exit 66 is a TSan report; the race is in the fixture's stderr in the attached log. Reproduce locally with a non-ASan tur: TUR=<it> timeout 720 bash tests/run-tsan.sh (that script's header has the commands). A fixture TSan itself cannot run goes in its EXCLUDE list with the reason beside it." \
+            --log tsan-failures.txt \
+            --attach tsan.log || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Never lose a finding: an unconfigured or unreachable Sentry falls back
+      # to the artifact, loudly.
+      - name: Fallback -- upload the log because Sentry did not take it
+        if: steps.run.outputs.rc != '0' && steps.report.outputs.rc != '0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tsan-${{ github.run_id }}
+          path: |
+            tsan.log
+            tsan-failures.txt
+          retention-days: 30
+
+      - name: Fail on findings
+        if: steps.run.outputs.rc != '0'
+        env:
+          REPORT_RC: ${{ steps.report.outputs.rc }}
+          RC: ${{ steps.run.outputs.rc }}
+        run: |
+          {
+            echo "## ThreadSanitizer run failed (exit \`$RC\`)"
+            echo
+            if [ "$REPORT_RC" = "0" ]; then
+              echo "The failing fixtures and the full log were sent to Sentry."
+            else
+              echo "**The findings could not be sent to Sentry!** The log is attached"
+              echo "to this run instead, which is PUBLIC. Set the \`SENTRY_DSN\`"
+              echo "secret, or triage and delete that artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$REPORT_RC" != "0" ]; then
+            echo "::error::TSan found something, and Sentry did not take it (rc=$REPORT_RC) -- see the PUBLIC fallback artifact"
+          else
+            echo "::error::TSan found something -- details are in Sentry"
+          fi
+          exit 1

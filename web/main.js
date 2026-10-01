@@ -20,7 +20,15 @@ const WASM_STATE = {
 let wasmState = WASM_STATE.INITIALIZING;
 let evalWorker = null;
 let evalCallId = 0;
-const pendingCalls = new Map();
+// Every request awaiting the eval Worker, by id. Adding one arms the watchdog
+// (see stopEvalWorker), so no call site has to remember to.
+const pendingCalls = new (class extends Map {
+    set(id, call) {
+        super.set(id, call);
+        armEvalWatchdog();
+        return this;
+    }
+})();
 let editor = null;
 let monaco = null;
 let consoleOutput = [];
@@ -40,7 +48,11 @@ const CONFIG = {
 
 println "Hello, Turmeric!"
 `,
-    EXECUTION_TIMEOUT: 5000, // 5 seconds
+    // How long one request may keep the eval Worker busy before the watchdog
+    // stops it and starts a fresh session (security-audit-plan W-3). Generous,
+    // because a playground program that legitimately computes for a while is
+    // not the problem; a program that never returns is.
+    EXECUTION_TIMEOUT: 30000,
     MAX_OUTPUT_LENGTH: 10000,
 };
 
@@ -102,7 +114,10 @@ const STORAGE_KEYS = {
     buffer:    'tur.try.buffer.v1',
     cursor:    'tur.try.cursor.v1',
     scroll:    'tur.try.scroll.v1',
-    consol:    'tur.try.console.v1',
+    // The console transcript used to be stored as HTML and re-inserted as HTML
+    // on load. It is data now (see consoleRuns); v1 is deleted unread.
+    legacyConsole: 'tur.try.console.v1',
+    consol:    'tur.try.console.v2',
     // Multi-tab keys (Phase 1 of try-turmeric-multi-tab-and-projects-plan).
     tabs:      'tur.try.tabs.v1',
     activeTab: 'tur.try.activeTab.v1',
@@ -181,18 +196,90 @@ function debounce(fn, ms) {
     };
 }
 
+// ----------------------------------------------------------------------------
+// Console transcript persistence (security-audit-plan W-2)
+//
+// The transcript is stored as DATA and rebuilt with createElement/textContent,
+// so nothing read back out of localStorage is ever parsed as markup. It used
+// to be the lines' HTML, re-inserted with insertAdjacentHTML on load -- which
+// made any one-time injection into the console a permanent one.
+//
+// A line is a list of runs. A run is a string (text), or [tag, className, runs]
+// for a tag in CONSOLE_TAGS; `br` carries no runs. Anything else in the markup
+// appendToConsole was handed (a link in an error message, say) is kept as its
+// text. Attributes other than class are not kept, which is why the flush <pre>
+// blocks are a class (console-flush) rather than an inline style.
+// ----------------------------------------------------------------------------
+
+const CONSOLE_TAGS = new Set(['span', 'pre', 'strong', 'em', 'code', 'br']);
+
+// Deeper than anything appendToConsole writes (two levels today); what the
+// renderer does with a record nested past it is flatten it to text.
+const CONSOLE_MAX_DEPTH = 8;
+
+/** The runs of a parsed console line. */
+function consoleRuns(nodes) {
+    const runs = [];
+    for (const n of nodes) {
+        if (n.nodeType === Node.TEXT_NODE) {
+            runs.push(n.data);
+        } else if (n.nodeType === Node.ELEMENT_NODE) {
+            const tag = n.localName;
+            if (tag === 'br') runs.push(['br', '', []]);
+            else if (CONSOLE_TAGS.has(tag)) runs.push([tag, n.className, consoleRuns(n.childNodes)]);
+            else runs.push(n.textContent);
+        }
+    }
+    return runs;
+}
+
+/** Text of a run list, for a record nested too deep to rebuild. */
+function consoleRunsText(runs) {
+    if (typeof runs === 'string') return runs;
+    if (!Array.isArray(runs)) return '';
+    return runs.map((r) => (typeof r === 'string' ? r
+        : Array.isArray(r) ? consoleRunsText(r[2]) : '')).join('');
+}
+
+/**
+ * Append a stored run list under `parent`. The record came out of storage, so
+ * it is validated as it is walked rather than trusted: an unknown tag or a
+ * malformed run contributes nothing, and nothing is ever parsed as HTML.
+ */
+function renderConsoleRuns(runs, parent, depth = 0) {
+    if (!Array.isArray(runs)) return;
+    for (const r of runs) {
+        if (typeof r === 'string') {
+            parent.appendChild(document.createTextNode(r));
+        } else if (Array.isArray(r) && typeof r[0] === 'string' && CONSOLE_TAGS.has(r[0])) {
+            if (depth >= CONSOLE_MAX_DEPTH) {
+                parent.appendChild(document.createTextNode(consoleRunsText(r[2])));
+                continue;
+            }
+            const el = document.createElement(r[0]);
+            if (typeof r[1] === 'string' && r[1]) el.className = r[1];
+            if (r[0] !== 'br') renderConsoleRuns(r[2], el, depth + 1);
+            parent.appendChild(el);
+        }
+    }
+}
+
 function hydrateConsole() {
+    // The HTML-era transcript is dropped, not rendered: there is no safe way
+    // to read markup back, and a console history is not worth a parser.
+    try { localStorage.removeItem(STORAGE_KEYS.legacyConsole); } catch {}
     const saved = safeRead(STORAGE_KEYS.consol);
     if (!Array.isArray(saved) || saved.length === 0) return;
     const consoleEl = document.getElementById('console');
     if (!consoleEl) return;
-    consoleEl.innerHTML = '';
-    for (const line of saved) {
-        if (typeof line === 'string') {
-            consoleEl.insertAdjacentHTML('beforeend', line + '<br>');
-        }
+    const lines = saved.filter(Array.isArray).slice(-MAX_CONSOLE_LINES);
+    if (lines.length === 0) return;
+    consoleEl.textContent = '';
+    for (const line of lines) {
+        renderConsoleRuns(line, consoleEl);
+        consoleEl.appendChild(document.createElement('br'));
     }
-    consoleLog = saved.slice(-MAX_CONSOLE_LINES);
+    consoleLog = lines;
     consoleEl.scrollTop = consoleEl.scrollHeight;
 }
 
@@ -899,26 +986,29 @@ function hydrateTabs(defaultContent) {
 // Utility Functions
 // ============================================================================
 
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
 /**
- * Escape HTML special characters
+ * Escape text for HTML -- element content or a quoted attribute value alike.
+ *
+ * It used to go through textContent -> innerHTML, which escapes `&`, `<` and
+ * `>` but leaves both quotes alone, so the same helper was unsafe inside an
+ * attribute. It was used there: a `#lang` line naming a base with a `"` in it
+ * closed the language picker's value="..." and added its own attributes --
+ * onfocus, autofocus -- to the radio button (security-audit-plan W-2). Quotes
+ * are escaped now, so no caller has to know which context it is in.
  */
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return (text == null ? '' : String(text)).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
 
 /**
- * Escape text that is going inside a double-quoted HTML attribute.
- *
- * escapeHtml alone is not enough there: textContent -> innerHTML escapes `&`,
- * `<` and `>` but leaves `"` alone, so a guide whose title or description
- * carries a quote -- and several do, since front matter quotes titles that
- * contain a colon -- closes the attribute early and turns the rest of its own
- * description into stray attributes on the tag.
+ * Escape text that is going inside a quoted HTML attribute. The same as
+ * escapeHtml now that that escapes quotes; kept as its own name so an
+ * attribute site says what it is.
  */
 function escapeAttr(text) {
-    return escapeHtml(text).replace(/"/g, '&quot;');
+    return escapeHtml(text);
 }
 
 
@@ -940,10 +1030,17 @@ function formatConsoleLine(input, result, isError = false) {
  * Append text to the console
  */
 function appendToConsole(html) {
+    // `html` is this file's own markup, with every dynamic part escaped at the
+    // call site. It is parsed once, into a template, so the line that is shown
+    // and the record that is persisted (consoleRuns) are the same nodes.
     const consoleEl = document.getElementById('console');
-    consoleEl.insertAdjacentHTML('beforeend', html + '<br>');
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    const runs = consoleRuns(tpl.content.childNodes);
+    consoleEl.appendChild(tpl.content);
+    consoleEl.appendChild(document.createElement('br'));
     consoleEl.scrollTop = consoleEl.scrollHeight;
-    consoleLog.push(html);
+    consoleLog.push(runs);
     if (consoleLog.length > MAX_CONSOLE_LINES) {
         consoleLog.splice(0, consoleLog.length - MAX_CONSOLE_LINES);
     }
@@ -1095,6 +1192,93 @@ function loadFromUrlHash() {
 // ============================================================================
 
 /**
+ * Start a fresh eval Worker and resolve once its wasm module is ready.
+ *
+ * Used at boot and again by stopEvalWorker, which is why it does nothing but
+ * the worker: the one-time steps (doc names, the #lang registry, a share
+ * link's code) stay in initWasm.
+ */
+function startEvalWorker() {
+    return new Promise((resolve, reject) => {
+        const worker = new Worker('/eval-worker.js');
+        evalWorker = worker;
+
+        worker.addEventListener('message', (e) => {
+            // A stopped worker's last words -- a result or a print already in
+            // flight when it was terminated -- belong to a session that no
+            // longer exists.
+            if (worker !== evalWorker) return;
+            const msg = e.data;
+
+            if (msg.type === 'ready') {
+                resolve();
+                return;
+            }
+            if (msg.type === 'init-error') {
+                reject(new Error(msg.error));
+                return;
+            }
+
+            // Console output forwarded from WASM print/printErr callbacks.
+            if (msg.type === 'print') {
+                appendToConsole(`<span class="console-output">${escapeHtml(msg.text)}</span>`);
+                return;
+            }
+            if (msg.type === 'printErr') {
+                appendToConsole(`<span class="console-error">${escapeHtml(msg.text)}</span>`);
+                return;
+            }
+
+            // Resolve pending call promises (eval, format, doc, reset).
+            const pending = pendingCalls.get(msg.id);
+            if (!pending) return;
+            pendingCalls.delete(msg.id);
+
+            if (msg.type === 'eval-result') {
+                const execTime = performance.now() - pending.startTime;
+                updateExecTime(execTime);
+                const isError = msg.result.startsWith('Error:') || msg.result.includes('error');
+                pending.resolve({ result: msg.result, isError, execTime });
+                setTimeout(processQueue, 0);
+            } else if (msg.type === 'format-result') {
+                pending.resolve(msg.result);
+            } else if (msg.type === 'doc-result') {
+                pending.resolve(msg.result);
+            } else if (msg.type === 'type-of-result') {
+                pending.resolve(msg.result);
+            } else if (msg.type === 'explain-result') {
+                pending.resolve(msg.result);
+            } else if (msg.type === 'lang-registry-result') {
+                pending.resolve(msg.result);
+            } else if (msg.type === 'trace-run-result') {
+                pending.resolve({ steps: msg.steps, stats: msg.stats, error: msg.error });
+            } else if (msg.type === 'trace-state') {
+                pending.resolve(msg.state);
+            } else if (msg.type === 'trace-sites') {
+                pending.resolve(msg.sites);
+            } else if (msg.type === 'trace-found') {
+                pending.resolve(msg.found);
+            } else if (msg.type === 'trace-bytes') {
+                pending.resolve(msg.bytes);
+            } else if (msg.type === 'trace-released') {
+                pending.resolve();
+            } else if (msg.type === 'reset-done') {
+                pending.resolve();
+            } else if (msg.type === 'error') {
+                pending.reject(new Error(msg.error));
+                if (pending.isEval) setTimeout(processQueue, 0);
+            }
+        });
+
+        worker.addEventListener('error', (e) => {
+            reject(new Error(String(e.message || e)));
+        });
+
+        worker.postMessage({ type: 'init' });
+    });
+}
+
+/**
  * Initialize the WASM module via the eval Worker.
  * All WASM calls (eval, format, doc lookup, reset) run inside the Worker so
  * that Atomics.wait is permitted and blocking select cannot freeze the tab.
@@ -1110,78 +1294,7 @@ async function initWasm() {
     if (wasmStatus) wasmStatus.textContent = 'Loading WASM module...';
 
     try {
-        await new Promise((resolve, reject) => {
-            evalWorker = new Worker('/eval-worker.js');
-
-            evalWorker.addEventListener('message', (e) => {
-                const msg = e.data;
-
-                if (msg.type === 'ready') {
-                    resolve();
-                    return;
-                }
-                if (msg.type === 'init-error') {
-                    reject(new Error(msg.error));
-                    return;
-                }
-
-                // Console output forwarded from WASM print/printErr callbacks.
-                if (msg.type === 'print') {
-                    appendToConsole(`<span class="console-output">${escapeHtml(msg.text)}</span>`);
-                    return;
-                }
-                if (msg.type === 'printErr') {
-                    appendToConsole(`<span class="console-error">${escapeHtml(msg.text)}</span>`);
-                    return;
-                }
-
-                // Resolve pending call promises (eval, format, doc, reset).
-                const pending = pendingCalls.get(msg.id);
-                if (!pending) return;
-                pendingCalls.delete(msg.id);
-
-                if (msg.type === 'eval-result') {
-                    const execTime = performance.now() - pending.startTime;
-                    updateExecTime(execTime);
-                    const isError = msg.result.startsWith('Error:') || msg.result.includes('error');
-                    pending.resolve({ result: msg.result, isError, execTime });
-                    setTimeout(processQueue, 0);
-                } else if (msg.type === 'format-result') {
-                    pending.resolve(msg.result);
-                } else if (msg.type === 'doc-result') {
-                    pending.resolve(msg.result);
-                } else if (msg.type === 'type-of-result') {
-                    pending.resolve(msg.result);
-                } else if (msg.type === 'explain-result') {
-                    pending.resolve(msg.result);
-                } else if (msg.type === 'lang-registry-result') {
-                    pending.resolve(msg.result);
-                } else if (msg.type === 'trace-run-result') {
-                    pending.resolve({ steps: msg.steps, stats: msg.stats, error: msg.error });
-                } else if (msg.type === 'trace-state') {
-                    pending.resolve(msg.state);
-                } else if (msg.type === 'trace-sites') {
-                    pending.resolve(msg.sites);
-                } else if (msg.type === 'trace-found') {
-                    pending.resolve(msg.found);
-                } else if (msg.type === 'trace-bytes') {
-                    pending.resolve(msg.bytes);
-                } else if (msg.type === 'trace-released') {
-                    pending.resolve();
-                } else if (msg.type === 'reset-done') {
-                    pending.resolve();
-                } else if (msg.type === 'error') {
-                    pending.reject(new Error(msg.error));
-                    if (pending.isEval) setTimeout(processQueue, 0);
-                }
-            });
-
-            evalWorker.addEventListener('error', (e) => {
-                reject(new Error(String(e.message || e)));
-            });
-
-            evalWorker.postMessage({ type: 'init' });
-        });
+        await startEvalWorker();
 
         console.log('Turmeric WASM runtime initialized');
         wasmState = WASM_STATE.READY;
@@ -1492,11 +1605,11 @@ function renderLangMenu(rebuilt) {
     });
 
     basesEl.innerHTML = groups.map(g => `
-        <div class="lang-group" role="group" aria-label="${escapeHtml(langGroupName(g.lang))}">
+        <div class="lang-group" role="group" aria-label="${escapeAttr(langGroupName(g.lang))}">
             <div class="lang-group-name">${escapeHtml(langGroupName(g.lang))}</div>
             ${g.rows.map(b => `
-            <label class="lang-row" title="#lang ${escapeHtml(b.name)}">
-                <input type="radio" name="lang-base" value="${escapeHtml(b.name)}">
+            <label class="lang-row" title="#lang ${escapeAttr(b.name)}">
+                <input type="radio" name="lang-base" value="${escapeAttr(b.name)}">
                 <span class="lang-row-name">#lang ${escapeHtml(b.name)}</span>${
                     b.experiment
                         ? '<span class="lang-chip">experimental</span>'
@@ -1645,6 +1758,106 @@ function processQueue() {
     const id = ++evalCallId;
     pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
     evalWorker.postMessage({ type: 'eval', id, input: code, lang: langDirective, quiet });
+}
+
+// ============================================================================
+// Eval watchdog and Stop (security-audit-plan W-3)
+//
+// The interpreter runs in a Worker, so a runaway program cannot freeze the
+// page -- but the Worker handles one request at a time, so it freezes the REPL:
+// every later Run, :doc and Format queues behind it for good. A Worker cannot
+// be interrupted from outside, only terminated, so that is what Stop does:
+// terminate it, fail everything that was waiting on it, and boot a fresh one.
+// The session -- definitions from earlier runs -- goes with the old Worker.
+//
+// The Worker is serial, so the oldest outstanding request is the one it is
+// running, and that request's age is the watchdog's clock: past
+// EVAL_STOP_OFFER_MS the Stop button is shown, past CONFIG.EXECUTION_TIMEOUT
+// the Worker is stopped without asking.
+// ============================================================================
+
+const EVAL_STOP_OFFER_MS = 1000;
+const EVAL_WATCHDOG_TICK_MS = 250;
+let evalWatchdogTimer = null;
+let evalWatchdogShowedPanel = false;
+let evalStopping = false;
+
+function armEvalWatchdog() {
+    if (evalWatchdogTimer === null) {
+        evalWatchdogTimer = setInterval(evalWatchdogTick, EVAL_WATCHDOG_TICK_MS);
+    }
+}
+
+function evalWatchdogTick() {
+    const panel = document.getElementById('console-loading');
+    const stopBtn = document.getElementById('stop-btn');
+    if (pendingCalls.size === 0) {
+        clearInterval(evalWatchdogTimer);
+        evalWatchdogTimer = null;
+        if (stopBtn) stopBtn.hidden = true;
+        // Only a panel the watchdog opened; a Run's own spinner is executeCode's.
+        if (evalWatchdogShowedPanel && panel) panel.style.display = 'none';
+        evalWatchdogShowedPanel = false;
+        return;
+    }
+    let oldest = Infinity;
+    for (const call of pendingCalls.values()) oldest = Math.min(oldest, call.startTime);
+    const age = performance.now() - oldest;
+    if (age >= CONFIG.EXECUTION_TIMEOUT) {
+        stopEvalWorker(`Stopped: still running after ${CONFIG.EXECUTION_TIMEOUT / 1000} s`);
+    } else if (age >= EVAL_STOP_OFFER_MS) {
+        if (stopBtn) stopBtn.hidden = false;
+        if (panel && panel.style.display === 'none') {
+            panel.style.display = 'flex';
+            evalWatchdogShowedPanel = true;
+        }
+    }
+}
+
+/**
+ * Terminate the eval Worker and start a fresh one. Every request it owed an
+ * answer -- and every Run still queued behind them -- is rejected with
+ * `reason`, which is what the console shows for the Run that was stopped.
+ */
+function stopEvalWorker(reason) {
+    if (!evalWorker || evalStopping) return;
+    evalStopping = true;
+    evalWorker.terminate();
+    evalWorker = null;
+    wasmState = WASM_STATE.LOADING;
+    promptSetEnabled(false);
+
+    const owed = [...pendingCalls.values()];
+    pendingCalls.clear();
+    const queued = executionQueue.splice(0);
+    isExecuting = false;
+
+    // What the old session had accepted is gone with it.
+    currentLangMode = 'turmeric';
+    replSessionReset();
+    lastRunByTab.clear();
+
+    const err = new Error(reason);
+    for (const call of owed) call.reject(err);
+    for (const run of queued) run.reject(err);
+    evalWatchdogTick();   // nothing is pending now: hides Stop and its panel
+    showStatus('Restarting...', 'info');
+
+    startEvalWorker().then(() => {
+        wasmState = WASM_STATE.READY;
+        promptSetEnabled(true);
+        appendToConsole('<span class="console-output">Started a fresh session '
+                        + '-- definitions from earlier runs are gone.</span>');
+        showStatus('Ready', 'success');
+    }, (e) => {
+        wasmState = WASM_STATE.ERROR;
+        console.error('Failed to restart the WASM worker:', e);
+        showStatus('Failed to load WASM', 'error');
+        appendToConsole('<span class="console-error">Error: could not restart the '
+                        + 'interpreter. Please refresh the page.</span>');
+    }).finally(() => {
+        evalStopping = false;
+    });
 }
 
 /**
@@ -2096,6 +2309,12 @@ async function initEditor() {
     // T3: line-number clicks jump the timeline while a recording is open.
     traceInstallGutterHandler(editor);
     // Timeline test surface, alongside _turiTabs below.
+    // Eval watchdog test surface (W-3): the limit is settable so a test can
+    // watch the automatic stop without waiting out the real 30 s.
+    window._turiEval = {
+        get timeoutMs() { return CONFIG.EXECUTION_TIMEOUT; },
+        set timeoutMs(ms) { CONFIG.EXECUTION_TIMEOUT = ms; },
+    };
     window._turiTrace = {
         state:   () => ({ active: traceState.active, steps: traceState.steps,
                           index: traceState.index, baseLine: traceState.baseLine,
@@ -3446,7 +3665,11 @@ function initReplInput() {
 function initEventListeners() {
     // Run button
     document.getElementById('run-btn')?.addEventListener('click', runCode);
-    
+
+    // Stop: shown by the eval watchdog while a request runs long (W-3).
+    document.getElementById('stop-btn')?.addEventListener('click',
+        () => stopEvalWorker('Stopped'));
+
     // Clear button (Shift+click = reset full workspace)
     document.getElementById('clear-btn')?.addEventListener('click', (e) => {
         if (e.shiftKey) {
@@ -4730,7 +4953,7 @@ function initDocSearch() {
             const spiceTag = item.spice
                 ? `<span class="doc-result-spice">tur-${escapeHtml(item.spice)}</span>`
                 : '';
-            return `<div class="doc-result-item" data-name="${escapeHtml(item.name)}" data-index="${i}">
+            return `<div class="doc-result-item" data-name="${escapeAttr(item.name)}" data-index="${i}">
                 <span class="doc-result-name">${escapeHtml(item.name)}</span>
                 <span class="doc-result-kind">${escapeHtml(item.kind)}</span>
                 ${spiceTag}
@@ -4847,11 +5070,11 @@ function wasmDocLookup(name) {
  */
 function wasmTypeOf(expr) {
     if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve('');
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const id = ++evalCallId;
         pendingCalls.set(id, {
             resolve,
-            reject,
+            reject: (err) => resolve(`error: ${err.message}`),
             startTime: performance.now(),
             isEval: false,
         });
@@ -4864,11 +5087,11 @@ function wasmTypeOf(expr) {
  */
 function wasmExplain(code) {
     if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve('');
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const id = ++evalCallId;
         pendingCalls.set(id, {
             resolve,
-            reject,
+            reject: (err) => resolve(`Error: ${err.message}`),
             startTime: performance.now(),
             isEval: false,
         });
@@ -4925,7 +5148,7 @@ async function dispatchReplMetaCommand(line) {
 
     if (cmd === ':help') {
         appendToConsole(
-            `<pre class="console-output" style="margin:0">${escapeHtml(replHelpText())}</pre>`);
+            `<pre class="console-output console-flush">${escapeHtml(replHelpText())}</pre>`);
 
     } else if (cmd === ':trace') {
         await traceCode();
@@ -4937,11 +5160,11 @@ async function dispatchReplMetaCommand(line) {
         }
         const entry = docNames.find(d => d.name === arg);
         if (entry && entry.summary) {
-            appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(entry.summary)}</pre>`);
+            appendToConsole(`<pre class="console-output console-flush">${escapeHtml(entry.summary)}</pre>`);
         } else {
             const docText = await wasmDocLookup(arg);
             if (docText) {
-                appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(docText)}</pre>`);
+                appendToConsole(`<pre class="console-output console-flush">${escapeHtml(docText)}</pre>`);
             } else {
                 appendToConsole(`<span class="console-output">no documentation for \'${escapeHtml(arg)}\'</span>`);
             }
@@ -4982,7 +5205,7 @@ async function dispatchReplMetaCommand(line) {
 
     } else if (cmd === ':explain') {
         const explainText = await wasmExplain(arg);
-        appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(explainText)}</pre>`);
+        appendToConsole(`<pre class="console-output console-flush">${escapeHtml(explainText)}</pre>`);
 
     } else if (cmd === ':reset') {
         resetWasm();
@@ -6064,13 +6287,15 @@ async function traceCode() {
     // hasMain is the page's existing Run rule, not a second one: a program with
     // a top-level `main` loads its forms and then runs `(main)`, and the
     // recording covers the run rather than the definitions.
+    // A stopped recording (the watchdog, or Stop) rejects; report it the way
+    // any other failed recording is reported.
     const res = await traceWorkerCall({
         type: 'trace-run',
         input: code,
         maxSteps: TRACE_MAX_STEPS,
         hasMain: definesMainEntry(code),
         lang,
-    });
+    }).catch((err) => ({ steps: -1, error: err.message }));
 
     if (!res || res.steps < 0) {
         const why = res && res.steps === -2

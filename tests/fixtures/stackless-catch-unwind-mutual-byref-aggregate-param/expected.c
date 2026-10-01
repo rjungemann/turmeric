@@ -13,7 +13,8 @@
 #else
 #  define TUR_THREAD_LOCAL __thread
 #endif
-#if defined(__clang__) || (defined(_WIN32) && defined(__GNUC__))
+#if defined(__clang__) || (defined(_WIN32) && defined(__GNUC__)) || \
+    defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
 #  define TUR_TLS_FRESH(T, x, at) __attribute__((noinline, unused)) static T *at(void) { __asm__ volatile ("" ::: "memory"); return &x; } extern int tur_tls_fresh_end
 #endif
 #define TUR_GC_FIBER_ENTER(sp) ((void)0)
@@ -2190,10 +2191,16 @@ static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
  * continuation frame) with a fresh, shared group id.  dk_case_enclosing_real and
  * dk_perform's re-install then skip only same-group handlers, so an enclosing
  * handle's handlers that become ADJACENT after a chain-flattening re-install are
- * no longer mistaken for this handle's siblings (they carry a different id). */
-static int g_dk_hgroup_ctr = 0;
+ * no longer mistaken for this handle's siblings (they carry a different id).
+ * The counter is process-wide and bumped from every thread, so it is atomic:
+ * a plain ++ lost updates, and a counter that goes BACKWARDS can hand one
+ * thread the same id twice -- two handles' cases read as siblings (TSan on
+ * threads-effects-tail-resume, security-audit-plan WP5).  Not per-thread: a
+ * fiber's chain can pick up ids on more than one worker.  Relaxed, because
+ * only uniqueness matters. */
+static volatile uint64_t g_dk_hgroup_ctr = 0;
 static DK *dk_hgroup(DK *head) {
-    int g = ++g_dk_hgroup_ctr;
+    int g = (int)TUR_ATOMIC_ADD_FETCH_U64(&g_dk_hgroup_ctr, 1, __ATOMIC_RELAXED);
     for (DK *p = head; p && p->kind == DKK_HANDLER; p = p->next) p->hgroup = g;
     return head;
 }
@@ -3898,7 +3905,7 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
     for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
     /* Sleep until woken by a channel operation or cancelled (TC1) */
     pthread_mutex_lock(&wakeup_mutex);
-    while (selected_idx == -1) {
+    while (TUR_ATOMIC_LOAD_INT(&selected_idx, __ATOMIC_ACQUIRE) == -1) {
         if (tur_thread_cancel_requested()) {
             pthread_mutex_unlock(&wakeup_mutex);
             /* Deregister all waiters before cancelling */
@@ -3927,7 +3934,7 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
         __sel_ts.tv_nsec = __sel_ns % 1000000000L;
         pthread_cond_timedwait(&wakeup_cond, &wakeup_mutex, &__sel_ts);
     }
-    int winner = selected_idx;
+    int winner = TUR_ATOMIC_LOAD_INT(&selected_idx, __ATOMIC_ACQUIRE);
     pthread_mutex_unlock(&wakeup_mutex);
     /* Deregister all waiters */
     for (int i = 0; i < wn; i++) {
@@ -7945,24 +7952,42 @@ static int64_t length(int64_t l) {
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
-        struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+        if (width < 0 || height < 0 || width > INT32_MAX || height > INT32_MAX ||
+      (height > 0 && (uint64_t)width > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)height)) {
+    fprintf(stderr, "grid-new: dimensions %lldx%lld out of range\n",
+            (long long)width, (long long)height);
+    exit(1);
+  }
+  struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+  if (!g) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   g->width  = (int)width;
   g->height = (int)height;
   g->cx = 0;
   g->cy = 0;
-  g->data = calloc((size_t)(width * height), sizeof(int64_t));
+  g->data = calloc((size_t)width * (size_t)height, sizeof(int64_t));
+  if (!g->data && width > 0 && height > 0) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)g;
   
 }
 
 static int64_t grid_hyget(int64_t g, int64_t x, int64_t y) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-get: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   
 }
 
 static void grid_hyset_ex(int64_t g, int64_t x, int64_t y, int64_t v) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-set!: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   TUR_REGION_NOTE(v);   /* region-lock-hardening: see vec-push! */
   grid->data[(size_t)(y * grid->width + x)] = v;
   
@@ -7988,12 +8013,23 @@ static void grid_hyfree(int64_t g) {
 }
 
 static int64_t zipper_hynew_hyraw(void * left, int64_t left_len, int64_t focus, void * right, int64_t right_len) {
-        struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+        if (left_len < 0 || right_len < 0 ||
+      (uint64_t)left_len > SIZE_MAX / sizeof(int64_t) - 1 ||
+      (uint64_t)right_len > SIZE_MAX / sizeof(int64_t) - 1) {
+    fprintf(stderr, "zipper-new: lengths %lld/%lld out of range\n",
+            (long long)left_len, (long long)right_len);
+    exit(1);
+  }
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+  if (!z) { fprintf(stderr, "zipper-new: out of memory\n"); exit(1); }
   z->left_len  = (size_t)left_len;
   z->right_len = (size_t)right_len;
   z->focus     = focus;
   z->left  = z->left_len  > 0 ? malloc(sizeof(int64_t) * z->left_len)  : NULL;
   z->right = z->right_len > 0 ? malloc(sizeof(int64_t) * z->right_len) : NULL;
+  if ((z->left_len && !z->left) || (z->right_len && !z->right)) {
+    fprintf(stderr, "zipper-new: out of memory\n"); exit(1);
+  }
   if (z->left  && left)  memcpy(z->left,  (int64_t*)(intptr_t)left,  sizeof(int64_t) * z->left_len);
   if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;
@@ -8561,6 +8597,14 @@ static void json_hyenc_hystr_hy(void * b, const char * s) {
     else if (*sp == '\n') { json_hyenc_hyappend_hys_hy(b, "\\n"); }
     else if (*sp == '\r') { json_hyenc_hyappend_hys_hy(b, "\\r"); }
     else if (*sp == '\t') { json_hyenc_hyappend_hys_hy(b, "\\t"); }
+    else if (*sp == '\b') { json_hyenc_hyappend_hys_hy(b, "\\b"); }
+    else if (*sp == '\f') { json_hyenc_hyappend_hys_hy(b, "\\f"); }
+    else if ((unsigned char)*sp < 0x20) {
+      /* Any other control character is not legal raw inside a JSON string. */
+      char esc[8];
+      snprintf(esc, sizeof esc, "\\u%04x", (unsigned)(unsigned char)*sp);
+      json_hyenc_hyappend_hys_hy(b, esc);
+    }
     else                  { json_hyenc_hyappend_hyc_hy(b, (int64_t)*sp); }
   }
   json_hyenc_hyappend_hyc_hy(b, (int64_t)'"');
@@ -8625,7 +8669,7 @@ static const char * json_slencode(int64_t node) {
 }
 
 static void json_hydec_hyskip_hyws_hy(void * c) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   while (cp->s[cp->pos] == ' ' || cp->s[cp->pos] == '\n' ||
          cp->s[cp->pos] == '\r' || cp->s[cp->pos] == '\t') cp->pos++;
@@ -8633,16 +8677,26 @@ static void json_hydec_hyskip_hyws_hy(void * c) {
 }
 
 static void * json_hydec_hyparse_hystring_hy(void * c) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   if (cp->s[cp->pos] != '"') { cp->err = 1; return NULL; }
   cp->pos++;
   size_t cap = 64, len = 0;
   char *buf = malloc(cap);
+  if (!buf) { cp->err = 1; return NULL; }
   while (cp->s[cp->pos] && cp->s[cp->pos] != '"') {
-    if (len + 4 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+    /* Room for the widest thing one step appends (a 4-byte UTF-8 sequence)
+     * plus the terminator. */
+    if (len + 4 >= cap) {
+      char *nb = realloc(buf, cap * 2);
+      if (!nb) { free(buf); cp->err = 1; return NULL; }
+      buf = nb; cap *= 2;
+    }
     if (cp->s[cp->pos] == '\\') {
       cp->pos++;
+      /* A backslash at the very end of the input: the old code copied the
+       * NUL, stepped past it and kept reading (security-audit-plan M-2). */
+      if (!cp->s[cp->pos]) break;
       switch (cp->s[cp->pos]) {
         case '"':  buf[len++] = '"';  break;
         case '\\': buf[len++] = '\\'; break;
@@ -8652,6 +8706,56 @@ static void * json_hydec_hyparse_hystring_hy(void * c) {
         case 't':  buf[len++] = '\t'; break;
         case 'b':  buf[len++] = '\b'; break;
         case 'f':  buf[len++] = '\f'; break;
+        case 'u': {
+          /* \uXXXX, with a surrogate pair for code points above U+FFFF,
+           * decoded to UTF-8.  A lone surrogate is an error, and so is
+           * \u0000: the value is a C string and cannot carry a NUL. */
+          uint32_t cpt = 0;
+          for (int k = 1; k <= 4; k++) {
+            char h = cp->s[cp->pos + k];
+            uint32_t d = (h >= '0' && h <= '9') ? (uint32_t)(h - '0')
+                       : (h >= 'a' && h <= 'f') ? (uint32_t)(h - 'a' + 10)
+                       : (h >= 'A' && h <= 'F') ? (uint32_t)(h - 'A' + 10) : 99u;
+            if (d == 99u) { free(buf); cp->err = 1; return NULL; }
+            cpt = cpt * 16 + d;
+          }
+          cp->pos += 4;
+          if (cpt >= 0xDC00 && cpt <= 0xDFFF) { free(buf); cp->err = 1; return NULL; }
+          if (cpt >= 0xD800 && cpt <= 0xDBFF) {
+            if (cp->s[cp->pos + 1] != '\\' || cp->s[cp->pos + 2] != 'u') {
+              free(buf); cp->err = 1; return NULL;
+            }
+            uint32_t lo = 0;
+            for (int k = 3; k <= 6; k++) {
+              char h = cp->s[cp->pos + k];
+              uint32_t d = (h >= '0' && h <= '9') ? (uint32_t)(h - '0')
+                         : (h >= 'a' && h <= 'f') ? (uint32_t)(h - 'a' + 10)
+                         : (h >= 'A' && h <= 'F') ? (uint32_t)(h - 'A' + 10) : 99u;
+              if (d == 99u) { free(buf); cp->err = 1; return NULL; }
+              lo = lo * 16 + d;
+            }
+            if (lo < 0xDC00 || lo > 0xDFFF) { free(buf); cp->err = 1; return NULL; }
+            cp->pos += 6;
+            cpt = 0x10000 + ((cpt - 0xD800) << 10) + (lo - 0xDC00);
+          }
+          if (cpt == 0) { free(buf); cp->err = 1; return NULL; }
+          if (cpt < 0x80) {
+            buf[len++] = (char)cpt;
+          } else if (cpt < 0x800) {
+            buf[len++] = (char)(0xC0 | (cpt >> 6));
+            buf[len++] = (char)(0x80 | (cpt & 0x3F));
+          } else if (cpt < 0x10000) {
+            buf[len++] = (char)(0xE0 | (cpt >> 12));
+            buf[len++] = (char)(0x80 | ((cpt >> 6) & 0x3F));
+            buf[len++] = (char)(0x80 | (cpt & 0x3F));
+          } else {
+            buf[len++] = (char)(0xF0 | (cpt >> 18));
+            buf[len++] = (char)(0x80 | ((cpt >> 12) & 0x3F));
+            buf[len++] = (char)(0x80 | ((cpt >> 6) & 0x3F));
+            buf[len++] = (char)(0x80 | (cpt & 0x3F));
+          }
+          break;
+        }
         default:   buf[len++] = cp->s[cp->pos]; break;
       }
     } else {
@@ -8667,7 +8771,7 @@ static void * json_hydec_hyparse_hystring_hy(void * c) {
 }
 
 static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   json_hydec_hyskip_hyws_hy(c);
   char ch = cp->s[cp->pos];
@@ -8712,58 +8816,78 @@ static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
     int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 2; n[1] = ival;
     return (int64_t)(intptr_t)n;
   }
+  /* Nesting is capped so a hostile document cannot recurse this parser off
+   * the end of the C stack (security-audit-plan M-2). */
+  if ((ch == '[' || ch == '{') && ++cp->depth > 256) { cp->err = 1; return 0; }
   /* array */
   if (ch == '[') {
     cp->pos++;
+    int64_t *n = malloc(2 * sizeof(int64_t));
     struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    if (!n || !v) { free(n); free(v); cp->err = 1; return 0; }
     v->data = NULL; v->len = 0; v->cap = 0;
+    /* Built as a node up front so an error part-way through frees the
+     * elements already parsed with json-free-node-, not just the vector. */
+    n[0] = 5; n[1] = (int64_t)(intptr_t)v;
     json_hydec_hyskip_hyws_hy(c);
     if (cp->s[cp->pos] != ']') {
       for (;;) {
         int64_t elem = json_hydec_hyparse_hyvalue_hy(c);
-        if (cp->err) { free(v->data); free(v); return 0; }
+        if (cp->err) { json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         if (v->len >= v->cap) {
-          v->cap = v->cap > 0 ? v->cap * 2 : 4;
-          v->data = realloc(v->data, v->cap * sizeof(int64_t));
+          size_t ncap = v->cap > 0 ? v->cap * 2 : 4;
+          int64_t *nd = realloc(v->data, ncap * sizeof(int64_t));
+          if (!nd) {
+            json_hyfree_hynode_hy(elem); json_hyfree_hynode_hy((int64_t)(intptr_t)n);
+            cp->err = 1; return 0;
+          }
+          v->data = nd; v->cap = ncap;
         }
         v->data[v->len++] = elem;
         json_hydec_hyskip_hyws_hy(c);
         if (cp->s[cp->pos] == ']') break;
-        if (cp->s[cp->pos] != ',') { cp->err = 1; free(v->data); free(v); return 0; }
+        if (cp->s[cp->pos] != ',') { cp->err = 1; json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         cp->pos++;
       }
     }
     cp->pos++;
-    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 5; n[1] = (int64_t)(intptr_t)v;
+    cp->depth--;
     return (int64_t)(intptr_t)n;
   }
   /* object */
   if (ch == '{') {
     cp->pos++;
-    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 6; n[1] = 0;
+    int64_t *n = malloc(2 * sizeof(int64_t));
+    if (!n) { cp->err = 1; return 0; }
+    n[0] = 6; n[1] = 0;
     json_hydec_hyskip_hyws_hy(c);
     if (cp->s[cp->pos] != '}') {
       for (;;) {
         json_hydec_hyskip_hyws_hy(c);
         char *key = (char *)json_hydec_hyparse_hystring_hy(c);
-        if (!key || cp->err) { free(n); return 0; }
+        if (!key || cp->err) { free(key); cp->err = 1; json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         json_hydec_hyskip_hyws_hy(c);
-        if (cp->s[cp->pos] != ':') { cp->err = 1; free(key); free(n); return 0; }
+        if (cp->s[cp->pos] != ':') { cp->err = 1; free(key); json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         cp->pos++;
         int64_t val = json_hydec_hyparse_hyvalue_hy(c);
-        if (cp->err) { free(key); free(n); return 0; }
+        if (cp->err) { free(key); json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         int64_t *entry = malloc(3 * sizeof(int64_t));
+        if (!entry) {
+          free(key); json_hyfree_hynode_hy(val); json_hyfree_hynode_hy((int64_t)(intptr_t)n);
+          cp->err = 1; return 0;
+        }
         entry[0] = (int64_t)(intptr_t)key;
         entry[1] = val;
         entry[2] = n[1];
         n[1] = (int64_t)(intptr_t)entry;
         json_hydec_hyskip_hyws_hy(c);
         if (cp->s[cp->pos] == '}') break;
-        if (cp->s[cp->pos] != ',') { cp->err = 1; free(n); return 0; }
+        if (cp->s[cp->pos] != ',') { cp->err = 1; json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         cp->pos++;
       }
     }
     cp->pos++;
+    cp->depth--;
     return (int64_t)(intptr_t)n;
   }
   cp->err = 1;
@@ -8772,8 +8896,8 @@ static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
 }
 
 static int64_t json_sldecode(const char * s) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
-  struct tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
+  struct tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
   int64_t result = json_hydec_hyparse_hyvalue_hy((void *)&ctx);
   if (ctx.err) return 0;
   return result;
@@ -8803,8 +8927,8 @@ static int64_t json_sldecode_hyfile_ex(const char * path) {
   }
   fclose(f);
   buf[len] = 0;
-  struct tur_json_ctx { const char *s; size_t pos; int err; };
-  struct tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0;
+  struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
+  struct tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
   int64_t result = json_hydec_hyparse_hyvalue_hy((void *)&ctx);
   free(buf);
   if (ctx.err) return 0;

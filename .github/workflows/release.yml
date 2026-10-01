@@ -11,6 +11,12 @@ on:
   # `release` job is gated on a tag ref, so a dispatch can never publish.
   workflow_dispatch:
 
+# C-5: read by default; the `release` job raises itself to `contents: write`
+# (and, for C-4, to the two scopes build provenance needs).  The build jobs
+# compile and upload artifacts and want nothing beyond read.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -30,7 +36,7 @@ jobs:
             cmake_extra: ""
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -112,7 +118,7 @@ jobs:
           esac
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: turmeric-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
@@ -134,9 +140,9 @@ jobs:
         shell: bash
         run: git config --global core.autocrlf input
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
           update: true
@@ -260,7 +266,7 @@ jobs:
           esac
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: turmeric-windows-x86_64
           path: ${{ env.ARCHIVE }}
@@ -277,13 +283,15 @@ jobs:
     name: Package docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # genguides.py dates each guide from the commit that added it.
           fetch-depth: 0
 
       - name: Install doc generator dependencies
-        run: python3 -m pip install -r tools/requirements.txt
+        # C-5: --require-hashes.  This job builds the turmeric-docs tarball the
+        # release publishes, so its Python inputs are release inputs.
+        run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Build the docs and the docs pack
         run: |
@@ -308,7 +316,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: turmeric-docs
           path: ${{ env.ARCHIVE }}
@@ -337,10 +345,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # C-4: build provenance. `id-token: write` mints the OIDC token that
+      # identifies this workflow run to Sigstore; `attestations: write` stores
+      # the signed statement against the repo. Both are scoped to this job --
+      # the build legs never hold either.
+      id-token: write
+      attestations: write
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
           merge-multiple: true
@@ -351,8 +365,31 @@ jobs:
           sha256sum * > sha256sums.txt
           cat sha256sums.txt
 
+      # C-4 in docs/upcoming/security-audit-plan.md. Until now every release
+      # asset was unsigned: sha256sums.txt says the bytes did not change in
+      # transit, but it is served from the same origin as the assets, so it is
+      # integrity and never authenticity. Anyone who can write to the release
+      # page can rewrite both together.
+      #
+      # This binds each asset to the workflow, repository, commit and run that
+      # produced it, signed through Sigstore with a short-lived certificate
+      # minted from the job's OIDC token -- there is no long-lived key for
+      # anyone to lose. A consumer verifies with:
+      #
+      #   gh attestation verify turmeric-<tag>-<target>.tar.gz \
+      #     --repo rjungemann/turmeric
+      #
+      # Placed AFTER the checksums step so sha256sums.txt is attested too, and
+      # BEFORE the release is created so a failure here strands the tag rather
+      # than publishing unattested assets -- the same posture the `if:` above
+      # takes for a failed build leg.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'artifacts/*'
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: artifacts/*
           generate_release_notes: true

@@ -385,6 +385,7 @@ static void pb_puts(PBuf *b, const char *s) {
     if (b->left) *b->p = '\0';
 }
 
+static void pb_printf(PBuf *b, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
 static void pb_printf(PBuf *b, const char *fmt, ...) {
     char tmp[128];
     va_list ap; va_start(ap, fmt);

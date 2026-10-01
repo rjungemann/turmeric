@@ -107,6 +107,12 @@
       int64_t cap; int64_t alloc; int closed;
   } WorkQueueBlock;
   if (cap <= 0) { fprintf(stderr, "work-queue-new-bounded: cap must be > 0\n"); abort(); }
+  /* `cap * 8` wrapped for a huge cap, and push overran the tiny block
+     (security audit WP5, M-5). */
+  if ((uint64_t)cap > SIZE_MAX / sizeof(int64_t)) {
+    fprintf(stderr, "work-queue-new-bounded: cap %lld out of range\n", (long long)cap);
+    abort();
+  }
   WorkQueueBlock *q = (WorkQueueBlock *)malloc(sizeof(WorkQueueBlock));
   if (!q) { fprintf(stderr, "work-queue-new-bounded: oom\n"); abort(); }
   pthread_mutex_init(&q->lock, NULL);
@@ -361,6 +367,13 @@
 (defn thread-pool-new [n : int] : ThreadPoolHandle
   ```c
   if (n <= 0) { fprintf(stderr, "thread-pool-new: n must be > 0\n"); abort(); }
+  /* `n * sizeof(pthread_t)` wrapped for a huge n and the first
+     pthread_create wrote past the block; the spawn loop's `int i` bounds n
+     too (security audit WP5, M-5). */
+  if (n > INT32_MAX || (uint64_t)n > SIZE_MAX / sizeof(pthread_t)) {
+    fprintf(stderr, "thread-pool-new: n %lld out of range\n", (long long)n);
+    abort();
+  }
 
   typedef struct {
       void *queue;
@@ -595,6 +608,12 @@
   ```c
   if (min_threads <= 0 || max_threads < min_threads) {
       fprintf(stderr, "thread-pool-new-dynamic: 0 < min_threads <= max_threads required\n");
+      abort();
+  }
+  /* As thread-pool-new: max_threads sizes the threads array. */
+  if (max_threads > INT32_MAX || (uint64_t)max_threads > SIZE_MAX / sizeof(pthread_t)) {
+      fprintf(stderr, "thread-pool-new-dynamic: max_threads %lld out of range\n",
+              (long long)max_threads);
       abort();
   }
 

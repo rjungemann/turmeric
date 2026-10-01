@@ -1,0 +1,15 @@
+trailing backslash: error
+backslash in array: error
+depth 256: ok
+depth 257: error
+depth 2000: error
+utf-8 bytes: 10
+lone high surrogate: error
+high surrogate then text: error
+lone low surrogate: error
+u0000: error
+short u escape: error
+bad array: error
+bad object: error
+control chars: "a\u0001b\tc\u001f\b\f"
+ok: {"k":[1,"v\n",true,null]}

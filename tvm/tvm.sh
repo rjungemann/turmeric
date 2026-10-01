@@ -205,6 +205,24 @@ __tvm_release_base() {
   printf '%s\n' "${TVM_RELEASE_BASE_URL:-https://github.com/rjungemann/turmeric/releases/download}"
 }
 
+# Shared refusal for the three ways integrity verification can fail to HAPPEN
+# -- as distinct from failing.  Without --insecure the partial download is
+# removed and the install stops; with it, the same text prints as a warning and
+# the install continues.  A checksum MISMATCH is handled at the call site and
+# is never downgradable: that is a failed check, not a missing one.
+__tvm_verify_refuse() {
+  _vr_tarball="$1"; _vr_insecure="$2"; _vr_why="$3"
+  if [ "$_vr_insecure" = 1 ]; then
+    __tvm_log "tvm: WARNING: $_vr_why -- installing anyway (--insecure)"
+    return 0
+  fi
+  __tvm_err "refusing to install an unverified download: $_vr_why"
+  __tvm_err "  This is an integrity check that could not run, not one that failed."
+  __tvm_err "  Re-run with --insecure to install without verification."
+  rm -f "$_vr_tarball"
+  return 1
+}
+
 __tvm_api_url() {
   printf '%s\n' "${TVM_API_URL:-https://api.github.com/repos/rjungemann/turmeric/releases}"
 }
@@ -216,19 +234,21 @@ __tvm_api_url() {
 __tvm_cmd_install() {
   _build=0
   _activate=0
+  _insecure=0
   _from=""
   _ver=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --build)    _build=1 ;;
       --activate) _activate=1 ;;
+      --insecure) _insecure=1 ;;
       --from)     shift; _from="$1" ;;
       -*)         __tvm_err "unknown flag: $1"; return 1 ;;
       *)          _ver="$1" ;;
     esac
     shift
   done
-  [ -n "$_ver" ] || { __tvm_err "usage: tvm install [--build] [--activate] <version>"; return 1; }
+  [ -n "$_ver" ] || { __tvm_err "usage: tvm install [--build] [--activate] [--insecure] <version>"; return 1; }
   _ver="$(__tvm_normalize "$_ver")"
 
   if __tvm_installed "$_ver"; then
@@ -249,6 +269,14 @@ __tvm_cmd_install() {
     if [ -n "$_from" ]; then
       _url="$_from"
     else
+      # C-2: the asset and the sums file that vouches for it both come from
+      # this base, so an override redirects the artifact AND its checksum
+      # together -- integrity, never authenticity.  Say so rather than let a
+      # stray export in a shell profile quietly repoint the installer.
+      if [ -n "${TVM_RELEASE_BASE_URL:-}" ]; then
+        __tvm_log "tvm: NOTE: TVM_RELEASE_BASE_URL overrides the release origin"
+        __tvm_log "tvm:       -> $TVM_RELEASE_BASE_URL"
+      fi
       _url="$(__tvm_release_base)/${_tag}/${_asset}"
     fi
     _tarball="$(__tvm_cache_dir)/downloads/${_asset}"
@@ -260,23 +288,53 @@ __tvm_cmd_install() {
       return 1
     }
 
-    # Verify SHA-256 against the checksums file when available.
-    if [ -z "$_from" ]; then
+    # Verify SHA-256 against the release's checksums file.
+    #
+    # C-2 in docs/upcoming/security-audit-plan.md: this block used to fail OPEN
+    # four separate ways, three of them in total silence -- an unreachable or
+    # empty sums file skipped the whole `if`, an asset with no row in it left
+    # $_want empty so the mismatch test was simply false, and a host with no
+    # sha256 tool logged a line and carried on.  An integrity check that
+    # silently does not run is worse than none, because README.md and
+    # index.html both point at tvm as the checksum-verified way to install.
+    # All three are refusals now, with --insecure as the single loud opt-out.
+    if [ -n "$_from" ]; then
+      # --from names the artifact directly, so there is no release to fetch a
+      # sums file from and nothing to check it against.  The user chose this
+      # source explicitly, so it is not an error -- but it is never silent.
+      __tvm_log "tvm: --from given; checksum verification skipped"
+    else
       _sums_url="$(__tvm_release_base)/${_tag}/sha256sums.txt"
       _sums="$(__tvm_fetch_text "$_sums_url" 2>/dev/null)"
+      # Computed unconditionally, not inside the `-n "$_sums"` arm as before:
+      # otherwise the "no sha256 tool" case is unreachable whenever the sums
+      # fetch has already failed -- i.e. precisely when it matters most.
+      _got="$(__tvm_sha256 "$_tarball")"
+      _rc=$?
+      _want=""
       if [ -n "$_sums" ]; then
-        _want="$(printf '%s\n' "$_sums" | grep -E "[[:space:]]\*?${_asset}\$" | head -n1 | cut -d' ' -f1)"
-        _got="$(__tvm_sha256 "$_tarball")"
-        _rc=$?
-        if [ "$_rc" = 2 ]; then
-          __tvm_log "tvm: no sha256 tool; skipping checksum verification"
-        elif [ -n "$_want" ] && [ "$_want" != "$_got" ]; then
-          __tvm_err "checksum mismatch for $_asset"
-          __tvm_err "  expected $_want"
-          __tvm_err "  got      $_got"
-          rm -f "$_tarball"
-          return 1
-        fi
+        _want="$(printf '%s\n' "$_sums" \
+                   | grep -E "[[:space:]]\*?${_asset}\$" | head -n1 | cut -d' ' -f1)"
+      fi
+
+      if [ "$_rc" = 2 ]; then
+        __tvm_verify_refuse "$_tarball" "$_insecure" \
+          "this host has neither sha256sum nor shasum, so $_asset cannot be checked" \
+          || return 1
+      elif [ -z "$_sums" ]; then
+        __tvm_verify_refuse "$_tarball" "$_insecure" \
+          "could not fetch $_sums_url" || return 1
+      elif [ -z "$_want" ]; then
+        __tvm_verify_refuse "$_tarball" "$_insecure" \
+          "sha256sums.txt has no row for $_asset" || return 1
+      elif [ "$_want" != "$_got" ]; then
+        # A mismatch is a check that RAN and said no.  --insecure does not
+        # apply: there is no version of "the bytes are wrong" worth ignoring.
+        __tvm_err "checksum mismatch for $_asset"
+        __tvm_err "  expected $_want"
+        __tvm_err "  got      $_got"
+        rm -f "$_tarball"
+        return 1
       fi
     fi
 
@@ -677,6 +735,7 @@ Usage: tvm <command> [args]
 
 Install / remove
   install [--build] [--activate] <version>   download (or build) and cache a release
+              --insecure                      install even if the SHA-256 cannot be checked
   uninstall <version>                         remove an installed version
 
 Switch

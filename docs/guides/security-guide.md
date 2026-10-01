@@ -27,7 +27,7 @@ keeps.
 | # | Boundary | Untrusted input | Promise |
 | --- | --- | --- | --- |
 | T1 | Compiling a project | a `.tur` tree, its `build.tur`, its `spices/`, its Justfile | Split -- see below. `tur build` makes **no promise**. `tur check`, `tur run --list` and the language server promise not to execute repo-supplied code or shell unless you asked them to. |
-| T2 | A compiled program's own inputs | bytes handed to stdlib readers: `bytes->serial-cont`, image files, JSON, HTTP requests to `httpd`, `read-async` lengths | A malformed input is a `result` error or a panic -- never a wild read or write. |
+| T2 | A compiled program's own inputs | bytes handed to stdlib readers: `bytes->serial-cont`, image files, JSON, HTTP requests to `httpd`, `read-async` lengths | A malformed input is a `result` error or a panic -- never a wild read or write. Well-formed is not authentic: authenticating bytes is the program's job. |
 | T3 | The sandboxed interpreter | the program text evaluated inside `Env/new-sandboxed`, the macro environment, or the playground | A capability-denied environment does no I/O, no filesystem, no process, no environment, no FFI, no inline C; it cannot corrupt or end the host process; and it terminates under fuel. |
 | T4 | The supply chain | the installer, release assets, `tur fetch` of a `:url` spice, Actions inputs | Installing a release gets you the bytes CI built, verifiably. A spice pinned in `tur.lock` cannot change under a rebuild without a diagnostic. |
 | T5 | Editor protocols | LSP, DAP and MCP messages over stdio | The peer is your editor, so it is semi-trusted -- but framing must be robust. A bad `Content-Length` must not overflow. |
@@ -53,6 +53,17 @@ execute arbitrary code through at least:
 - `:c-sources`, which names C files to compile into your binary;
 - `:cmake-deps`, which runs upstream CMake.
 
+What a manifest and an inline-C `__tur_autolink__` marker may contribute to
+that command line is now a fixed vocabulary -- `-l<name>`, `-L<dir>`,
+`-I<dir>`, `-D<key>[=<val>]`, `-framework <name>`, `-Wl,<...>`, a source or
+object path, or one of a short list of bare toolchain flags -- and anything
+else is a build error naming the token. That closes the *shell*: a manifest
+cannot smuggle `; touch x` into the command any more. It does not change the
+promise, because the vocabulary is itself enough to run code: `-l` names a
+library whose static initializers run, a `.c` path is compiled into your
+binary, and `-Wl,` speaks directly to the linker. It is a narrower channel,
+not a closed one, which is why `tur build` still promises nothing.
+
 This is not a defect list. It is the same position every compiler takes.
 `build.tur` is Turmeric's `.cargo/config.toml`: Cargo honours a repo's
 `rustflags` and `[target.*] runner` and documents that building a crate runs
@@ -69,26 +80,7 @@ These are different, because an editor runs them on a tree you have merely
 
 > **They do not execute repo-supplied code or shell unless you asked them to.**
 
-Three things stand between that promise and the implementation today.
-
-#### `tur run --list` evaluates Justfile backticks (open, high)
-
-A Justfile variable assignment may have a backtick command substitution:
-
-```
-commit := `git rev-parse HEAD`
-```
-
-`tur run` evaluates those while *parsing* the Justfile, and parsing happens
-before listing -- so `tur run --list`, which reads in every toolchain on earth
-as an inventory command, runs the shell. `--list` failing that surprise test is
-a defect regardless of what this guide promises.
-
-The fix is scoped: defer a backtick from parse time to the first recipe
-invocation that actually uses the variable. Tracked as D-2 in the
-[security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
-
-Until it lands: **`tur run --list` is not safe on a tree you do not trust.**
+Two things stand between that promise and the implementation today.
 
 #### `tur check` expands macros, and the macro environment is not yet a boundary (open, high)
 
@@ -98,11 +90,14 @@ enforced for every native function as well as the builtins (T3): a
 `defmacro*` body that calls `process/spawn`, deletes a file or reads the
 environment gets a diagnostic, and nothing runs.
 
-It is still not a boundary against a hostile tree, for the reason T3 gives: a
-`defmacro*` body can forge a handle and read or write an arbitrary address in
-the compiler's process (S-5). When that is fixed, a genuinely
-capability-denied macro environment will be a *better* story than Rust's, and
-this guide will promise it.
+It is still not a full boundary against a hostile tree, for the reason T3 gives:
+the native handle-forgery channel is now closed in the macro env too (the
+provenance registry turns on when its capabilities are dropped), but a
+`defmacro*` body can still launder an integer into a pointer through an erasing
+ascription in the interpreter's value model and read or write an arbitrary
+address in the compiler's process (S-5, value-model channel). When that is
+closed too, a genuinely capability-denied macro environment will be a *better*
+story than Rust's, and this guide will promise it.
 
 Until then there is an opt-out. The global flag `--no-proc-macros` refuses
 every `defmacro*` with a diagnostic, so no macro-time code runs -- what
@@ -122,15 +117,18 @@ an untrusted crate.**
 tree into a shared library under `.tur-repl-cache/`, and `dlopen`s it. That is
 Gradle-tier behaviour and this guide makes **no promise** about it.
 
-Worse, whether to rebuild is decided by comparing mtimes, so a repository that
-*commits* a `.tur-repl-cache/lib-N.so` newer than its sources gets that object
-loaded with no build at all.
+What it does guarantee is that the object loaded is one *this* `tur` built: the
+cache carries a `.built-by` sidecar recording the compiler's version, path,
+size and mtime, and a mismatch forces a rebuild. So a repository that commits a
+`.tur-repl-cache/lib-N.so` does not get it loaded.
 
-The opt-out, `TUR_NO_AUTO_SPICE=1`, is default-allow, which points the wrong
-way: pnpm, Bun, Deno and Neovim have all moved to default-deny plus an
+The opt-out, `TUR_NO_AUTO_SPICE=1`, is still default-allow, which points the
+wrong way: pnpm, Bun, Deno and Neovim have all moved to default-deny plus an
 allowlist. The intended replacement is direnv's model -- hash the tree's
-`build.tur`, ask once, remember the answer -- which turns this from a defect
-into a documented design. Tracked as D-3.
+`build.tur`, ask once, remember the answer -- which would turn auto-discovery
+from something this guide declines to promise into a documented design.
+Tracked as D-3 in the
+[security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
 
 ### Editor trust support
 
@@ -158,27 +156,39 @@ image, a JSON body, an HTTP request. **The stdlib reader must not corrupt memory
 on any input.** A malformed input is a `result` error or a panic, never a wild
 read or write. This is the ordinary promise a runtime library makes.
 
-**Status today: not kept for the serial/continuation and image paths (M-1,
-open, high).** `tur_serial_cont_deserialize` bounds-checks nothing: frame count,
-name length, string length and environment length are all trusted from the
-input, and raw integers from the byte stream become frame environments.
-`bytes->serial-cont` validates first, but shallowly, and two entry points --
-`resume-cont!` and `image/blob-resume!` -- skip validation altogether. An
-image's CRC covers its 68-byte header only, while the payload length read from
-that header sizes a `malloc`.
+What the stdlib readers do:
 
-This matters most where the project already ships T2 across a network: the
-guestbook example resumes a continuation from a `POST` token. **Today a forged
-token is a forged continuation.** Do not accept a serialized continuation from
-an untrusted source.
+- **Serialized continuations.** Every route that rebuilds one --
+  `bytes->serial-cont`, `resume-cont!`, `image/blob-resume!` -- runs the same
+  check inside the runtime: each record must fit the buffer, carry a known tag,
+  and, for a call frame, name a frame this program registered, with the
+  environment kind that frame was registered with. `bytes->serial-cont` turns a
+  bad buffer into an `Err`; the others panic.
+- **Images.** The header's payload length is held to the file's real size, a
+  CRC covers the payload as well as the header, and the continuation is checked
+  before the image counts as loadable -- a damaged image is a cold start.
+- **JSON.** Both decoders (compiled and interpreter) cap nesting at 256, decode
+  `\uXXXX` (a lone surrogate or `\u0000` is an error), and free what they built
+  when they fail.
+- **`httpd`.** A malformed, conflicting or oversized `Content-Length`, and any
+  `Transfer-Encoding`, is refused before a byte of the body is read; the body
+  cap defaults to 8 MiB (`httpd-set-max-body!`). Servers bind loopback unless
+  the program asks for more. See
+  [httpd-guide](httpd-guide.md#binding-and-request-limits).
 
-Whether `bytes->serial-cont` should verify an HMAC -- integrity is not
-authenticity -- is an open question in the audit plan.
+These readers, along with the LSP framing and the compiler's own front door
+(the reader, the manifest reader, the Justfile parser), run nightly under
+libFuzzer with ASan and UBSan -- see `tests/fuzz/README.md`.
 
-Also open under T2: JSON has no nesting depth limit and over-reads on input
-ending in a backslash (M-2); `httpd` does not cap a request body and does not
-reject a request carrying both `Content-Length` and `Transfer-Encoding` (M-4);
-several size computations are done in signed `int` (M-5).
+**Checked is not authenticated.** A continuation buffer that passes the check
+still rebuilds a continuation of *this program's* frames with whatever
+environment values the buffer carries, and an image's CRCs catch corruption,
+not tampering -- anyone who can write the file can recompute them. Do not
+resume bytes that crossed a trust boundary without authenticating them first;
+the guestbook example keeps continuations server-side and hands the client only
+an HMAC-signed name. A `Serializable` instance's own `deserialize`, which
+receives an environment's bytes, is the program's code and the program's
+responsibility.
 
 ---
 
@@ -200,18 +210,35 @@ classes and the rows that are not pure. `load` and `import` are refused
 outright, and the `extern-c` overrides for `printf`, `getenv` and `exit` need
 FFI like every other `extern-c`.
 
-**Status today: memory safety is not kept (S-5, open, high).** Most natives
-take a collection, string or continuation handle as a bare integer and cast it
-to a pointer, and nothing checks that the integer came from the matching
-constructor. So sandboxed text can forge one:
+**Status today: the native handle-forgery channel is closed; the value-model
+channel is not yet (S-5, partly fixed, still open, high).** Most natives take a
+collection, string or continuation handle as a bare integer and cast it to a
+pointer. In a restricted env a per-env **handle-provenance registry** now
+stands between the text and every native's cast: a native that mints a handle
+records it (keyed by handle kind), and a consumer native is refused unless its
+handle argument is a live handle of the matching kind. So the forgery that
+needed no capability -- and every sibling of it -- is now refused rather than a
+wild read/write:
 
 ```
-(vec-get 4096 0)   ; reads address 4096
+(vec-get 4096 0)   ; => error: not a live handle of the expected kind (S-5)
 ```
 
-That is a wild read, and the setters make it a wild write, so an adversary
-who can guess an address has the host process. It needs no capability. It is a
-property of the interpreter's value model rather than of any one native.
+Kind confusion (a real Vec replayed where a HAMT is expected, a count replayed
+as a handle) and use-after-free are refused the same way, while a genuinely
+minted vector, map, HAMT or string still round-trips. The registry, the
+per-native handle-signature column it reads (`src/turi/native_caps.c`), and the
+one dispatch hook are described in
+[the S-5 report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md).
+
+What is **not** yet closed is the narrower *value-model* channel: an erasing
+ascription on a type variable, and continuation resume, still launder a caller
+integer into a pointer WITHOUT passing through the native dispatch (the retag
+happens in the interpreter's own value model, e.g. `(:: x A)` in a generic body
+followed by a call or field read, and the CEK driver's continuation fold). The
+registry does not see those, because a bare `:int` in the value model carries no
+kind to check against. Closing them is the "tagged handles" route (direction 2
+in the report).
 
 A panic, by contrast, no longer ends the host. In an environment without
 `TURI_CAP_PROC`, a panic that nothing catches, and the error exits of natives
@@ -219,10 +246,12 @@ like an out-of-bounds `vec-get`, come back to the embedder as a `TURI_ERROR`
 reading `panic: <msg>`, and the environment stays usable. A panicking
 `defmacro*` is an ordinary expansion diagnostic.
 
-Until S-5 is fixed, **do not treat `Env/new-sandboxed` as a boundary against
-hostile code.** It is now a sound boundary against *careless* code -- a plug-in
-cannot open a file, spawn a process, or read the environment, however it
-spells the call -- but not against code written to corrupt memory.
+Until the value-model channel is closed too, **do not treat
+`Env/new-sandboxed` as a full boundary against hostile code.** It is a sound
+boundary against *careless* code -- a plug-in cannot open a file, spawn a
+process, read the environment, or forge a collection/string handle from an
+integer, however it spells the call -- but a program written to launder an
+integer through an erasing ascription can still corrupt memory.
 
 ### Try Turmeric
 
@@ -231,6 +260,42 @@ boundary is the browser's, and the WebAssembly build has no filesystem and no
 process spawning to reach. That is an acceptable posture for a playground and
 this guide records it as intentional rather than a gap.
 
+What the site does promise is the ordinary web one: **text you did not write --
+a pasted file, an opened project zip, a restored tab, a docs page -- is shown
+as text and never runs as script in the page.** Three things keep it:
+
+- **A Content-Security-Policy on every response from turmeric-lang.com**,
+  defined once in `web/csp.js`. Its `script-src` has no `'unsafe-inline'`, so
+  markup that gets past escaping does not execute. It allows WebAssembly
+  compilation (`'wasm-unsafe-eval'`), mermaid from one jsDelivr path, the doc
+  pages' web fonts, and inline *styles* -- Monaco needs them -- and it refuses
+  framing (`frame-ancestors 'none'`). The generated doc pages load their
+  scripts from files for the same reason.
+- **Escaping that holds in attributes as well as in element content**, so a
+  value interpolated into `value="..."` cannot add attributes of its own.
+- **A console transcript stored as data.** What the playground keeps in
+  `localStorage` is rebuilt with DOM calls on load, so nothing read back from
+  storage is ever parsed as markup.
+
+A program that never returns does not take the playground with it. After a
+second a **Stop** button ends it; after 30 seconds the playground stops it
+itself. Either way the interpreter restarts in a fresh session, and the
+definitions from earlier runs are gone.
+
+`'wasm-unsafe-eval'` is understood from Chrome 97, Firefox 102 and Safari 16.
+An older browser that also applies CSP to WebAssembly compilation will not load
+the interpreter.
+
+**The documentation is trusted content.** The in-app docs pane and the pages
+under `/docs/html/` are HTML generated from this repository's guides and
+docstrings and from the READMEs and docstrings in `turmeric-spices`
+(`tools/genguides.py`, `gendocs.py`, `genspices.py`). Markdown passes raw HTML
+through, so a spice whose README carries HTML puts that HTML on
+turmeric-lang.com, in the playground's origin. The policy stops it running
+script; it does not stop it restyling or rewording the page. The defence is
+review: read a documentation change to `turmeric-spices` as a change to the
+site.
+
 ---
 
 ## T4 -- The supply chain
@@ -238,62 +303,105 @@ this guide records it as intentional rather than a gap.
 **Installing a release should get you the bytes CI built, verifiably. A spice
 pinned in `tur.lock` should not change under a rebuild without a diagnostic.**
 
-**Status today: neither half is kept.**
+**Status today: the installer half is kept. The lockfile half detects a change
+but cannot yet pin against one.**
 
-### The installer builds `main` (C-1, open, high)
+### Installing
 
-The advertised install path --
-`curl -sSf https://turmeric-lang.com/install | sh` -- runs
-`brew install --HEAD`, and the Homebrew formula is `head`-only: no `url`, no
-`sha256`. So it compiles whatever `main` is at that moment. A bad afternoon on
-`main` reaches every new install, and there is no checksum anywhere in the path.
+`curl -sSf https://turmeric-lang.com/install | sh` installs the version manager
+(`tvm`) and then the latest **release**. The release tarball is checked against
+that release's `sha256sums.txt` before it is unpacked, and the install **stops**
+if that check cannot be made -- a missing sums file, a missing row for your
+platform's asset, or no `sha256` tool on the system are all refusals, not
+skips. `--insecure` is the single opt-out, and it does not apply to a checksum
+*mismatch*: a check that ran and said no is not a check that could not run.
 
-Release assets *do* exist, with a `sha256sums.txt`, but nothing installs from
-them except `tvm`. If you want a verified install today, use `tvm` or download
-a release tarball and check it by hand, as the
-[installation guide](releases-and-installation-guide.md) describes.
+`tvm` fetches itself at the release's tag rather than from `main`, so the
+bootstrap does not reintroduce what it removes. That is the same trust root as
+the release, not a stronger one -- whoever can move a tag can move the assets.
 
-### `tvm`'s checksum check can be skipped silently (C-2, open, medium)
+Release assets carry [build provenance](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations),
+signed through Sigstore with a short-lived certificate minted from the release
+job's OIDC token, so there is no long-lived key to lose:
 
-`tvm install` verifies a downloaded asset against the release's
-`sha256sums.txt`, but the check has four paths that skip it, and only one of
-them says so:
+```sh
+gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+```
 
-| Condition | What happens |
-| --- | --- |
-| `sha256sums.txt` missing, unreachable or empty | skipped, **silently** |
-| the asset has no row in that file | skipped, **silently** |
-| no `sha256` tool on the system | skipped, with a log line |
-| an explicit `--from` source | skipped |
+That is the check worth running, because `sha256sums.txt` is served from the
+same origin as the assets: on its own it proves the bytes did not change in
+transit, not who produced them. Tags are annotated rather than signed, which is
+a recorded decision -- the attestation is what protects a downloader, and it
+needs no key anyone has to hold.
 
-It should fail closed. Note also that the sums file is fetched from the same
-origin as the asset, which makes this an integrity check, not an authenticity
-one -- and that release assets are currently unsigned, with no build
-provenance attestation (C-4).
+**`brew install --HEAD rjungemann/turmeric/turmeric` builds whatever `main` is
+at that moment and verifies no checksum.** That is the supported way to track
+development and the wrong way to install the compiler. The Homebrew formula is
+`--HEAD`-only by design; it is not a pinned channel.
 
-### `tur.lock` is trust-on-first-use (C-3, open, medium)
+### `tur.lock` detects drift; it does not yet pin against it
 
-The hash in `tur.lock` is recomputed and **overwritten on every fetch**, so it
-records what you last downloaded rather than what you agreed to. It can
-therefore catch a local edit to `spices/` after a fetch; it cannot catch
-upstream changing under you.
+`tur fetch` compares a freshly fetched tree against the hash `tur.lock`
+recorded and **fails** when they differ, naming both hashes and pointing at
+`tur fetch --update` as the deliberate way to accept the change. A refused
+fetch leaves the recorded hash alone, so the failure does not evaporate on the
+next run. `tur run`, `tur build` and `tur audit` all re-hash the trees they are
+about to use, so an edit made to `spices/` after a fetch is caught by whichever
+you reach for.
 
-The single comparison in the tree runs in `tur run` only -- `tur build` does not
-check -- and it is skipped when the dependency directory is absent (that path
-fetches and rewrites the hash) and when the recorded hash predates the current
-algorithm.
+What it still cannot do is **check out the commit it recorded**. A clone tracks
+the branch or tag named in `:ref`; `:resolved` is recorded but never used to
+check out, so a branch-shaped `:ref` re-fetches to wherever that branch now
+points and you are asked to approve the change rather than held to the commit
+you locked. Tracked as
+[lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/reported/lock-tracks-ref-not-resolved-commit.md).
 
-`tur audit` lists origins; it does not verify them, and says so.
-
-So: **pin `:ref` to a tag rather than a branch, and read a new spice before you
-add it.** A `:cmake-deps` entry is a trust decision equivalent to running build
+So: **prefer a tag over a branch for `:ref`, and read a new spice before you add
+it.** A `:cmake-deps` entry is a trust decision equivalent to running build
 scripts from that repository.
 
 ### Workflows
 
-No workflow action is pinned to a commit SHA, `ci.yml` has no top-level
-`permissions:` block, and several toolchain installs float (C-5, C-6). This
-matters because the release pipeline is what T4's first promise depends on.
+Every workflow action is pinned to a full commit SHA with its version as a
+trailing comment, and Dependabot keeps those pins current -- a pinned action
+otherwise never moves, including past the fix for its own vulnerability.
+`ci.yml` and `release.yml` declare `permissions: contents: read` at the top and
+raise it per job; the repository's default workflow token is read-only as well,
+so the declaration is defense in depth rather than the only lock. Toolchain
+installs are pinned: an exact Emscripten SDK version, and `pip` requirements
+with hashes under `--require-hashes`.
+
+The `turmeric-spices` checkout in CI is deliberately **not** pinned. It is the
+same owner under the same account, inside the trust boundary `main` already
+draws, and a hand-maintained SHA in this repo is a pin that goes stale and then
+gets bumped blind.
+
+### Where a fuzz or TSan finding goes
+
+The nightly fuzz search, the libFuzzer parser targets and the TSan run all
+report findings to **Sentry**, and to nothing else: no public artifact, and the
+workflow log says only that something failed. This is deliberate. These jobs
+run on a public repository, where a run page is readable signed out and an
+artifact is downloadable by any signed-in user, so the previous arrangement --
+an auto-filed GitHub issue, plus target names in the step summary, plus the
+reproducers uploaded as an artifact -- published un-triaged memory-safety
+findings the moment a scheduled run finished.
+
+Two consequences worth stating plainly:
+
+- **Reproducers for un-triaged crashes are sent to a third party.** Sentry is
+  the custodian of that data. If that is not an acceptable dependency for your
+  fork, unset the `SENTRY_DSN` secret -- but read the next point first.
+- **A finding is never dropped to protect privacy.** If Sentry is
+  unconfigured or unreachable, the workflows fall back to uploading the
+  findings as a public artifact and say so loudly in the job summary. Losing a
+  memory-safety finding is worse than publishing one; the fallback is meant to
+  be fixed, not lived with.
+
+Findings group on target plus crash type plus the first non-sanitizer frame, so
+the same defect found on consecutive nights is one Sentry issue with a count
+rather than one report per night. The seed and the run URL travel as context,
+never as part of the grouping key.
 
 ---
 
@@ -302,11 +410,9 @@ matters because the release pipeline is what T4's first promise depends on.
 The peer is your own editor, so it is semi-trusted -- but **message framing
 must be robust**.
 
-**Status today: not kept (M-3, open, medium).** The LSP framing layer parses
-`Content-Length` with an unchecked `atol`. A value of `-1` wraps the
-`body_len + 1` allocation to zero, producing a `malloc(0)` followed by a huge
-read -- a heap overflow. Header accumulation is also unbounded. The debug
-adapter reuses the same reader.
+`tur lsp` and `tur dap` accept a `Content-Length` of plain decimal digits, at
+most 64 MiB, after a header block of at most 8 KiB; anything else ends the
+session as a framing error.
 
 ---
 

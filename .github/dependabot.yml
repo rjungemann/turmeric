@@ -1,0 +1,71 @@
+# C-8 in docs/upcoming/security-audit-plan.md.
+#
+# This exists mostly to serve the SHA pins from C-5. Pinning every action to a
+# commit is the right call for supply-chain reasons and the wrong one for
+# staying current -- a pinned action never moves, including past the fix for
+# its own vulnerability. Dependabot reads the `# v4.4.0` comment beside each
+# pin, notices the tag has moved, and opens a PR that bumps the SHA and the
+# comment together. Without it, the pins rot quietly.
+#
+# Weekly, not daily: this repo's standing position is that CI is a signal and
+# not a gate, and a daily dependency PR queue is noise that gets ignored, which
+# is worse than no queue. `open-pull-requests-limit` is deliberately small for
+# the same reason.
+version: 2
+
+updates:
+  # GitHub Actions -- the one that matters, because of the C-5 pins.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"
+    groups:
+      # One PR for the whole actions/* family rather than eight. They move
+      # together and are reviewed together.
+      actions-official:
+        patterns: ["actions/*"]
+
+  # npm -- the Try Turmeric playground. Its dependencies reach a browser on
+  # turmeric-lang.com, which WP6 just spent a package hardening.
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "web"]
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+
+  # pip -- tools/requirements.txt, which C-5 pinned with hashes. Dependabot
+  # regenerates the digests when it bumps the version, which is the only
+  # comfortable way to maintain a --require-hashes file by hand.
+  - package-ecosystem: "pip"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docs"]
+
+  # Docker -- the two Dockerfiles pin their bases by tag (C-7). Low stakes,
+  # both developer-facing, but free to watch now that the file exists.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    labels: ["dependencies"]
+
+  - package-ecosystem: "docker"
+    directory: "/.devcontainer"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    labels: ["dependencies"]

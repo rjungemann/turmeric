@@ -825,6 +825,13 @@ EOF
 # AUDIT1: with no tur.lock, every :url origin is reported UNPINNED. A :path dep
 # is not -- it resolves from local source and has nothing to pin, so flagging it
 # would train the reader to ignore the warning.
+#
+# The honesty line is asserted too, because it is the part most likely to drift
+# away from what the command actually does. It used to read "it verifies
+# nothing"; since C-3 (security-audit-plan) `tur audit` re-hashes every present,
+# pinned tree, so with no lockfile it now says it has nothing to verify AGAINST
+# -- and still says the hashes are not a signature, which remains true and is
+# the claim that must never quietly disappear.
 AUD_OUT=$(mktemp)
 ( cd "$AUD/proj" && "$LS6_ABS_TUR" audit ) >"$AUD_OUT" 2>&1
 rc=$?
@@ -833,7 +840,8 @@ if [ "$rc" -eq 0 ] \
    && grep -qF 'example.invalid/raylib' "$AUD_OUT" \
    && grep -qF 'local path' "$AUD_OUT" \
    && [ "$(grep -c 'NOT IN tur.lock' "$AUD_OUT")" -eq 2 ] \
-   && grep -qF 'verifies nothing' "$AUD_OUT"; then
+   && grep -qF 'nothing to verify against' "$AUD_OUT" \
+   && grep -qF 'not a signature' "$AUD_OUT"; then
     echo "PASS AUDIT1: audit lists origins and flags the unpinned ones"
     PASS=$((PASS + 1))
 else

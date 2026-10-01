@@ -101,6 +101,46 @@ def build_categories_from_meta(meta_by_stem: dict, all_stems: set) -> list:
 
 STYLE_REL = '../api/style.css'
 
+# ---------------------------------------------------------------------------
+# Page scripts and fonts under the site's Content-Security-Policy
+#
+# Every generated page is served from turmeric-lang.com under the policy in
+# web/csp.js, whose script-src carries no 'unsafe-inline'. So nothing a page
+# runs may be written into the page: behaviour ships as .js files written
+# beside the pages that load them (write_page_scripts), named with a plain
+# <script src> (script_tag), and the fonts are ordinary stylesheet links rather
+# than the `<link rel=preload onload="this.rel='stylesheet'">` swap -- under the
+# policy that handler never runs and the fonts never apply.
+#
+# The files are relative to the page, so a docs tarball read from disk keeps
+# working exactly as it did.
+# ---------------------------------------------------------------------------
+
+def font_links(indent: str = '  ') -> str:
+    """The web-font preconnects and stylesheets every generated page loads."""
+    return '\n'.join(indent + line for line in (
+        '<link rel="preconnect" href="https://fonts.googleapis.com">',
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>',
+        '<link rel="preconnect" href="https://cdn.jsdelivr.net">',
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap">',
+        '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css">',
+        '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css">',
+    ))
+
+
+def script_tag(src: str, indent: str = '  ') -> str:
+    """A classic external script. Placed where the inline block used to be, so
+    it runs at the same point in the parse."""
+    return f'{indent}<script src="{src}"></script>'
+
+
+def write_page_scripts(out_dir: Path, scripts: dict[str, str]) -> None:
+    """Write each `name -> source` pair to out_dir/name."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, src in scripts.items():
+        (out_dir / name).write_text(src.rstrip('\n') + '\n', encoding='utf-8')
+
 # Native `title` tooltips for the site chrome (topbar, sidebar, footer). Keyed
 # by site-relative href -- absolute turmeric-lang.com URLs, which the spices
 # site uses for cross-site links, are normalized to the same key so all three
@@ -283,9 +323,9 @@ PAGE_HEADER = build_page_header(active='Guides')
 INDEX_PAGE_HEADER = (build_page_header(active='Guides', search='Filter guides')
                      + '\n  <p class="search-no-results">No matching guides.</p>')
 
-INDEX_FILTER_JS = '''\
-  <script>
-  document.addEventListener('DOMContentLoaded', function(){
+# The guides index's filter box. Loaded from guide-index.js (see script_tag).
+INDEX_FILTER_JS_SRC = '''\
+document.addEventListener('DOMContentLoaded', function(){
     var input = document.querySelector('.search-input');
     if (!input) return;
 
@@ -335,16 +375,14 @@ INDEX_FILTER_JS = '''\
         input.focus();
       }
     });
-  });
-  </script>'''
+});'''
 
 # The mobile drawer. One implementation, shared by every generated page and
 # mirrored by `web/site.js` for the hand-written ones, so the hamburger does
 # the same four things everywhere: toggle, close on overlay, close on Escape,
-# close after following a link.
-SIDEBAR_DRAWER_JS = '''\
-  <div class="sidebar-overlay"></div>
-  <script>
+# close after following a link. The overlay element is page markup; the
+# behaviour is site-drawer.js, emitted by every generator that uses it.
+SIDEBAR_DRAWER_JS_SRC = '''\
     document.addEventListener('DOMContentLoaded', function(){
       var btn = document.querySelector('.hamburger');
       var sidebar = document.querySelector('.sidebar');
@@ -365,11 +403,14 @@ SIDEBAR_DRAWER_JS = '''\
       sidebar.addEventListener('click', function(e){
         if (e.target.closest('a')) setOpen(false);
       });
-    });
-  </script>'''
+    });'''
 
-# Kept under the old name for the two importers that still spell it this way.
-SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS
+
+def sidebar_drawer(base: str = '') -> str:
+    """The drawer's overlay plus its script, `base` being the relative path
+    from the page to the directory its site-drawer.js was written into."""
+    return ('  <div class="sidebar-overlay"></div>\n'
+            + script_tag(base + 'site-drawer.js'))
 
 # ---------------------------------------------------------------------------
 # Guide runtime -- one source, three consumers
@@ -381,8 +422,8 @@ SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS
 # genspices.py renders, and by Try Turmeric's in-app docs pane, which renders
 # the very same bodies out of the docs pack.
 #
-# So GUIDE_JS_CORE below is the only copy. The site pages inline it and call
-# into it immediately (GUIDE_RUNTIME_JS); the docs pack ships it as guide.js
+# So GUIDE_JS_CORE below is the only copy. The site pages load it and call
+# into it immediately (guide-runtime.js); the docs pack ships it as guide.js
 # and the pane calls the same two entry points against its own subtree after
 # each render. Both entry points take a root element and are idempotent, which
 # is what makes re-running them on a freshly rendered fragment safe.
@@ -833,7 +874,7 @@ GUIDE_JS_CORE = '''\
   // in the <pre>: with no network (the offline docs pane, a docs tarball read
   // from disk) the import fails and the diagram degrades to its own source
   // text, which is readable. It does not degrade to an empty box.
-  var MERMAID_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  var MERMAID_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs';
   var mermaidPromise = null;
 
   // Mermaid gets the guide palette by hand: it cannot read our CSS custom
@@ -920,21 +961,26 @@ GUIDE_JS_CORE = '''\
   if (typeof window !== 'undefined') window.turmericGuide = api;
 })();'''
 
-# What a rendered site page carries: the shared core, then the two calls that
-# used to be the bodies of TURMERIC_HIGHLIGHT_JS and SYNTAX_TOGGLE_JS.
-GUIDE_RUNTIME_JS = '''\
-  <script>
-''' + GUIDE_JS_CORE + '''
-  window.turmericGuide.highlightGuideCode(document);
-  window.turmericGuide.initSyntaxToggles(document);
-  window.turmericGuide.renderMermaid(document);
-  </script>'''
+# What a rendered site page runs, as guide-runtime.js: the shared core, then
+# the calls that apply it to the whole document.
+GUIDE_RUNTIME_JS_SRC = GUIDE_JS_CORE + '''
+window.turmericGuide.highlightGuideCode(document);
+window.turmericGuide.initSyntaxToggles(document);
+window.turmericGuide.renderMermaid(document);'''
 
-# Kept under their historical names so genspices.py (and any other caller)
-# keeps working; both now expand to the shared runtime, and emitting both into
-# one page is harmless because the core is idempotent and self-registering.
-TURMERIC_HIGHLIGHT_JS = GUIDE_RUNTIME_JS
-SYNTAX_TOGGLE_JS = ''
+
+def guide_runtime(base: str = '') -> str:
+    """The script tag for guide-runtime.js, relative to the page as for
+    sidebar_drawer."""
+    return script_tag(base + 'guide-runtime.js')
+
+
+# The scripts a guides directory needs beside its pages.
+GUIDE_PAGE_SCRIPTS = {
+    'site-drawer.js':   SIDEBAR_DRAWER_JS_SRC,
+    'guide-runtime.js': GUIDE_RUNTIME_JS_SRC,
+    'guide-index.js':   INDEX_FILTER_JS_SRC,
+}
 
 # Gold leads, green answers -- the same two-colour split the home page uses for
 # headline and emphasis, carried into long-form prose so a guide, an API page
@@ -1362,17 +1408,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set,
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title} | Turmeric Guides</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" onload="this.rel='stylesheet'">
-  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" onload="this.rel='stylesheet'">
-  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" onload="this.rel='stylesheet'">
-  <noscript>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css">
-  </noscript>
+{font_links()}
   <link rel="stylesheet" href="{STYLE_REL}">
   <style>
 {GUIDE_CSS}
@@ -1380,7 +1416,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set,
 </head>
 <body>
 {PAGE_HEADER}
-{SIDEBAR_TOGGLE_JS}
+{sidebar_drawer()}
   <div class="page-layout">
     <div class="sidebar">
       {sidebar_html}
@@ -1392,8 +1428,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set,
   <footer class="site-footer">
     Auto-generated by <code>tools/genguides.py</code> &mdash; source: <a href="https://github.com/rjungemann/turmeric/blob/main/docs/guides/{stem}.md"><code>docs/guides/{stem}.md</code></a>
   </footer>
-{TURMERIC_HIGHLIGHT_JS}
-{SYNTAX_TOGGLE_JS}
+{guide_runtime()}
 </body>
 </html>
 '''
@@ -1504,17 +1539,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Guides | Turmeric</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" onload="this.rel='stylesheet'">
-  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" onload="this.rel='stylesheet'">
-  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" onload="this.rel='stylesheet'">
-  <noscript>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css">
-  </noscript>
+{font_links()}
   <link rel="stylesheet" href="{STYLE_REL}">
   <style>
     .index-card ul li {{ margin:0.3rem 0; font-size:0.875rem; }}
@@ -1524,7 +1549,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
 </head>
 <body>
 {INDEX_PAGE_HEADER}
-{SIDEBAR_TOGGLE_JS}
+{sidebar_drawer()}
   <div class="page-layout">
     <div class="sidebar">
 {sidebar_html}
@@ -1543,8 +1568,8 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
   <footer class="site-footer">
     Auto-generated by <code>tools/genguides.py</code>
   </footer>
-{TURMERIC_HIGHLIGHT_JS}
-{INDEX_FILTER_JS}
+{guide_runtime()}
+{script_tag('guide-index.js')}
 </body>
 </html>
 '''
@@ -1632,6 +1657,7 @@ def main() -> None:
     guides_dir = Path(args.guides_dir)
     out_dir = Path(args.out) if args.out else guides_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+    write_page_scripts(out_dir, GUIDE_PAGE_SCRIPTS)
 
     md_files = sorted(f for f in guides_dir.glob('*.md') if f.stem != 'README')
     all_stems = {f.stem for f in md_files}

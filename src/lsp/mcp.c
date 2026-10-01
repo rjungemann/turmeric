@@ -722,6 +722,28 @@ static void mcp_tool_doc(const char *args, Buf *out, int *is_error) {
     lsp_doc_table_free(&dtable);
 }
 
+/* WP2 (D-8): make a path safe to pass as a positional argument.
+ *
+ * `run_subprocess("tur", {"tur", "format", path, NULL})` handed the editor's
+ * path straight to a `tur` subcommand, so a path beginning with `-` arrived as
+ * an option.  The usual fix is a `--` separator, but neither `tur format` nor
+ * `tur build` parses one (both print usage and exit 0), so adding it would
+ * break the tool rather than harden it.  `./-x` names the same file as `-x`
+ * and is not option-shaped, which is the whole fix.
+ *
+ * Returns false when there is nothing usable to pass. */
+static bool mcp_positional_path(const char *in, char *out, size_t cap) {
+    if (!in || !*in) return false;
+    if (in[0] == '-') {
+        if (strlen(in) + 3 > cap) return false;
+        snprintf(out, cap, "./%s", in);
+    } else {
+        if (strlen(in) + 1 > cap) return false;
+        snprintf(out, cap, "%s", in);
+    }
+    return true;
+}
+
 static void mcp_tool_format(const char *args, Buf *out, int *is_error) {
     char path[1024];
     if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
@@ -730,7 +752,13 @@ static void mcp_tool_format(const char *args, Buf *out, int *is_error) {
         return;
     }
 
-    char *argv[] = { "tur", "format", path, NULL };
+    char safe[1030];
+    if (!mcp_positional_path(path, safe, sizeof(safe))) {
+        buf_puts(out, "Invalid argument: path");
+        *is_error = 1;
+        return;
+    }
+    char *argv[] = { "tur", "format", safe, NULL };
     Buf sub;
     buf_init(&sub);
     int rc = run_subprocess("tur", argv, &sub);
@@ -752,7 +780,13 @@ static void mcp_tool_build(const char *args, Buf *out, int *is_error) {
         return;
     }
 
-    char *argv[] = { "tur", "build", dir, NULL };
+    char safe[1030];
+    if (!mcp_positional_path(dir, safe, sizeof(safe))) {
+        buf_puts(out, "Invalid argument: dir");
+        *is_error = 1;
+        return;
+    }
+    char *argv[] = { "tur", "build", safe, NULL };
     Buf sub;
     buf_init(&sub);
     int rc = run_subprocess("tur", argv, &sub);

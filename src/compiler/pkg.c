@@ -22,6 +22,7 @@
 #endif
 
 #include "platform_proc.h"
+#include "tur_argcheck.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -246,6 +247,55 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         s->ref      = form_str_dup(map_get_kw(val, "ref"));
         s->path     = form_str_dup(map_get_kw(val, "path"));
         s->subdir   = form_str_dup(map_get_kw(val, "subdir"));
+        /* WP2 (D-5, D-6): `name` and `:ref` are joined into the directory
+         * `tur fetch` CREATES -- `spices/<name>-<ref>` -- and `:ref` is also
+         * handed to git as a positional argument.  Neither was checked, so a
+         * transitive manifest could choose a write location outside `spices/`
+         * with a `..`, or hand git an option with a leading `-`.  A spice name
+         * is an identifier and a git ref has git's own rules; both are path
+         * segments here, which is the tightest thing that is also true. */
+        if (!tur_path_segment_ok(s->name)) {
+            diag_emit(DIAG_ERROR, key->span,
+                "build.tur: spice name '%s' is not a usable directory name -- "
+                "letters, digits, '.', '_', '-' and '+' only, not starting "
+                "with '-' or '.'", s->name ? s->name : "");
+            return false;
+        }
+        if (s->ref && !tur_git_ref_ok(s->ref)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :ref '%s' -- a ref "
+                "may hold letters, digits, '.', '_', '-', '+' and '/', must "
+                "not start with '-', '.' or '/', and must not contain '..'",
+                s->name, s->ref);
+            return false;
+        }
+        if (s->url && !tur_url_ok(s->url)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :url '%s' -- it must "
+                "not start with '-' or contain whitespace or a character the "
+                "shell would read as syntax", s->name, s->url);
+            return false;
+        }
+        /* `:subdir` names a directory INSIDE the fetched repo, so it is
+         * contained.  `:path`, by contrast, is documented as a sibling or
+         * monorepo pointer and legitimately climbs (`../leaf`,
+         * `../../turmeric-spices/spices/zlib`) -- it is a place we READ, never
+         * a place we create, so it gets shell-safety and no containment. */
+        if (s->subdir && !tur_rel_path_ok(s->subdir)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :subdir '%s' -- it "
+                "must be a relative path inside the fetched repository (no "
+                "'..', no leading '/', no shell metacharacters)",
+                s->name, s->subdir);
+            return false;
+        }
+        if (s->path && (!tur_arg_is_shell_safe(s->path) || s->path[0] == '-')) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: spice \"%s\" has an unusable :path '%s' -- it must "
+                "not start with '-' or contain a character the shell would "
+                "read as syntax", s->name, s->path);
+            return false;
+        }
         const Form *opt_f = map_get_kw(val, "optional");
         s->optional = form_bool_val(opt_f);
         /* global-spice-library-consumption: `#{:global true}` resolves through
@@ -269,13 +319,15 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
 /* Forward declaration (parse_str_vec is defined after parse_cmake_deps). */
 static bool parse_str_vec(const Form *f, char ***out, int *n_out);
 
-/* Parse a single cmake dep options map: #{:KEY "VAL" ...} */
-static bool parse_cmake_opts(const Form *map,
+/* Parse a single cmake dep options map: #{:KEY "VAL" ...}.  `label` names the
+ * key being parsed so a shape error points at `:options` or `:wasm-options`
+ * rather than always the former. */
+static bool parse_cmake_opts(const Form *map, const char *label,
                               PkgCmakeOpt **out_opts, int *out_n) {
     *out_opts = NULL;
     *out_n    = 0;
     if (!map) return true;
-    if (!expect_map(map, ":options")) return false;
+    if (!expect_map(map, label)) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     *out_opts = (PkgCmakeOpt *)malloc(cap * sizeof(PkgCmakeOpt));
@@ -330,6 +382,49 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         d->cmake_name = form_str_dup(map_get_kw(val, "cmake-name"));
         d->prefer_system  = form_bool_val(map_get_kw(val, "prefer-system"));
         d->cmake_version  = form_str_dup(map_get_kw(val, "cmake-version"));
+        /* WP2 (D-9): every one of these is written into the generated
+         * cmake/CMakeLists.txt, which cmake then runs.  The name and
+         * cmake-name land in bare positions (`FetchContent_Declare(<name>`,
+         * `find_package(<cmake-name>`) where even quoting would not save them,
+         * so they must be identifiers; the url and ref are quoted at the write
+         * site and need only be free of `$`, `"` and `;`. */
+        if (!tur_cmake_ident_ok(d->name)) {
+            diag_emit(DIAG_ERROR, key->span,
+                "build.tur: cmake-dep name '%s' must be a cmake identifier "
+                "(letters, digits, '_' and '-')", d->name ? d->name : "");
+            return false;
+        }
+        if (d->cmake_name && !tur_cmake_ident_ok(d->cmake_name)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :cmake-name '%s' must be a cmake "
+                "identifier", d->name, d->cmake_name);
+            return false;
+        }
+        if (d->cmake_version && !tur_cmake_value_ok(d->cmake_version)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :cmake-version '%s' is not a "
+                "usable version string", d->name, d->cmake_version);
+            return false;
+        }
+        if (d->url && !tur_url_ok(d->url)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :url '%s' must not start with '-' "
+                "or contain whitespace or a character cmake or the shell would "
+                "read as syntax", d->name, d->url);
+            return false;
+        }
+        if (d->ref && !tur_git_ref_ok(d->ref)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :ref '%s' is not a usable git ref",
+                d->name, d->ref);
+            return false;
+        }
+        if (d->path && !tur_arg_is_shell_safe(d->path)) {
+            diag_emit(DIAG_ERROR, val->span,
+                "build.tur: cmake-dep '%s': :path '%s' contains a character "
+                "cmake or the shell would read as syntax", d->name, d->path);
+            return false;
+        }
         parse_str_vec(map_get_kw(val, "targets"), &d->targets, &d->n_targets);
         /* :link-libs overrides the -l name derived from the target name; the
          * empty list is a meaningful value ("link nothing"), so record key
@@ -340,7 +435,9 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         parse_str_vec(map_get_kw(val, "link-flags"),
                       &d->link_flags, &d->n_link_flags);
         const Form *opts_f = map_get_kw(val, "options");
-        parse_cmake_opts(opts_f, &d->opts, &d->n_opts);
+        parse_cmake_opts(opts_f, ":options", &d->opts, &d->n_opts);
+        parse_cmake_opts(map_get_kw(val, "wasm-options"), ":wasm-options",
+                         &d->wasm_opts, &d->n_wasm_opts);
 
         /* :prefer-system needs a :cmake-name to know what to find_package. */
         if (d->prefer_system && !d->cmake_name) {
@@ -406,6 +503,61 @@ static bool parse_experiments(const Form *f, char ***out, int *n_out) {
  * DIAG_ERROR carrying that entry's span. Valid entries are stored verbatim
  * (as written in build.tur) so the build can re-resolve them relative to the
  * manifest dir. */
+/* WP2 (D-1): a `:build-opts` entry that reaches the link line.
+ *
+ * `:link-libs` entries become `-l<name>`; `:link-flags` entries are spliced in
+ * VERBATIM, which is documented (pkg.h) as the only way to spell
+ * `-framework Cocoa` -- so one entry may be several space-separated tokens and
+ * each is checked on its own.  Before this, a transitive spice could put
+ * `-lfoo; touch pwned` in either and the shell ran it while building a project
+ * that merely depended on that spice. */
+static bool link_entry_tokens_ok(const char *s) {
+    if (!s || !*s) return false;
+    const char *prev = NULL;
+    char prev_buf[256];
+    for (const char *q = s; *q; ) {
+        while (*q == ' ') q++;
+        if (!*q) break;
+        const char *t = q;
+        while (*q && *q != ' ') q++;
+        size_t n = (size_t)(q - t);
+        char tok[1024];
+        if (n >= sizeof(tok)) return false;
+        memcpy(tok, t, n);
+        tok[n] = '\0';
+        if (!tur_link_token_ok(tok, prev)) return false;
+        snprintf(prev_buf, sizeof(prev_buf), "%s", tok);
+        prev = prev_buf;
+    }
+    return true;
+}
+
+/* Grammar-check a parsed `:link-libs` / `:link-flags` vector in place, after
+ * parse_str_vec has filled it.  Reports through diag so the manifest read
+ * fails the way every other bad slot does; `span` is the :build-opts map's,
+ * which is the closest span parse_str_vec leaves us. */
+static bool check_link_vec(char **vec, int n, const char *what,
+                           bool bare_lib_names, Span span) {
+    bool ok = true;
+    for (int i = 0; i < n; i++) {
+        if (!vec[i]) continue;
+        bool good = bare_lib_names
+            ? (vec[i][0] != '-' && tur_link_value_ok(vec[i]))
+            : link_entry_tokens_ok(vec[i]);
+        if (!good) {
+            diag_emit(DIAG_ERROR, span,
+                "build.tur: %s entry '%s' is not a link token this build will "
+                "pass to the C compiler.\n"
+                "  Allowed: -l<name>, -L<dir>, -I<dir>, -D<key>[=<val>], "
+                "-framework <name>, -Wl,<...>, a source or object path, or a "
+                "bare toolchain flag -- and nothing the shell reads as syntax.",
+                what, vec[i]);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
                              const char *what, bool require_c_ext,
                              char ***out, int *n_out) {
@@ -439,6 +591,18 @@ static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
             diag_emit(DIAG_ERROR, entry->span,
                       "build.tur: %s entry '%s' must be a relative path "
                       "(absolute paths are not allowed)", what, p);
+            ok = false;
+        }
+        /* WP2 (D-1, D-5): the entry is joined onto the manifest's directory
+         * and then spliced into the cc command string, so it has to be both
+         * CONTAINED (no `..` climbing out of the spice) and free of anything
+         * the shell reads as syntax.  The absolute-path check above was the
+         * only guard, and `../../etc` passed it. */
+        if (ok && !tur_rel_path_ok(p)) {
+            diag_emit(DIAG_ERROR, entry->span,
+                      "build.tur: %s entry '%s' must stay inside the spice "
+                      "directory and contain no shell metacharacters "
+                      "(no '..', no backslash, no ; & | ` $ quotes)", what, p);
             ok = false;
         }
         if (ok && require_c_ext) {
@@ -630,9 +794,84 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
     return pkg_manifest_read_status(path, out, NULL);
 }
 
+/* Release one manifest slot and reset it to empty.  pkg_manifest_free uses
+ * them, and so does the manifest reader when a key appears twice: the later
+ * value replaces the earlier one, as it always has, and the earlier one's
+ * allocations are released instead of leaked (found by
+ * tests/fuzz/fuzz_manifest, security-audit-plan WP4). */
+static void str_vec_clear(char ***v, int *n) {
+    for (int i = 0; i < *n; i++) free((*v)[i]);
+    free(*v);
+    *v = NULL;
+    *n = 0;
+}
+
+static void spices_clear(PkgManifest *m) {
+    for (int i = 0; i < m->n_spices; i++) {
+        free(m->spices[i].name);
+        free(m->spices[i].url);
+        free(m->spices[i].ref);
+        free(m->spices[i].path);
+        free(m->spices[i].subdir);
+    }
+    free(m->spices);
+    m->spices = NULL;
+    m->n_spices = 0;
+}
+
+static void cmake_deps_clear(PkgManifest *m) {
+    for (int i = 0; i < m->n_cmake_deps; i++) {
+        free(m->cmake_deps[i].name);
+        free(m->cmake_deps[i].url);
+        free(m->cmake_deps[i].ref);
+        free(m->cmake_deps[i].path);
+        free(m->cmake_deps[i].cmake_name);
+        free(m->cmake_deps[i].cmake_version);
+        for (int j = 0; j < m->cmake_deps[i].n_targets; j++)
+            free(m->cmake_deps[i].targets[j]);
+        free(m->cmake_deps[i].targets);
+        for (int j = 0; j < m->cmake_deps[i].n_link_libs; j++)
+            free(m->cmake_deps[i].link_libs[j]);
+        free(m->cmake_deps[i].link_libs);
+        for (int j = 0; j < m->cmake_deps[i].n_link_flags; j++)
+            free(m->cmake_deps[i].link_flags[j]);
+        free(m->cmake_deps[i].link_flags);
+        for (int j = 0; j < m->cmake_deps[i].n_opts; j++) {
+            free(m->cmake_deps[i].opts[j].key);
+            free(m->cmake_deps[i].opts[j].val);
+        }
+        free(m->cmake_deps[i].opts);
+        for (int j = 0; j < m->cmake_deps[i].n_wasm_opts; j++) {
+            free(m->cmake_deps[i].wasm_opts[j].key);
+            free(m->cmake_deps[i].wasm_opts[j].val);
+        }
+        free(m->cmake_deps[i].wasm_opts);
+    }
+    free(m->cmake_deps);
+    m->cmake_deps = NULL;
+    m->n_cmake_deps = 0;
+}
+
+static void bins_clear(PkgManifest *m) {
+    for (int i = 0; i < m->n_bins; i++) {
+        free(m->bin_names[i]);
+        free(m->bin_paths[i]);
+    }
+    free(m->bin_names);
+    free(m->bin_paths);
+    m->bin_names = NULL;
+    m->bin_paths = NULL;
+    m->n_bins = 0;
+    pkg_web_opts_free(&m->web);
+}
+
 bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                               PkgManifestStatus *status) {
     memset(out, 0, sizeof(*out));
+    /* `:web`'s defaults are not all zero (ES3, a 128 MB heap), so they have to
+     * be installed before the slot parser runs -- a manifest with no `:web`
+     * key still describes a buildable web target. */
+    pkg_web_opts_defaults(&out->web);
     if (status) *status = PKG_MANIFEST_ABSENT;
 
     /* Read the file into memory */
@@ -703,6 +942,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                     "spice: error [TUR-E0330]: `#lang` takes a single base "
                     "dialect; unexpected trailing token '%.*s' in %s\n",
                     (int)bad_len, bad, path);
+            symtab_free(&st);   /* its buckets are heap, not arena */
             arena_free(&arena);
             if (status) *status = PKG_MANIFEST_MALFORMED;
             pkg_manifest_mark_malformed(path);
@@ -768,21 +1008,31 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             free(out->name);
             out->name = form_str_dup(vf);
         } else if (strcmp(kw, "version") == 0) {
+            /* A key repeated in the manifest replaces the earlier value, so
+             * each scalar slot frees what it held -- only :name did, and the
+             * rest leaked (found by tests/fuzz/fuzz_manifest). */
+            free(out->version);
             out->version = form_str_dup(vf);
         } else if (strcmp(kw, "tur-version") == 0) {
+            free(out->tur_version);
             out->tur_version = form_str_dup(vf);
             /* Checked here rather than after the loop so the caret lands on the
              * range the user wrote. */
             pkg_check_tur_version_span(out->tur_version, vf->span);
         } else if (strcmp(kw, "description") == 0) {
+            free(out->description);
             out->description = form_str_dup(vf);
         } else if (strcmp(kw, "license") == 0) {
+            free(out->license);
             out->license = form_str_dup(vf);
         } else if (strcmp(kw, "repository") == 0) {
+            free(out->repository);
             out->repository = form_str_dup(vf);
         } else if (strcmp(kw, "homepage") == 0) {
+            free(out->homepage);
             out->homepage = form_str_dup(vf);
         } else if (strcmp(kw, "authors") == 0) {
+            str_vec_clear(&out->authors, &out->n_authors);
             if (!parse_str_vec(vf, &out->authors, &out->n_authors))
                 bad_slot = bad_slot ? bad_slot : ":authors";
         } else if (strcmp(kw, "spices") == 0) {
@@ -792,26 +1042,51 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
              * slot broke.  Keep the first failing slot name for the sticky
              * verdict; parsing still continues so the user sees every slot's
              * diagnostic in one pass rather than one per edit-compile cycle. */
+            spices_clear(out);
             if (!parse_spices(vf, out))
                 bad_slot = bad_slot ? bad_slot : ":spices";
         } else if (strcmp(kw, "cmake-deps") == 0) {
+            cmake_deps_clear(out);
             if (!parse_cmake_deps(vf, out))
                 bad_slot = bad_slot ? bad_slot : ":cmake-deps";
         } else if (strcmp(kw, "exports") == 0) {
+            str_vec_clear(&out->exports, &out->n_exports);
             if (!parse_exports(vf, &out->exports, &out->n_exports))
                 bad_slot = bad_slot ? bad_slot : ":exports";
         } else if (strcmp(kw, "members") == 0) {
             /* LS2: workspace member spice directories, relative to this
              * manifest. A non-empty list makes this manifest a workspace
              * root; the resolver auto-links sibling members. */
+            str_vec_clear(&out->members, &out->n_members);
             parse_str_vec(vf, &out->members, &out->n_members);
+            /* WP2 (D-5): a member path is resolved against the workspace root
+             * and then built, so it has to stay inside the workspace. */
+            for (int mi = 0; mi < out->n_members; mi++) {
+                if (out->members[mi] && !tur_rel_path_ok(out->members[mi]))
+                    diag_emit(DIAG_ERROR, vf->span,
+                        "build.tur: :members entry '%s' must be a relative "
+                        "path inside the workspace (no '..', no leading '/', "
+                        "no shell metacharacters)", out->members[mi]);
+            }
         } else if (strcmp(kw, "build-dir") == 0) {
             /* build-output-directory-plan: relative path for build artifacts. */
+            free(out->build_dir);
             out->build_dir = form_str_dup(vf);
+            /* WP2 (D-5): "relative path" was a comment, not a rule -- an
+             * absolute or climbing :build-dir chose where the build WROTE. */
+            if (out->build_dir && !tur_rel_path_ok(out->build_dir)) {
+                diag_emit(DIAG_ERROR, vf->span,
+                    "build.tur: :build-dir '%s' must be a relative path inside "
+                    "the project (no '..', no leading '/', no shell "
+                    "metacharacters)", out->build_dir);
+                free(out->build_dir);
+                out->build_dir = NULL;
+            }
         } else if (strcmp(kw, "entry") == 0) {
             /* Entry-point module for project-mode `tur run`, relative to the
              * manifest dir. Existence is checked by the caller (main.c), which
              * is the only place that knows the resolved project root. */
+            free(out->entry);
             out->entry = form_str_dup(vf);
         } else if (strcmp(kw, "engine") == 0) {
             /* engine-selection-plan E1: default execution engine for
@@ -819,6 +1094,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
              * "jitt"` silently running under cc is exactly the failure mode
              * the plan exists to prevent (unknown KEYS stay silently
              * ignored, which is the documented compatibility story). */
+            free(out->engine);
             out->engine = form_str_dup(vf);
             if (out->engine && strcmp(out->engine, "cc") != 0 &&
                 strcmp(out->engine, "jit") != 0 &&
@@ -832,6 +1108,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             }
         } else if (strcmp(kw, "experiments") == 0) {
             /* XF1: opt-in experimental features for this spice. */
+            str_vec_clear(&out->experiments, &out->n_experiments);
             parse_experiments(vf, &out->experiments, &out->n_experiments);
             /* UC-3: record that the key was present even when the list is
              * empty -- an empty :experiments [] still suppresses the
@@ -839,11 +1116,13 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             out->has_experiments_key = true;
         } else if (strcmp(kw, "reader-macros") == 0) {
             /* RM4: vector of paths to reader-macro definition files. */
+            str_vec_clear(&out->reader_macros, &out->n_reader_macros);
             parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);
         } else if (strcmp(kw, "bin") == 0) {
             /* GS-M1: :bin #{ "tur-foo" "src/main.tur" ... } */
             if (!vf) continue;
             if (!expect_map(vf, ":bin")) continue;
+            bins_clear(out);
             const FormList *bfl = &vf->as.list;
             int cap = (int)(bfl->len / 2 + 1);
             out->bin_names = (char **)malloc(cap * sizeof(char *));
@@ -873,6 +1152,49 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 out->bin_paths[out->n_bins] = bpath;
                 out->n_bins++;
             }
+        } else if (strcmp(kw, "web") == 0) {
+            if (vf && expect_map(vf, ":web")) {
+                out->web.present = true;
+                const Form *gf = map_get_kw(vf, "gl");
+                if (gf && gf->tag == F_KEYWORD && gf->as.sym &&
+                    gf->as.sym->name) {
+                    const char *g = gf->as.sym->name;
+                    if (strcmp(g, "es2") == 0)      out->web.gl = PKG_WEB_GL_ES2;
+                    else if (strcmp(g, "es3") == 0) out->web.gl = PKG_WEB_GL_ES3;
+                    else
+                        diag_emit(DIAG_ERROR, gf->span,
+                                  "build.tur: :web :gl must be :es2 or :es3, "
+                                  "got :%s", g);
+                }
+                out->web.canvas  = form_bool_val(map_get_kw(vf, "canvas"));
+                out->web.audio   = form_bool_val(map_get_kw(vf, "audio"));
+                out->web.threads = form_bool_val(map_get_kw(vf, "threads"));
+                const Form *hf = map_get_kw(vf, "heap");
+                if (hf) {
+                    if (hf->tag == F_INT && hf->as.i >= 0)
+                        out->web.heap = (long)hf->as.i;
+                    else
+                        diag_emit(DIAG_ERROR, hf->span,
+                                  "build.tur: :web :heap must be a "
+                                  "non-negative byte count (0 selects "
+                                  "-sALLOW_MEMORY_GROWTH)");
+                }
+                const Form *mf = map_get_kw(vf, "main-loop");
+                if (mf && mf->tag == F_KEYWORD && mf->as.sym &&
+                    mf->as.sym->name) {
+                    const char *ml = mf->as.sym->name;
+                    if (strcmp(ml, "callback") == 0 ||
+                        strcmp(ml, "asyncify") == 0 ||
+                        strcmp(ml, "none") == 0) {
+                        free(out->web.main_loop);
+                        out->web.main_loop = tur_strdup(ml);
+                    } else {
+                        diag_emit(DIAG_ERROR, mf->span,
+                                  "build.tur: :web :main-loop must be "
+                                  ":callback, :asyncify or :none, got :%s", ml);
+                    }
+                }
+            }
         } else if (strcmp(kw, "build-opts") == 0) {
             if (vf && expect_map(vf, ":build-opts")) {
                 const Form *cf = map_get_kw(vf, "c-flags");
@@ -880,10 +1202,21 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 const Form *nf = map_get_kw(vf, "no-stdlib");
                 const Form *sf = map_get_kw(vf, "c-sources");
                 const Form *if_ = map_get_kw(vf, "c-includes");
+                str_vec_clear(&out->c_flags, &out->n_c_flags);
+                str_vec_clear(&out->link_libs, &out->n_link_libs);
+                str_vec_clear(&out->link_flags, &out->n_link_flags);
+                str_vec_clear(&out->c_sources, &out->n_c_sources);
+                str_vec_clear(&out->c_includes, &out->n_c_includes);
                 parse_str_vec(cf, &out->c_flags,   &out->n_c_flags);
                 parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
                 parse_str_vec(map_get_kw(vf, "link-flags"),
                               &out->link_flags, &out->n_link_flags);
+                check_link_vec(out->link_libs, out->n_link_libs,
+                               ":link-libs", true, vf->span);
+                check_link_vec(out->link_flags, out->n_link_flags,
+                               ":link-flags", false, vf->span);
+                check_link_vec(out->c_flags, out->n_c_flags,
+                               ":c-flags", false, vf->span);
                 out->no_stdlib = form_bool_val(nf);
                 /* spices-c-sources-plan: validate vendored sources/includes
                  * against the manifest directory (the dir holding build.tur). */
@@ -1130,8 +1463,33 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
                 }
                 fprintf(f, "}");
             }
+            if (d->n_wasm_opts > 0) {
+                fprintf(f, " :wasm-options #{");
+                for (int j = 0; j < d->n_wasm_opts; j++) {
+                    if (j) fprintf(f, " ");
+                    fprintf(f, ":%s \"%s\"",
+                            d->wasm_opts[j].key, d->wasm_opts[j].val);
+                }
+                fprintf(f, "}");
+            }
             fprintf(f, "}\n");
         }
+        fprintf(f, "  }\n");
+    }
+
+    /* `:web` round-trips only when the manifest actually carried it: the
+     * defaults are not all zero, so writing them unconditionally would put a
+     * `:web` block into every manifest `tur add` touches. */
+    if (m->web.present) {
+        fprintf(f, "\n  :web #{\n");
+        fprintf(f, "    :gl :%s\n",
+                m->web.gl == PKG_WEB_GL_ES2 ? "es2" : "es3");
+        if (m->web.canvas)  fprintf(f, "    :canvas true\n");
+        if (m->web.audio)   fprintf(f, "    :audio true\n");
+        if (m->web.threads) fprintf(f, "    :threads true\n");
+        fprintf(f, "    :heap %ld\n", m->web.heap);
+        if (m->web.main_loop)
+            fprintf(f, "    :main-loop :%s\n", m->web.main_loop);
         fprintf(f, "  }\n");
     }
 
@@ -1243,63 +1601,19 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->license);
     free(m->repository);
     free(m->homepage);
-    for (int i = 0; i < m->n_authors; i++) free(m->authors[i]);
-    free(m->authors);
-    for (int i = 0; i < m->n_spices; i++) {
-        free(m->spices[i].name);
-        free(m->spices[i].url);
-        free(m->spices[i].ref);
-        free(m->spices[i].path);
-        free(m->spices[i].subdir);
-    }
-    free(m->spices);
-    for (int i = 0; i < m->n_cmake_deps; i++) {
-        free(m->cmake_deps[i].name);
-        free(m->cmake_deps[i].url);
-        free(m->cmake_deps[i].ref);
-        free(m->cmake_deps[i].path);
-        free(m->cmake_deps[i].cmake_name);
-        free(m->cmake_deps[i].cmake_version);
-        for (int j = 0; j < m->cmake_deps[i].n_targets; j++)
-            free(m->cmake_deps[i].targets[j]);
-        free(m->cmake_deps[i].targets);
-        for (int j = 0; j < m->cmake_deps[i].n_link_libs; j++)
-            free(m->cmake_deps[i].link_libs[j]);
-        free(m->cmake_deps[i].link_libs);
-        for (int j = 0; j < m->cmake_deps[i].n_link_flags; j++)
-            free(m->cmake_deps[i].link_flags[j]);
-        free(m->cmake_deps[i].link_flags);
-        for (int j = 0; j < m->cmake_deps[i].n_opts; j++) {
-            free(m->cmake_deps[i].opts[j].key);
-            free(m->cmake_deps[i].opts[j].val);
-        }
-        free(m->cmake_deps[i].opts);
-    }
-    free(m->cmake_deps);
-    for (int i = 0; i < m->n_exports;   i++) free(m->exports[i]);
-    free(m->exports);
-    for (int i = 0; i < m->n_c_flags;   i++) free(m->c_flags[i]);
-    free(m->c_flags);
-    for (int i = 0; i < m->n_link_flags; i++) free(m->link_flags[i]);
-    free(m->link_flags);
-    for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
-    free(m->link_libs);
-    for (int i = 0; i < m->n_c_sources;  i++) free(m->c_sources[i]);
-    free(m->c_sources);
-    for (int i = 0; i < m->n_c_includes; i++) free(m->c_includes[i]);
-    free(m->c_includes);
-    for (int i = 0; i < m->n_reader_macros; i++) free(m->reader_macros[i]);
-    free(m->reader_macros);
-    for (int i = 0; i < m->n_bins; i++) {
-        free(m->bin_names[i]);
-        free(m->bin_paths[i]);
-    }
-    free(m->bin_names);
-    free(m->bin_paths);
-    for (int i = 0; i < m->n_members; i++) free(m->members[i]);
-    free(m->members);
-    for (int i = 0; i < m->n_experiments; i++) free(m->experiments[i]);
-    free(m->experiments);
+    str_vec_clear(&m->authors, &m->n_authors);
+    spices_clear(m);
+    cmake_deps_clear(m);
+    str_vec_clear(&m->exports, &m->n_exports);
+    str_vec_clear(&m->c_flags, &m->n_c_flags);
+    str_vec_clear(&m->link_flags, &m->n_link_flags);
+    str_vec_clear(&m->link_libs, &m->n_link_libs);
+    str_vec_clear(&m->c_sources, &m->n_c_sources);
+    str_vec_clear(&m->c_includes, &m->n_c_includes);
+    str_vec_clear(&m->reader_macros, &m->n_reader_macros);
+    bins_clear(m);
+    str_vec_clear(&m->members, &m->n_members);
+    str_vec_clear(&m->experiments, &m->n_experiments);
     free(m->build_dir);
     free(m->entry);
     free(m->engine);
@@ -2046,7 +2360,12 @@ char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
         /* Fetch and checkout the desired ref */
         buf_puts(&cmd, "git -C ");
         ok = pkg_cmd_arg(&cmd, dest_dir) && ok;
-        buf_puts(&cmd, " fetch --depth 1 origin ");
+        /* WP2 (D-6): `--` before the positional ref.  pkg_cmd_arg already
+         * shell-quotes it, so `a; id` was never a shell injection -- but git
+         * reads a quoted `--upload-pack=<cmd>` as an OPTION all the same, and
+         * a ref comes out of a transitive manifest.  The clone branch above
+         * always had its `--`; this one did not. */
+        buf_puts(&cmd, " fetch --depth 1 origin -- ");
         ok = pkg_cmd_arg(&cmd, ref ? ref : "HEAD") && ok;
         buf_puts(&cmd, " 2>&1 && git -C ");
         ok = pkg_cmd_arg(&cmd, dest_dir) && ok;
@@ -2518,9 +2837,32 @@ bool pkg_fetch_all(const char *project_dir,
         ce->url  = it->url ? tur_strdup(it->url) : NULL;
         ce->ref  = it->ref ? tur_strdup(it->ref) : NULL;
 
-        /* Check if already in lock (skip if not --update) */
+        /* Build dest path: spices/<name>-<ref> or spices/<name>.  Computed
+         * BEFORE the lock check, which has to know whether it is on disk. */
+        char dest[4096];
+        if (it->ref)
+            snprintf(dest, sizeof(dest), "%s/%s-%s",
+                     spices_dir, it->name, it->ref);
+        else
+            snprintf(dest, sizeof(dest), "%s/%s", spices_dir, it->name);
+
+        /* In the lock AND actually present?  Then there is nothing to do.
+         *
+         * C-3: the stat() is the load-bearing half, and it was missing.  A
+         * lock row on its own used to satisfy this, so on the shape that
+         * matters most -- a fresh clone, tur.lock committed, spices/
+         * gitignored and therefore absent -- `tur fetch` printed
+         * "spice: using cached '<name>' @ <sha>" and downloaded NOTHING,
+         * leaving the build to fail afterwards with "module not found".
+         * Measured against 82ccdc555 before the fix.
+         *
+         * It also meant the recorded :sha256 and :resolved were never
+         * consulted on the one path where a comparison is possible. They were
+         * printed, never checked. */
+        struct stat dest_st;
         PkgLockEntry *le = pkg_lock_find(lock, it->name, false);
-        if (le && !update) {
+        bool dest_present = (stat(dest, &dest_st) == 0 && S_ISDIR(dest_st.st_mode));
+        if (le && !update && dest_present) {
             fprintf(stderr, "spice: using cached '%s' @ %s\n",
                     it->name, le->resolved ? le->resolved : le->ref);
             free(it->name); free(it->url); free(it->ref);
@@ -2528,13 +2870,14 @@ bool pkg_fetch_all(const char *project_dir,
             continue;
         }
 
-        /* Build dest path: spices/<name>-<ref> or spices/<name> */
-        char dest[4096];
-        if (it->ref)
-            snprintf(dest, sizeof(dest), "%s/%s-%s",
-                     spices_dir, it->name, it->ref);
-        else
-            snprintf(dest, sizeof(dest), "%s/%s", spices_dir, it->name);
+        /* C-3: what the lock says this tree hashed to last time, captured
+         * before the fetch below overwrites it.  Only a hash THIS algorithm
+         * produced can be compared -- an older tur wrote a `tar -c | sha256sum`
+         * digest or the git-SHA fallback, and pkg_hash_comparable rejects
+         * those rather than reporting a format change as tampering.  NULL
+         * under --update: re-pinning is the user asking for the new content. */
+        char *prev_sha = (le && !update && pkg_hash_comparable(le->sha256))
+                       ? tur_strdup(le->sha256) : NULL;
 
         fprintf(stderr, "spice: fetching '%s' from %s (ref: %s) ...\n",
                 it->name, it->url, it->ref ? it->ref : "(default)");
@@ -2557,6 +2900,7 @@ bool pkg_fetch_all(const char *project_dir,
                 fprintf(stderr, "spice: failed to fetch '%s'\n", it->name);
                 ok = false;
             }
+            free(prev_sha);
             free(it->name); free(it->url); free(it->ref);
             free(it->path); free(it->subdir); free(it->from);
             continue;
@@ -2575,12 +2919,47 @@ bool pkg_fetch_all(const char *project_dir,
              * the check is skipped rather than failing against a value this
              * algorithm never produced. */
             char dir_sha[PKG_HASH_MAX];
-            free(le->sha256);
-            if (pkg_hash_dir(dest, dir_sha))
-                le->sha256 = tur_strdup(dir_sha);
-            else
-                le->sha256 = tur_strdup(resolved); /* fallback: git SHA */
+            bool hashed = pkg_hash_dir(dest, dir_sha);
+
+            /* C-3: COMPARE, do not merely record.
+             *
+             * This is the one moment upstream drift is detectable: the lock
+             * says what this tree hashed to when it was pinned, and a
+             * freshly-fetched tree is right here to check it against.  The
+             * old code overwrote the recorded hash unconditionally with
+             * whatever had just been downloaded, so it could only ever catch
+             * a LOCAL edit made after a fetch -- never the upstream moving
+             * under a branch-shaped :ref, which is the case the consuming
+             * guide warns about.
+             *
+             * `tur fetch --update` is the escape hatch and the diagnostic says
+             * so: taking new content is a decision the consumer makes on
+             * purpose, not a default. */
+            if (prev_sha && hashed && strcmp(dir_sha, prev_sha) != 0) {
+                fprintf(stderr,
+                    "spice: integrity check FAILED for '%s'\n"
+                    "  tur.lock pinned: %s\n"
+                    "  just fetched:    %s\n"
+                    "  The content at %s (ref: %s) is not what this lockfile\n"
+                    "  recorded. A branch-shaped :ref moves under you; a tag or\n"
+                    "  a commit does not. If the change is expected, take it\n"
+                    "  deliberately:\n"
+                    "      tur fetch --update\n",
+                    it->name, prev_sha, dir_sha,
+                    it->url, it->ref ? it->ref : "(default)");
+                ok = false;
+                /* The lock row is left alone on purpose.  Rewriting the hash
+                 * here would make the very next command agree with the drift
+                 * and report nothing -- the failure would last exactly one
+                 * run, which is the same as not having it. */
+            } else {
+                free(le->sha256);
+                if (hashed) le->sha256 = tur_strdup(dir_sha);
+                else        le->sha256 = tur_strdup(resolved); /* git SHA */
+            }
+            free(prev_sha);
         } else {
+            free(prev_sha);
             free(resolved);
         }
 
@@ -3015,6 +3394,16 @@ static bool deep_copy_cmake_dep(PkgCmakeDep *dst, const PkgCmakeDep *src) {
         }
         dst->n_opts = src->n_opts;
     }
+    if (src->n_wasm_opts > 0) {
+        dst->wasm_opts = (PkgCmakeOpt *)calloc((size_t)src->n_wasm_opts,
+                                               sizeof(PkgCmakeOpt));
+        if (!dst->wasm_opts) return false;
+        for (int i = 0; i < src->n_wasm_opts; i++) {
+            dst->wasm_opts[i].key = dup_cstr_or_null(src->wasm_opts[i].key);
+            dst->wasm_opts[i].val = dup_cstr_or_null(src->wasm_opts[i].val);
+        }
+        dst->n_wasm_opts = src->n_wasm_opts;
+    }
     return true;
 }
 
@@ -3036,6 +3425,11 @@ static void free_one_cmake_dep(PkgCmakeDep *d) {
         free(d->opts[i].val);
     }
     free(d->opts);
+    for (int i = 0; i < d->n_wasm_opts; i++) {
+        free(d->wasm_opts[i].key);
+        free(d->wasm_opts[i].val);
+    }
+    free(d->wasm_opts);
     memset(d, 0, sizeof(*d));
 }
 
@@ -3209,6 +3603,186 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
  * Returns a heap-allocated array of `char *` (caller frees each entry and the
  * array) and sets *out_n; returns NULL with *out_n = 0 when `project_dir` is
  * not part of any workspace. */
+/* WP2 (D-9): one `:options` pair on its way into a generated
+ * `set(<key> "<val>" CACHE <type> "" FORCE)` line.  The key is unquotable (it is
+ * a cmake variable name) and the value is a bare token, so both are
+ * narrow; a pair that fails is skipped with a diagnostic rather than written,
+ * because a cmake dep configured without one of its options fails visibly
+ * while a `$\{...}` in a value does not. */
+void pkg_web_opts_defaults(PkgWebOpts *w) {
+    if (!w) return;
+    memset(w, 0, sizeof(*w));
+    /* ES3/WebGL2 is the floor.  ES2 gives a WebGL1 context, whose NPOT
+     * restriction ("no-mipmaps, no-repeat" on any texture not a power of two)
+     * is a real constraint on a real game; WebGL2 has been in every evergreen
+     * browser for years. `:gl :es2` remains available for old mobile. */
+    w->gl        = PKG_WEB_GL_ES3;
+    /* 128 MB, matching raylib's own BUILD_WEB_HEAP_SIZE default.  A fixed heap
+     * beats -sALLOW_MEMORY_GROWTH when the working set is known: growth
+     * invalidates cached heap views and copies at every grow, which is a
+     * frame-time spike exactly when a level loads.  `:heap 0` opts into
+     * growth for a program whose working set is not known at link time. */
+    w->heap      = 134217728L;
+    w->threads   = false;   /* -pthread needs COOP/COEP, which GitHub Pages
+                             * cannot serve, and a droppable static site is
+                             * the point of this target. */
+    w->main_loop = NULL;    /* NULL reads as "callback" */
+}
+
+void pkg_web_opts_free(PkgWebOpts *w) {
+    if (!w) return;
+    free(w->main_loop);
+    w->main_loop = NULL;
+}
+
+void pkg_web_compose_link_flags(const PkgWebOpts *w, Buf *out) {
+    if (!w || !out) return;
+
+    /* Kept alive across main() returning: in callback mode the frame callback
+     * fires after main has unwound, and with the default the runtime would
+     * tear down first and the callback fire into a dead module. */
+    buf_printf(out, " -sEXIT_RUNTIME=0 -sMODULARIZE=1 -sEXPORT_NAME=TurmericApp");
+
+    if (w->heap > 0)
+        buf_printf(out, " -sINITIAL_MEMORY=%ld", w->heap);
+    else
+        buf_printf(out, " -sALLOW_MEMORY_GROWTH=1");
+
+    if (w->canvas) {
+        /* raylib and the opengl spice both reach the canvas through the
+         * Emscripten GLFW port. GL_ENABLE_GET_PROC_ADDRESS is insurance: a
+         * minimal program runs without it, but a raylib build that resolves
+         * GL entry points through glGetProcAddress dies at InitWindow(). */
+        buf_printf(out, " -sUSE_GLFW=3 -sGL_ENABLE_GET_PROC_ADDRESS");
+        if (w->gl == PKG_WEB_GL_ES3)
+            buf_printf(out, " -sMAX_WEBGL_VERSION=2");
+    }
+
+    if (w->audio) {
+        /* ccall per upstream; HEAPF32 because miniaudio -- what raylib's
+         * raudio is built on -- reads the heap as `Module.HEAPF32.buffer`
+         * from inside its ScriptProcessorNode callback, and Emscripten no
+         * longer hangs heap views off Module by default.  Naming it is also
+         * what makes updateMemoryViews() re-publish the view after a heap
+         * grow, so it matters doubly under `:heap 0`.  Omitting it is a
+         * TypeError thrown out of the audio callback -- and only once the
+         * AudioContext is actually running, so it hides until someone
+         * gestures to unlock audio. */
+        buf_printf(out, " -sEXPORTED_RUNTIME_METHODS=ccall,HEAPF32");
+    }
+
+    if (w->threads)
+        buf_printf(out, " -pthread -sPTHREAD_POOL_SIZE_STRICT=0");
+
+    /* Asyncify lets an existing blocking `while (not (window-should-close))`
+     * loop yield to the browser with no source change.  The cost is a fixed
+     * ~16ms wait ADDED to frame time (measured: 59.5fps at ~0ms of frame work,
+     * 40.0fps at 8ms, against a flat 60.0 in callback mode), so it is a
+     * porting mode for a game with frame time to spare, not the default. */
+    if (w->main_loop && strcmp(w->main_loop, "asyncify") == 0)
+        buf_printf(out, " -sASYNCIFY");
+}
+
+bool pkg_web_check_gl_agreement(const PkgWebOpts *w,
+                                const PkgCmakeDep *deps, int n_deps) {
+    if (!w || !deps) return true;
+    for (int i = 0; i < n_deps; i++) {
+        const PkgCmakeDep *d = &deps[i];
+        for (int j = 0; j < d->n_wasm_opts; j++) {
+            const char *val = d->wasm_opts[j].val;
+            if (!val) continue;
+            /* Only the two spellings that actually pin a level are checked;
+             * anything else in :wasm-options is none of this function's
+             * business. */
+            bool dep_es3 = strstr(val, "OPENGL_ES3") != NULL;
+            bool dep_es2 = strstr(val, "OPENGL_ES2") != NULL;
+            if (!dep_es3 && !dep_es2) continue;
+            bool web_es3 = (w->gl == PKG_WEB_GL_ES3);
+            if (dep_es3 == web_es3) continue;
+            fprintf(stderr,
+                "build.tur: cmake-dep '%s' :wasm-options sets %s \"%s\", which "
+                "needs a WebGL%d context, but :web :gl is :%s (WebGL%d).\n"
+                "  These are set by different tools and neither checks the "
+                "other, so a mismatch links fine and then dies in the browser "
+                "on `attachShader ... parameter 2 is not of type "
+                "'WebGLShader'`.\n"
+                "  Set :web :gl to :%s, or change the dep's option.\n",
+                d->name, d->wasm_opts[j].key, val,
+                dep_es3 ? 2 : 1,
+                web_es3 ? "es3" : "es2", web_es3 ? 2 : 1,
+                dep_es3 ? "es3" : "es2");
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The cache type to declare an option with.  Every `:options` value in the
+ * spice tree today is ON/OFF, which is why this was hardcoded `BOOL`; but a
+ * dep's web backend is typically selected by a STRING (raylib's
+ * `PLATFORM`/`GRAPHICS`), and declaring that BOOL both mistypes the cache
+ * entry and fights the dep's own `set(... CACHE STRING)`.  Booleans keep BOOL
+ * so nothing in the existing tree changes shape. */
+static const char *cmake_opt_cache_type(const char *val) {
+    if (!val) return "STRING";
+    static const char *bools[] = {
+        "ON", "OFF", "TRUE", "FALSE", "YES", "NO", "Y", "N", "1", "0"
+    };
+    for (size_t i = 0; i < sizeof(bools) / sizeof(bools[0]); i++) {
+        const char *b = bools[i];
+        size_t n = strlen(b);
+        if (strlen(val) != n) continue;
+        size_t k = 0;
+        for (; k < n; k++) {
+            char a = val[k], c = b[k];
+            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+            if (a != c) break;
+        }
+        if (k == n) return "BOOL";
+    }
+    return "STRING";
+}
+
+static bool cmake_opt_ok(const PkgCmakeDep *d, const PkgCmakeOpt *o);
+
+/* Emit the `set(<K> "<V>" CACHE <T> "" FORCE)` lines for one option list.
+ * `indent` matches the surrounding block; `wasm_only` wraps the lines in
+ * `if(EMSCRIPTEN)` so the same generated CMakeLists serves both arms. */
+static void emit_cmake_opts(FILE *f, const PkgCmakeDep *d,
+                            const PkgCmakeOpt *opts, int n,
+                            const char *indent, bool wasm_only) {
+    if (n <= 0) return;
+    /* Count what will actually be written: an all-skipped list must not emit
+     * an empty `if(EMSCRIPTEN)/endif()` pair. */
+    int live = 0;
+    for (int j = 0; j < n; j++) if (cmake_opt_ok(d, &opts[j])) live++;
+    if (live == 0) return;
+    if (wasm_only) fprintf(f, "%sif (EMSCRIPTEN)\n", indent);
+    const char *in2 = wasm_only ? "    " : "";
+    for (int j = 0; j < n; j++) {
+        if (!cmake_opt_ok(d, &opts[j])) continue;
+        fprintf(f, "%s%sset(%s \"%s\" CACHE %s \"\" FORCE)\n",
+                indent, in2, opts[j].key, opts[j].val,
+                cmake_opt_cache_type(opts[j].val));
+    }
+    if (wasm_only) fprintf(f, "%sendif()\n", indent);
+}
+
+static bool cmake_opt_ok(const PkgCmakeDep *d, const PkgCmakeOpt *o) {
+    if (!tur_cmake_ident_ok(o->key)) {
+        fprintf(stderr, "spice: cmake-dep '%s': skipping :options key '%s' -- "
+                        "not a cmake identifier\n", d->name, o->key ? o->key : "");
+        return false;
+    }
+    if (!tur_cmake_value_ok(o->val)) {
+        fprintf(stderr, "spice: cmake-dep '%s': skipping :options value for "
+                        "'%s' -- '%s' contains a character cmake would read as "
+                        "syntax\n", d->name, o->key, o->val ? o->val : "");
+        return false;
+    }
+    return true;
+}
+
 static char **collect_workspace_sibling_dirs(const char *project_dir,
                                              int *out_n) {
     *out_n = 0;
@@ -3521,6 +4095,14 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             char build_subdir[4096];
             snprintf(build_subdir, sizeof(build_subdir),
                      "${CMAKE_BINARY_DIR}/_local/%s-build", d->name);
+            /* Options have to be in the cache before the subdirectory is
+             * added, which is the only point at which the dep reads them.
+             * This branch used to emit none at all, so a `:path` dep silently
+             * ignored every option it declared -- including the
+             * `:wasm-options` a local raylib checkout needs to pick its web
+             * backend. */
+            emit_cmake_opts(f, d, d->opts, d->n_opts, "", false);
+            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "", true);
             fprintf(f, "add_subdirectory(\"%s\" \"%s\")\n", abs_path,
                     build_subdir);
             fprintf(f, "set(_%s_resolved_via \"path\" CACHE INTERNAL \"\")\n\n",
@@ -3540,13 +4122,11 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             fprintf(f, "endif()\n");
             fprintf(f, "if (NOT %s_FOUND)\n", cn);
             fprintf(f, "    FetchContent_Declare(%s\n", d->name);
-            if (d->url) fprintf(f, "      GIT_REPOSITORY %s\n", d->url);
-            if (d->ref) fprintf(f, "      GIT_TAG        %s\n", d->ref);
+            if (d->url) fprintf(f, "      GIT_REPOSITORY \"%s\"\n", d->url);
+            if (d->ref) fprintf(f, "      GIT_TAG        \"%s\"\n", d->ref);
             fprintf(f, "    )\n");
-            for (int j = 0; j < d->n_opts; j++) {
-                fprintf(f, "    set(%s %s CACHE BOOL \"\" FORCE)\n",
-                        d->opts[j].key, d->opts[j].val);
-            }
+            emit_cmake_opts(f, d, d->opts, d->n_opts, "    ", false);
+            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "    ", true);
             fprintf(f, "    FetchContent_MakeAvailable(%s)\n", d->name);
             fprintf(f, "    set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n",
                     d->name);
@@ -3558,23 +4138,35 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             fprintf(f, "endif()\n\n");
         } else {
             fprintf(f, "FetchContent_Declare(%s\n", d->name);
-            if (d->url) fprintf(f, "  GIT_REPOSITORY %s\n", d->url);
-            if (d->ref) fprintf(f, "  GIT_TAG        %s\n", d->ref);
+            if (d->url) fprintf(f, "  GIT_REPOSITORY \"%s\"\n", d->url);
+            if (d->ref) fprintf(f, "  GIT_TAG        \"%s\"\n", d->ref);
             fprintf(f, ")\n");
-            for (int j = 0; j < d->n_opts; j++) {
-                fprintf(f, "set(%s %s CACHE BOOL \"\" FORCE)\n",
-                        d->opts[j].key, d->opts[j].val);
-            }
+            emit_cmake_opts(f, d, d->opts, d->n_opts, "", false);
+            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "", true);
             fprintf(f, "FetchContent_MakeAvailable(%s)\n", d->name);
             fprintf(f, "set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n\n",
                     d->name);
         }
     }
 
-    /* Generate spice-deps-manifest.json at cmake configure time */
+    /* Generate spice-deps-manifest.json at cmake configure time.
+     *
+     * The filename is arm-dependent, and CMake picks it rather than tur: the
+     * generated CMakeLists is shared by both arms (see the `if(EMSCRIPTEN)`
+     * option blocks above), and the two arms resolve every dep to different
+     * -I/-L/-l paths.  With one shared filename a wasm configure silently
+     * overwrote the native manifest, so the next native link picked up wasm
+     * library paths. */
     fprintf(f, "# --- Generate spice-deps-manifest.json ---\n");
+    fprintf(f, "if (EMSCRIPTEN)\n");
+    fprintf(f, "    set(_spice_manifest_name \"%s\")\n",
+            PKG_CMAKE_MANIFEST_WASM);
+    fprintf(f, "else()\n");
+    fprintf(f, "    set(_spice_manifest_name \"%s\")\n",
+            PKG_CMAKE_MANIFEST_NATIVE);
+    fprintf(f, "endif()\n");
     fprintf(f, "set(_spice_manifest_path "
-               "\"${CMAKE_CURRENT_SOURCE_DIR}/spice-deps-manifest.json\")\n");
+               "\"${CMAKE_CURRENT_SOURCE_DIR}/${_spice_manifest_name}\")\n");
     fprintf(f, "set(_spice_manifest \"{\\n\")\n");
     fprintf(f, "set(_spice_first TRUE)\n\n");
 
@@ -3732,8 +4324,12 @@ bool pkg_cmake_build(const char *project_dir,
     char cmake_src[4096];
     snprintf(cmake_src, sizeof(cmake_src), "%s/cmake", project_dir);
 
+    /* Per-arm build dir.  A native and a wasm configure cannot share one:
+     * the toolchain file, compiler and every cached path differ, and CMake
+     * refuses (or worse, silently reuses) a tree configured for the other. */
     char cmake_bld[4096];
-    snprintf(cmake_bld, sizeof(cmake_bld), "%s/cmake/build", project_dir);
+    snprintf(cmake_bld, sizeof(cmake_bld), "%s/cmake/%s", project_dir,
+             wasm ? "build-wasm" : "build");
 
     if (!mkdirp(cmake_bld)) {
         fprintf(stderr, "spice: cannot create '%s'\n", cmake_bld);
@@ -3759,8 +4355,18 @@ bool pkg_cmake_build(const char *project_dir,
      * 3.x the variable goes unused and CMake reports it under
      * "Manually-specified variables were not used by the project", which is
      * noise on every single configure. TUR_CMAKE_NO_POLICY_MIN=1 opts out for
-     * a project that wants the strict floor enforced. */
-    if (!wasm && cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
+     * a project that wants the strict floor enforced.
+     *
+     * This used to carry a `!wasm` conjunct, which made the reasoning above
+     * apply to native builds only: the identical manifest configured natively
+     * and died under emcmake with "Compatibility with CMake < 3.5 has been
+     * removed from CMake."  Nothing about a low `cmake_minimum_required` floor
+     * is arm-specific, and the CMake 3.x noise the guard worried about is
+     * already handled by the arm-independent `cmake_major_version() >= 4`
+     * test.  raylib hid the bug -- its own floor is exactly 3.5, the lowest
+     * CMake 4 still accepts -- so it only showed up on the second cmake dep.
+     * docs/reported/wasm-arm-suppresses-cmake-policy-min.md. */
+    if (cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
         buf_printf(&cmd, " -DCMAKE_POLICY_VERSION_MINIMUM=3.5");
     /* SF3: honor `tur fetch --refetch` (sets TUR_FETCH_FORCE_FETCH) by
      * disabling the system find_package short-circuit. */
@@ -3793,8 +4399,8 @@ bool pkg_cmake_build(const char *project_dir,
     PkgCmakeManifest cmkman;
     memset(&cmkman, 0, sizeof(cmkman));
     char manifest_json[4096];
-    snprintf(manifest_json, sizeof(manifest_json),
-             "%s/spice-deps-manifest.json", cmake_src);
+    snprintf(manifest_json, sizeof(manifest_json), "%s/%s", cmake_src,
+             wasm ? PKG_CMAKE_MANIFEST_WASM : PKG_CMAKE_MANIFEST_NATIVE);
     pkg_cmake_manifest_read(manifest_json, &cmkman);
 
     /* Update tur.lock cmake-dep entries with resolved git SHAs */
@@ -3850,6 +4456,60 @@ bool pkg_cmake_build(const char *project_dir,
 
     pkg_cmake_manifest_free(&cmkman);
     return true;
+}
+
+/* C-3: verify every PRESENT, lock-pinned spice tree against its recorded hash.
+ *
+ * Absent directories are deliberately not an error here -- the caller decides
+ * whether a missing dep means "fetch it" (tur run) or "you have not fetched
+ * yet" (tur build) -- and a hash an older tur wrote is skipped rather than
+ * reported as tampering, which is what pkg_hash_comparable is for.
+ *
+ * This used to be open-coded inside `tur run` and existed NOWHERE else, so
+ * `tur build` -- the command that actually compiles the dependency's code --
+ * never checked anything. One copy, three callers (run, build, audit). */
+bool pkg_verify_locked_spices(const char *project_dir,
+                              const PkgManifest *manifest,
+                              const PkgLockFile *lock,
+                              const char *cmd) {
+    if (!manifest || !lock) return true;
+
+    char spices_dir[4096];
+    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", project_dir);
+
+    bool ok = true;
+    for (int i = 0; i < manifest->n_spices; i++) {
+        const PkgSpice *s = &manifest->spices[i];
+        if (s->path) continue;                                  /* local source */
+        if (pkg_is_workspace_member(project_dir, s->name)) continue;
+
+        char dep_dir[4096];
+        if (s->ref)
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s", spices_dir, s->name, s->ref);
+        else
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
+
+        struct stat st;
+        if (stat(dep_dir, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        PkgLockEntry *le = pkg_lock_find((PkgLockFile *)lock, s->name, false);
+        if (!le || !pkg_hash_comparable(le->sha256)) continue;
+
+        char actual[PKG_HASH_MAX];
+        if (!pkg_hash_dir(dep_dir, actual)) continue;
+        if (strcmp(actual, le->sha256) == 0) continue;
+
+        fprintf(stderr,
+            "%s: integrity check FAILED for spice '%s'\n"
+            "  tur.lock pinned: %s\n"
+            "  on disk:         %s\n"
+            "  %s has changed since it was fetched. If you edited it, that is\n"
+            "  why; otherwise re-download it:\n"
+            "      tur fetch --update\n",
+            cmd, s->name, le->sha256, actual, dep_dir);
+        ok = false;
+    }
+    return ok;
 }
 
 bool pkg_cmake_verify_lock(const char *project_dir,
@@ -4115,25 +4775,49 @@ static void append_link_flag_token(Buf *buf, const char *tok) {
         buf_printf(buf, " -l%s", tok);      /* bare library name */
 }
 
+/* WP2 (D-1): one entry of cmake's spice-deps-manifest.json, on its way into a
+ * shell command string.
+ *
+ * Unlike a manifest's `:link-flags`, these are PATHS and library names that
+ * cmake computed on this machine, not text a manifest author typed -- so the
+ * check is for shell syntax only, not for shape, and a path with a space is
+ * left alone (it is already broken by the space-joined contract, and narrowing
+ * it here would reject working machines for no security gain).  A token that
+ * fails is dropped with a diagnostic rather than silently spliced: the link
+ * error that follows names the missing library, which is a better outcome than
+ * running whatever the token said. */
+static bool cmake_manifest_token_ok(const char *tok, const char *what) {
+    if (!tok || !*tok) return false;
+    if (tur_arg_is_shell_safe(tok)) return true;
+    fprintf(stderr,
+            "spice: dropping %s '%s' from cmake/spice-deps-manifest.json -- it "
+            "contains a character the shell would read as syntax\n", what, tok);
+    return false;
+}
+
 void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
     for (int i = 0; i < m->n_entries; i++) {
         const PkgCmakeManifestEntry *e = &m->entries[i];
         for (int j = 0; j < e->n_include_dirs; j++) {
-            if (e->include_dirs[j] && e->include_dirs[j][0])
+            if (e->include_dirs[j] && e->include_dirs[j][0] &&
+                cmake_manifest_token_ok(e->include_dirs[j], "include dir"))
                 buf_printf(buf, " -I%s", e->include_dirs[j]);
         }
         for (int j = 0; j < e->n_link_dirs; j++) {
-            if (e->link_dirs[j] && e->link_dirs[j][0])
+            if (e->link_dirs[j] && e->link_dirs[j][0] &&
+                cmake_manifest_token_ok(e->link_dirs[j], "link dir"))
                 buf_printf(buf, " -L%s", e->link_dirs[j]);
         }
         for (int j = 0; j < e->n_link_libs; j++) {
-            if (e->link_libs[j] && e->link_libs[j][0])
+            if (e->link_libs[j] && e->link_libs[j][0] &&
+                cmake_manifest_token_ok(e->link_libs[j], "link lib"))
                 buf_printf(buf, " -l%s", e->link_libs[j]);
         }
         /* After link_libs: a dep's own artifact must precede the transitive
          * libraries it depends on for static archive resolution. */
         for (int j = 0; j < e->n_link_flags; j++)
-            append_link_flag_token(buf, e->link_flags[j]);
+            if (cmake_manifest_token_ok(e->link_flags[j], "link flag"))
+                append_link_flag_token(buf, e->link_flags[j]);
     }
 }
 
@@ -5995,8 +6679,29 @@ int cmd_pkg_audit(int argc, char **argv) {
         printf("\nSome origins are not pinned in tur.lock. Run `tur fetch` so "
                "each resolves to a recorded commit and hash.\n");
 
-    printf("\nThis lists origins; it verifies nothing. No signature or key "
-           "checking exists yet.\n");
+    /* C-3: audit VERIFIES now.  It used to close with "this lists origins; it
+     * verifies nothing", which the consuming guide reproduced -- so the one
+     * command named "audit" was the one that checked least.  It re-hashes
+     * every spice tree that is present and pinned, and compares. */
+    printf("\nIntegrity:\n");
+    bool spices_ok = have_lock
+                   ? pkg_verify_locked_spices(".", &m, &lock, "tur audit")
+                   : true;
+    bool cmake_ok  = have_lock ? pkg_cmake_verify_lock(".", &lock) : true;
+    if (!have_lock) {
+        printf("  (no tur.lock -- nothing to verify against)\n");
+    } else if (spices_ok && cmake_ok) {
+        printf("  every present, pinned dependency matches tur.lock.\n");
+    } else {
+        printf("  MISMATCH -- see above.\n");
+    }
+
+    printf("\nWhat this does and does not prove: the hashes above say the trees\n"
+           "on disk are the ones tur.lock recorded when they were fetched. They\n"
+           "are trust-on-first-use, not a signature -- nothing here authenticates\n"
+           "an origin, and `tur.lock` pins content rather than checking out a\n"
+           "recorded commit (:ref is what a clone tracks). Prefer a tag over a\n"
+           "branch for :ref, and read a new spice before adding it.\n");
 
     pkg_lock_free(&lock);
     pkg_manifest_free(&m);

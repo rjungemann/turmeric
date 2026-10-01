@@ -16,6 +16,15 @@ required capability and the native dispatch checks it. What it can still do is
 read or write an arbitrary address in the host's process, with no capability
 at all.
 
+**Narrowed again 2026-09-30 (direction 1 landed).** The native channel -- the
+whole of the Repro below -- is now closed by a per-restricted-env handle
+provenance registry (see *Resolved: native handle forgery* below). What remains
+open is the narrower *value-model* channel the "Fix directions" section already
+attributes to direction 2 (tagged handles): an **erasing ascription** on a type
+variable, and **continuation resume**, still launder a caller integer into a
+pointer WITHOUT passing through the native dispatch, so they are not caught by
+the registry. See *Still open* below.
+
 ## Repro
 
 Against a Debug build, from an embedder:
@@ -87,6 +96,90 @@ sandbox test can pin it the same way it pins the capability column.
    the handle as an `:int`.
 
 Direction 1 is enough to make the T3 promise and the deferred T1 macro promise
+in `docs/guides/security-guide.md`.
+
+## Resolved: native handle forgery -- direction 1 (2026-09-30)
+
+Direction 1 landed. The whole of the Repro above is now refused instead of
+crashing:
+
+```c
+TuriEnv *env = turi_env_new_sandboxed();
+turi_eval(env, "(vec-get 4096 0)");
+/* => TURI_ERROR "eval: 'vec-get' arg 1 is not a live handle of the
+      expected kind -- a sandboxed handle cannot be forged from an
+      integer (S-5)" */
+```
+
+What was built:
+
+- **A handle-signature column** in `src/turi/native_caps.c`
+  (`k_handle_rows[]`, 242 rows, binary-searched by
+  `turi_native_handle_find`). Each row names, per leading argument position,
+  the `TuriHandleKind` the native dereferences there (0 = an ordinary word: a
+  scalar, a count, a stored key/value read back as a carrier), plus the result
+  kind and mint/free flags. The kinds cover every distinct interpreter handle
+  representation -- `VEC`, `SETMAP`, `HAMT`, `HAMT_ITER`/`_TRANS`, `STRING`,
+  `SBUF`, `SLICE`/`SLICEBOX`, `CONS`, `SEQCELL`, `SYM`, `JSON`, `GENARR`,
+  `GRID`, `MUTMAP`, `BTCELL`, `FUTURE`, `CHAN`, `MUTEX`, `BYTES`, `REACTOR`,
+  the comparator fn-ptr `CMP`, and a `GENERIC` catch-all.
+- **A per-restricted-env provenance registry** (`TuriProvSet`, an
+  open-addressing `{kind, ptr}` set on `TuriEnv`, in `src/turi/eval.c`). It is
+  enabled for a sandbox at `turi_env_new_sandboxed`, and for the macro env when
+  `turi_env_deny` drops it below `TURI_CAP_ALL` (seeding the pre-restriction
+  globals as `GENERIC`, so a handle the preload minted is not mistaken for a
+  forgery). Unrestricted embedders never enable it and pay nothing.
+- **The one dispatch hook** in `eval_apply_driven`: before a provenance-tracked
+  native runs, `turi_prov_guard_native` refuses any handle argument that is not
+  a live entry of the declared kind; after it runs, `turi_prov_track_native`
+  registers a minted result and forgets a freed handle. A `TURI_CSTR` argument
+  is a real reader pointer and is trusted; only a `TURI_INT` carrier is checked.
+
+This closes, in a restricted env:
+
+- the arbitrary-integer wild read/write (`(vec-get 4096 0)`, `(vec-len 4096)`,
+  `(tur_hamt_count 4096)`, the `-set!`/`-push!` writers, `(sym->str 4096)`,
+  `(tur_string_len 4096)`, `(head 4096)`, ...);
+- **kind confusion** -- a real Vec replayed where a HAMT is expected, or a
+  count (`(vec-len v)`, not a handle) replayed as one;
+- **use-after-free** -- a freed handle's pointer is forgotten, so a later use
+  is refused.
+
+A genuinely-minted handle still round-trips: a sandbox builds and reads vectors,
+maps, HAMTs and strings exactly as before. Pinned by the `forgery/*`,
+`handles-ok/*` and `handle-table` cases in `tests/turi/sandbox-eval.c`.
+
+## Still open: the value-model channel -- direction 2
+
+Direction 1 guards *the native dispatch*. Two forgeries reach a pointer WITHOUT
+going through it, so the registry does not see them; both are the "erasing
+ascription launders an integer into a handle type" case the *Root cause* section
+already flagged, and both are what direction 2 (tagged handles) closes:
+
+- **An erasing ascription on a type variable.** A generic body that ascribes a
+  caller integer to its type parameter re-tags it in the interpreter's own value
+  model, then the tree-walker dereferences the result -- as a struct field read
+  or as a call target:
+
+  ```
+  (defn mk [A] [x : int] : A (:: x A))
+  (let [f : (fn [int] int) (mk 4096)] (f 1))   ; still a wild jump
+  ```
+
+  The retag sites are `try_retag_carrier_struct` / `recover_carrier_closure` /
+  the `EX_ASCRIBE` cstr arm in `src/turi/eval.c`, none of which is a native.
+
+- **Continuation resume.** `(resume-cont! 4096 0)` and the lowered
+  `tur_*_cont_resume` builtins are folded by the CEK driver
+  (`cont_fold_begin` / `ts_cont_resume`), not by the native dispatch, and cast
+  the caller integer to a `TuriCont *`.
+
+These need direction 2's tagged handle (a `TURI_HANDLE` value tag carrying kind
++ pointer, minted by every constructor and checked at every reinterpret,
+including the value-model retag and the continuation fold), because a bare
+`:int` in the value model carries no kind for the registry to check against.
+Until then the sandbox is a boundary against the native handle-forgery channel
+but **not yet a full boundary against hostile code** -- see the T3 status block
 in `docs/guides/security-guide.md`.
 
 ## Resolved: host exit (2026-09-30)

@@ -283,6 +283,10 @@ TuriEnv *turi_env_new_sandboxed(void) {
      * step-fuel alone (the eval_depth guard was retired). */
     env->step_fuel_limit = TURI_DEFAULT_SANDBOX_FUEL;
     env->step_fuel       = TURI_DEFAULT_SANDBOX_FUEL;
+    /* security-audit-plan S-5: a sandbox is restricted from birth (no preload
+     * runs before this), so turn on handle-provenance tracking now -- every
+     * handle it uses is minted after this point and recorded as it is made. */
+    turi_prov_enable_and_seed(env);
     return env;
 }
 
@@ -411,6 +415,8 @@ void turi_env_free(TuriEnv *env) {
 
     buf_free(&env->src_acc);
     symtab_free(&env->st);
+    /* security-audit-plan S-5: release the handle-provenance registry. */
+    turi_prov_free(env);
     arena_free(&env->sym_arena);
     free(env);
 }

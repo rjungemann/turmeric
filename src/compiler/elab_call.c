@@ -1160,6 +1160,26 @@ static bool call_app_has_struct_elem(const Type *t) {
     return call_app_has_struct_elem(t->as.app.fn);
 }
 
+/* security-audit WP5 (M-6): can a value of this type, as the one word it is
+ * passed as, BE region memory?  Only a `:heap` node is -- the routed ctor
+ * sites allocate nothing else -- and a stdlib collection handle (Vec, Map,
+ * Set, MutableMap) is `malloc`'d even though its def is `:heap`.  The
+ * elaborator's half of emit_region_word_can_be_node, minus the by-value
+ * aggregate arm: an aggregate is not one word, so it cannot ride an `:int`
+ * parameter's erasure without changing its representation. */
+static bool call_arg_is_region_node_word(Type t) {
+    AdtDef *def = NULL;
+    if (t.kind == TY_ADT) {
+        def = t.as.adt_.def;
+    } else if (t.kind == TY_APP) {
+        Type args[8];
+        uint8_t n_args = 0;
+        if (!type_extract_adt_app(&t, &def, args, &n_args)) def = NULL;
+    }
+    if (!def || !def->is_heap || def->is_opaque) return false;
+    return !region_def_is_malloc_collection(def);
+}
+
 static bool call_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -8011,8 +8031,29 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * pointer.  Make the coercion the same ascription, and the one note
          * covers every such store, present and future.
          *
-         * Scoped to an inline-C callee: a Turmeric-bodied callee's own stores
-         * are hooked where they happen.  NOT narrowed by a declared `#fx{}`:
+         * A Turmeric-bodied callee is NOT exempt, which it used to be on the
+         * theory that "its own stores are hooked where they happen".  They
+         * are not: inside the callee the word is already an `:int`, so when
+         * it forwards the word to an inline-C store the implicit-erasure rule
+         * sees an int, not a node, and nothing notes it.  `sized-buf-set!` is
+         * that shape -- a typed wrapper over `__sized-buf-set!-raw` -- and a
+         * node stored through it read back the arena poison after the rewind
+         * (security-audit-plan WP5, M-6).  For such a callee the rule is
+         * narrowed to a `:heap` node word (call_arg_is_region_node_word):
+         * the only thing that can be region memory, and pointer-carried, so
+         * the ascription never changes representation.  That matters because
+         * a callee not yet elaborated (mutual recursion) records a compound
+         * parameter as the `:int` placeholder, and erasing a by-value
+         * aggregate there dropped its by-ref `&temp`.  A CONSTRUCTOR is
+         * excluded: its node fields arrive through `:int`-kinded slots too,
+         * but the box it fills is routed into the same generation (or, when
+         * malloc'd, notes its own field words), so the store is
+         * region-to-region -- noting it retired every typed tree a bracket
+         * built.  The known cost is `tcons`, an ordinary defn whose tail is
+         * `t : int`: a list built with it inside a bracket now retires;
+         * `tcons-of` (typed tail) keeps its rewind.
+         *
+         * NOT narrowed by a declared `#fx{}`:
          * a pure constructor retains its arguments by definition --
          * zipper-new-raw is `#fx{}` and stores `focus` into the zipper it
          * builds.  The note only ever turns a rewind into a retire, so a body
@@ -8020,9 +8061,11 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * saving, never correctness -- the trade the typed-parameter note at
          * inline-C body entry already makes. */
         if (arg_ok && expected_arg_kind == TY_INT && fn_binding &&
-                fn_binding->body_is_inline_c &&
-                (args[i]->type.kind == TY_ADT || args[i]->type.kind == TY_APP ||
-                 args[i]->type.kind == TY_STRUCT)) {
+                (fn_binding->body_is_inline_c
+                     ? (args[i]->type.kind == TY_ADT || args[i]->type.kind == TY_APP ||
+                        args[i]->type.kind == TY_STRUCT)
+                     : (call_arg_is_region_node_word(args[i]->type) &&
+                        !elab_lookup_ctor(e, fn_binding->name)))) {
             uint32_t fai = fn_binding->closure_fn_binding ? i + 1 : i;
             const Type *decl = (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
                                 fai < fn_type.as.fn.arity)

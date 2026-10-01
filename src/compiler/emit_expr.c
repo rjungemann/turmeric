@@ -11679,6 +11679,34 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!preserve_ascribe_for_bridge) {
                     while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
                 }
+                /* security-audit WP5 (M-6): the other way a node reaches an
+                 * inline-C body unnoted -- a TYPE-VARIABLE parameter.  The
+                 * body-entry note (emit_fns.c) resolves `v : A` to a def-less
+                 * tyvar and skips it, trusting that the node "was noted at its
+                 * ascription"; but a generic callee takes the node with no
+                 * ascription at all, so `(keep-gen slot (Link 1 0))` inside a
+                 * bracket rewound under the stored word.  The call site is the
+                 * one place the concrete argument type is known: note it here,
+                 * through the same hoist as a stripped erasure.  Scoped to an
+                 * argument that can BE a node, so a scalar or a collection
+                 * handle handed to a generic accessor costs nothing. */
+                if (regions_enabled() && !rgn_erased && arg_expr && fn_binding &&
+                    fn_binding->body_is_inline_c && fn_binding->type.kind == TY_FN) {
+                    uint32_t pi = fn_binding->closure_fn_binding ? i + 1 : i;
+                    const Type *ft = &fn_binding->type;
+                    const Type *decl = (ft->as.fn.arg_full_types && pi < ft->as.fn.arity)
+                        ? ft->as.fn.arg_full_types[pi] : NULL;
+                    bool tyvar_param = (decl && decl->kind == TY_TYVAR) ||
+                        (ft->as.fn.arg_kinds && pi < ft->as.fn.arity &&
+                         ft->as.fn.arg_kinds[pi] == TY_TYVAR);
+                    if (tyvar_param) {
+                        Type at = emit_resolve_type(ctx, arg_expr->type);
+                        if (emit_region_word_can_be_node(ctx, &at)) {
+                            rgn_erased = true;
+                            rgn_from = at;
+                        }
+                    }
+                }
                 const Expr *emit_arg = arg_expr;
                 /* generic-call-result-in-generic-collapses-to-int: an argument
                  * that is a reinterpret typed as the enclosing generic's own

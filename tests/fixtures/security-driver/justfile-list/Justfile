@@ -1,0 +1,13 @@
+# D-2: this assignment used to be evaluated during the PARSE, and parsing
+# precedes the --list branch -- so `tur run --list`, which every shell
+# completion and editor integration runs against a tree you have only opened,
+# executed this command.
+side := `touch PWNED && echo ran`
+
+# a recipe that never mentions the variable
+quiet:
+    @echo quiet
+
+# the one that does
+loud:
+    @echo "{{ side }}"

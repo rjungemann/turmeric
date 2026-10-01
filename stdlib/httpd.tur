@@ -86,6 +86,8 @@
   /* __tur_include__: #include <stdint.h> */
   /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
+  /* __tur_include__: static int64_t httpd_max_body = 8388608; */
+  /* __tur_include__: static int httpd_bind_any = 0; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
@@ -158,6 +160,398 @@
 (extern-c tur_local_park_fd [g :ptr fd :int events :int timeout-ms :int] :int)
 
 (extern-c tur_reactor_run_fibers [g :ptr] :int)
+;; ---------------------------------------------------------------------------
+;; Request-head parsing, response-head building and per-request cleanup,
+;; shared by the blocking pool (httpd-handle) and the async server
+;; (httpd-async-fiber-body).  Each used to carry its own copy, and the copies
+;; had already drifted (the async cleanup leaked multipart parts and
+;; attributes; the blocking status table had no 401).  One copy is also what
+;; tests/fuzz drives: httpd-parse-head takes bytes, not a socket.
+;; See docs/upcoming/security-audit-plan.md (M-4).
+;; ---------------------------------------------------------------------------
+;;; httpd-set-max-body! -- cap the request body size the server will read.
+;;;
+;;; A request whose Content-Length exceeds the cap is answered 413 and the
+;;; connection closed before any of the body is read or allocated.  The
+;;; default is 8 MiB.  This is the server-wide ceiling; mw-body-size applies a
+;;; lower per-route limit on top of it.
+;;;
+;;; Parameters:
+;;;   n -- the new cap in bytes (clamped to [0, 2^31 - 2])
+;;;
+;;; Returns:
+;;;   The previous cap.
+;;;
+;;; Example:
+;;;   (httpd-set-max-body! (* 64 1048576))   ; accept uploads up to 64 MiB
+;;;
+;;; Since: security-audit-plan WP4 (M-4)
+
+(defn httpd-set-max-body! [n : int] : int
+  ```c
+  int64_t prev = httpd_max_body;
+  if (n < 0) n = 0;
+  if (n > 2147483646) n = 2147483646;   /* conn->body_len is an int */
+  httpd_max_body = n;
+  return prev;
+  ```)
+;;; httpd-set-bind-any! -- listen on every interface instead of loopback.
+;;;
+;;; Servers bind 127.0.0.1 by default, so a program that starts httpd is not
+;;; reachable from the network until it says so.  Call this (or set the
+;;; environment variable TUR_HTTPD_BIND_ANY=1) before httpd-new / httpd-new-pool
+;;; / httpd-new-async to bind 0.0.0.0.  TUR_BIND_LOOPBACK, which the test
+;;; harnesses export, still forces loopback.
+;;;
+;;; Parameters:
+;;;   on -- true to bind every interface, false for loopback
+;;;
+;;; Returns:
+;;;   The previous setting.
+;;;
+;;; Example:
+;;;   (httpd-set-bind-any! true)
+;;;   (httpd-new 8080 handler)   ; reachable on every interface
+;;;
+;;; Since: security-audit-plan WP4 (M-4)
+
+(defn httpd-set-bind-any! [on : bool] : bool
+  ```c
+  int prev = httpd_bind_any;
+  httpd_bind_any = on ? 1 : 0;
+  return prev != 0;
+  ```)
+;;; httpd-bind-addr -- internal: the IPv4 address (host order) to listen on.
+
+(defn httpd-bind-addr [] : int
+  ```c
+  if (getenv("TUR_BIND_LOOPBACK")) return (int64_t)INADDR_LOOPBACK;
+  const char *e = getenv("TUR_HTTPD_BIND_ANY");
+  int any = httpd_bind_any || (e && *e && strcmp(e, "0") != 0);
+  return (int64_t)(any ? INADDR_ANY : INADDR_LOOPBACK);
+  ```)
+;;; httpd-status-text -- internal: the reason phrase for a status code.
+
+(defn httpd-status-text [status : int] : cstr
+  ```c
+  switch (status) {
+    case 200: return "OK";
+    case 201: return "Created";
+    case 204: return "No Content";
+    case 301: return "Moved Permanently";
+    case 302: return "Found";
+    case 303: return "See Other";
+    case 304: return "Not Modified";
+    case 307: return "Temporary Redirect";
+    case 400: return "Bad Request";
+    case 401: return "Unauthorized";
+    case 403: return "Forbidden";
+    case 404: return "Not Found";
+    case 405: return "Method Not Allowed";
+    case 413: return "Payload Too Large";
+    case 429: return "Too Many Requests";
+    case 500: return "Internal Server Error";
+    case 501: return "Not Implemented";
+    case 503: return "Service Unavailable";
+    default:  return "OK";
+  }
+  ```)
+;;; httpd-error-response -- internal: a complete close-the-connection response.
+;;;
+;;; Writes "HTTP/1.1 <status> <text>" with an empty body and Connection: close
+;;; into buf (at most cap bytes) and returns its length.
+
+(defn httpd-error-response [status : int buf : ptr<void> cap : int] : int
+  ```c
+  int n = snprintf((char *)buf, (size_t)cap,
+      "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+      (int)status, httpd_hystatus_hytext(status));
+  if (n < 0) return 0;
+  return n >= (int)cap ? (int64_t)cap - 1 : (int64_t)n;
+  ```)
+;;; httpd-parse-head -- internal: parse a request head that is already in memory.
+;;;
+;;; `buf` holds `total` bytes (NUL-terminated) that include the whole header
+;;; block.  Fills the connection's method / path / version / req_headers and
+;;; client_keep_alive, stores the validated Content-Length through `out`
+;;; (an int64_t*), and returns the header block's length in bytes.  A request
+;;; the server must refuse returns the negated status to answer it with:
+;;;   -400  malformed, negative or conflicting Content-Length, or both
+;;;         Content-Length and Transfer-Encoding (the request-smuggling shape)
+;;;   -413  Content-Length above httpd-set-max-body!'s cap
+;;;   -501  Transfer-Encoding (chunked bodies are not implemented, and reading
+;;;         the chunks as the next request would desync the connection)
+;;; Pure over its input: no socket, which is what the fuzz target relies on.
+
+(defn httpd-parse-head [c : ptr<void>
+                        buf : ptr<void>
+                        total : int
+                        out : ptr<void>] : int
+  ```c
+  HttpdConn *conn = (HttpdConn *)c;
+  char *bp = (char *)buf;
+  int64_t *out_clen = (int64_t *)out;
+  *out_clen = 0;
+  char *hdr_end = strstr(bp, "\r\n\r\n");
+  if (!hdr_end) hdr_end = strstr(bp, "\n\n");
+  if (!hdr_end) return -400;
+  int hdr_sep_len = (hdr_end[0] == '\r') ? 4 : 2;
+  int64_t hdrs_total = (int64_t)(hdr_end - bp) + hdr_sep_len;
+  /* Parse request line: METHOD SP PATH SP VERSION CRLF */
+  char *line_end = strpbrk(bp, "\r\n");
+  if (!line_end || line_end > bp + total) line_end = bp + total;
+  char *p = bp;
+  if (p < line_end) {
+      char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+      if (sp) {
+          int l = (int)(sp - p);
+          if (l > 0 && l < 15) {
+              memcpy(conn->method, p, (size_t)l);
+              conn->method[l] = '\0';
+          }
+          p = sp + 1;
+      }
+  }
+  if (p < line_end) {
+      char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+      if (sp) {
+          int l = (int)(sp - p);
+          if (l > 0 && l < 1023) {
+              memcpy(conn->path, p, (size_t)l);
+              conn->path[l] = '\0';
+          }
+          p = sp + 1;
+          char *vlen_end = (char *)memchr(p, '\r', (size_t)(line_end - p));
+          if (!vlen_end) vlen_end = line_end;
+          int vl = (int)(vlen_end - p);
+          if (vl > 0 && vl < 15) {
+              memcpy(conn->version, p, (size_t)vl);
+              conn->version[vl] = '\0';
+          }
+      } else {
+          int l = (int)(line_end - p);
+          if (l > 0 && l < 1023) {
+              memcpy(conn->path, p, (size_t)l);
+              conn->path[l] = '\0';
+          }
+      }
+  }
+  /* Scan headers: pick out Connection / Content-Length / Transfer-Encoding,
+   * AND capture every header into conn->req_headers so middleware can read
+   * arbitrary names via httpd-req-header. */
+  int is_http_11  = (strstr(conn->version, "1.1") != NULL);
+  int conn_keep   = is_http_11;   /* default by version */
+  int conn_close  = 0;
+  int have_cl = 0, have_te = 0, bad_cl = 0, big_cl = 0;
+  int64_t content_len = 0;
+  HttpdHeader *req_tail = NULL;
+  char *h = strpbrk(bp, "\r\n");
+  if (h) {
+      while (h[0] == '\r' || h[0] == '\n') h++;
+      while (h < hdr_end) {
+          char *eol = strpbrk(h, "\r\n");
+          if (!eol || eol > hdr_end) eol = hdr_end;
+          if (eol > h) {
+              char *colon = (char *)memchr(h, ':', (size_t)(eol - h));
+              if (colon) {
+                  int name_len = (int)(colon - h);
+                  char *val = colon + 1;
+                  while (val < eol && (*val == ' ' || *val == '\t')) val++;
+                  int val_len = (int)(eol - val);
+                  if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
+                      if (val_len >= 5  && strncasecmp(val, "close", 5) == 0) conn_close = 1;
+                      if (val_len >= 10 && strncasecmp(val, "keep-alive", 10) == 0) conn_keep = 1;
+                  } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
+                      /* The whole value must be decimal digits (optional
+                       * trailing blanks): no sign, no "10abc", and no silent
+                       * truncation to int -- `(int)strtol` used to turn
+                       * 4294967306 into 10.  Repeats must agree. */
+                      const char *q = val, *qe = eol;
+                      while (qe > q && (qe[-1] == ' ' || qe[-1] == '\t')) qe--;
+                      int64_t v = 0;
+                      if (q == qe) bad_cl = 1;
+                      for (; q < qe; q++) {
+                          if (*q < '0' || *q > '9') { bad_cl = 1; break; }
+                          if (v > (INT64_MAX - 9) / 10) { big_cl = 1; break; }
+                          v = v * 10 + (int64_t)(*q - '0');
+                      }
+                      if (!bad_cl && !big_cl) {
+                          if (have_cl && v != content_len) bad_cl = 1;
+                          have_cl = 1;
+                          content_len = v;
+                      }
+                  } else if (name_len == 17 && strncasecmp(h, "Transfer-Encoding", 17) == 0) {
+                      have_te = 1;
+                  }
+                  /* M0: stash a copy on req_headers (always, even for
+                   * Connection / Content-Length, so a handler can read
+                   * them by name without a second special case). */
+                  if (name_len > 0) {
+                      HttpdHeader *rh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+                      if (rh) {
+                          rh->name  = (char *)malloc((size_t)name_len + 1);
+                          rh->value = (char *)malloc((size_t)val_len  + 1);
+                          if (rh->name && rh->value) {
+                              memcpy(rh->name,  h,   (size_t)name_len); rh->name[name_len]  = '\0';
+                              if (val_len > 0) memcpy(rh->value, val, (size_t)val_len);
+                              rh->value[val_len] = '\0';
+                              if (req_tail) { req_tail->next = rh; req_tail = rh; }
+                              else { conn->req_headers = rh; req_tail = rh; }
+                          } else {
+                              if (rh->name)  free(rh->name);
+                              if (rh->value) free(rh->value);
+                              free(rh);
+                          }
+                      }
+                  }
+              }
+          }
+          if (eol >= hdr_end) break;
+          h = eol;
+          while (h < hdr_end && (h[0] == '\r' || h[0] == '\n')) h++;
+      }
+  }
+  conn->client_keep_alive = (conn_keep && !conn_close);
+  if (bad_cl) return -400;
+  if (have_te) return have_cl ? -400 : -501;
+  if (big_cl || content_len > httpd_max_body) return -413;
+  *out_clen = content_len;
+  return hdrs_total;
+  ```)
+;;; httpd-resp-head -- internal: build the response status line + header block.
+;;;
+;;; Returns a malloc'd buffer (caller frees) holding everything up to and
+;;; including the blank line, and stores its length through `out` (an
+;;; int64_t*); NULL on allocation failure.  A user-set Content-Length is
+;;; dropped (the server owns the byte count), and so is any header whose name
+;;; or value would break the framing -- a CR or LF in either (response
+;;; splitting when a handler echoes request data into a header), or a name
+;;; with a colon or blank in it.
+
+(defn httpd-resp-head [c : ptr<void> is11 : int out : ptr<void>] : ptr<void>
+  ```c
+  HttpdConn *conn = (HttpdConn *)c;
+  int64_t *out_len = (int64_t *)out;
+  *out_len = 0;
+  int status = conn->resp_status ? conn->resp_status : 200;
+  const char *stxt = httpd_hystatus_hytext((int64_t)status);
+  int blen = conn->resp_body ? conn->resp_body_len : 0;
+  const char *ver  = is11 ? "HTTP/1.1" : "HTTP/1.0";
+  const char *chdr = conn->client_keep_alive ? "keep-alive" : "close";
+  int has_content_type = 0;
+  for (HttpdHeader *rh = (HttpdHeader *)conn->resp_headers; rh; rh = rh->next) {
+      if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) { has_content_type = 1; break; }
+  }
+  size_t cap = 1024, len = 0;
+  char *hb = (char *)malloc(cap);
+  if (!hb) return NULL;
+  int n = snprintf(hb, cap, "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n%s",
+                   ver, status, stxt, blen, chdr,
+                   has_content_type ? "" : "Content-Type: text/plain; charset=utf-8\r\n");
+  if (n < 0 || (size_t)n >= cap) { free(hb); return NULL; }
+  len = (size_t)n;
+  for (HttpdHeader *rh = (HttpdHeader *)conn->resp_headers; rh; rh = rh->next) {
+      if (!rh->name || !*rh->name || strcasecmp(rh->name, "Content-Length") == 0) continue;
+      const char *v = rh->value ? rh->value : "";
+      if (strpbrk(rh->name, "\r\n: \t") || strpbrk(v, "\r\n")) continue;
+      size_t nlen = strlen(rh->name), vlen = strlen(v);
+      size_t need = len + nlen + vlen + 5;   /* ": " + "\r\n" + NUL */
+      if (need > cap) {
+          size_t nc = cap;
+          while (nc < need) nc *= 2;
+          char *nh = (char *)realloc(hb, nc);
+          if (!nh) { free(hb); return NULL; }
+          hb = nh; cap = nc;
+      }
+      memcpy(hb + len, rh->name, nlen); len += nlen;
+      hb[len++] = ':'; hb[len++] = ' ';
+      memcpy(hb + len, v, vlen); len += vlen;
+      hb[len++] = '\r'; hb[len++] = '\n';
+  }
+  if (len + 3 > cap) {
+      char *nh = (char *)realloc(hb, len + 3);
+      if (!nh) { free(hb); return NULL; }
+      hb = nh;
+  }
+  hb[len++] = '\r'; hb[len++] = '\n'; hb[len] = '\0';
+  *out_len = (int64_t)len;
+  return hb;
+  ```)
+;;; httpd-conn-release -- internal: free everything a request attached to conn.
+;;;
+;;; The body, the response body, both header lists, the cached JSON body, the
+;;; multipart parts, the attribute list and the owned accessor strings.  Leaves
+;;; conn reusable (every freed field is reset).
+
+(defn httpd-conn-release [c : ptr<void>] : nil
+  ```c
+  HttpdConn *conn = (HttpdConn *)c;
+  if (!conn) return;
+  if (conn->body)      { free(conn->body); conn->body = NULL; }
+  if (conn->resp_body) { free(conn->resp_body); conn->resp_body = NULL; }
+  for (int which = 0; which < 2; which++) {
+      HttpdHeader *rh = (HttpdHeader *)(which ? conn->resp_headers : conn->req_headers);
+      while (rh) {
+          HttpdHeader *nx = rh->next;
+          if (rh->name)  free(rh->name);
+          if (rh->value) free(rh->value);
+          free(rh);
+          rh = nx;
+      }
+  }
+  conn->req_headers = NULL;
+  conn->resp_headers = NULL;
+  /* M3: free any cached JSON body parsed by httpd-req-json / mw-json-body. */
+  if (conn->req_json_cache) {
+      json_slfree(conn->req_json_cache);
+      conn->req_json_cache = 0;
+  }
+  /* M7: free any cached multipart parts. */
+  if (conn->req_multipart_parts) {
+      /* Same shape as HttpdPart below; redeclared here so cleanup is
+       * self-contained. */
+      typedef struct __HttpdPart {
+          char *name; char *filename; char *content_type;
+          char *data; int data_len;
+          struct __HttpdPart *next;
+      } HttpdPart;
+      HttpdPart *pp = (HttpdPart *)conn->req_multipart_parts;
+      while (pp) {
+          HttpdPart *nx = pp->next;
+          if (pp->name)         free(pp->name);
+          if (pp->filename)     free(pp->filename);
+          if (pp->content_type) free(pp->content_type);
+          if (pp->data)         free(pp->data);
+          free(pp);
+          pp = nx;
+      }
+      conn->req_multipart_parts = NULL;
+  }
+  /* MW2: free per-request attribute list. */
+  if (conn->attr_list) {
+      HttpdAttr *ap = (HttpdAttr *)conn->attr_list;
+      while (ap) {
+          HttpdAttr *nx = ap->next;
+          if (ap->key)   free(ap->key);
+          if (ap->value) free(ap->value);
+          free(ap);
+          ap = nx;
+      }
+      conn->attr_list = NULL;
+  }
+  /* httpd-request-accessor-cstr-leak: free the per-request accessor strings
+   * (httpd-req-cookie / httpd-req-form results) registered on owned_cstrs. */
+  if (conn->owned_cstrs) {
+      HttpdOwnedStr *op = (HttpdOwnedStr *)conn->owned_cstrs;
+      while (op) {
+          HttpdOwnedStr *nx = op->next;
+          if (op->s) free(op->s);
+          free(op);
+          op = nx;
+      }
+      conn->owned_cstrs = NULL;
+  }
+  ```)
 ;;; httpd-handle -- internal: serve one or more HTTP requests on fd, then
 ;;; close fd. Loops while the client keeps the connection alive.
 ;;;
@@ -224,129 +618,53 @@
           if (!hdr_end) hdr_end = strstr(buf, "\n\n");
       }
       if (!hdr_end) { free(buf); break; }  /* peer closed, timed out, or oversized */
-      int hdr_sep_len = (hdr_end[0] == '\r') ? 4 : 2;
-      int hdrs_total  = (int)(hdr_end - buf) + hdr_sep_len;
-      /* Parse request line: METHOD SP PATH SP VERSION CRLF */
-      char *line_end = strpbrk(buf, "\r\n");
-      if (!line_end || line_end > buf + total) line_end = buf + total;
-      char *p = buf;
-      if (p < line_end) {
-          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
-          if (sp) {
-              int l = (int)(sp - p);
-              if (l > 0 && l < 15) {
-                  memcpy(conn->method, p, (size_t)l);
-                  conn->method[l] = '\0';
-              }
-              p = sp + 1;
-          }
-      }
-      if (p < line_end) {
-          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
-          if (sp) {
-              int l = (int)(sp - p);
-              if (l > 0 && l < 1023) {
-                  memcpy(conn->path, p, (size_t)l);
-                  conn->path[l] = '\0';
-              }
-              p = sp + 1;
-              char *vlen_end = (char *)memchr(p, '\r', (size_t)(line_end - p));
-              if (!vlen_end) vlen_end = line_end;
-              int vl = (int)(vlen_end - p);
-              if (vl > 0 && vl < 15) {
-                  memcpy(conn->version, p, (size_t)vl);
-                  conn->version[vl] = '\0';
-              }
+      /* security-audit-plan M-4: the head is parsed by httpd-parse-head, the
+       * one parser both server paths share, which also validates the
+       * Content-Length against httpd-set-max-body!'s cap BEFORE anything is
+       * allocated for the body. */
+      int64_t content_len = 0;
+      int64_t hdrs_total = httpd_hyparse_hyhead((void *)conn, (void *)buf,
+                                                (int64_t)total, (void *)&content_len);
+      if (hdrs_total < 0) {
+          char eb[160];
+          int64_t el = httpd_hyerror_hyresponse(-hdrs_total, (void *)eb, (int64_t)sizeof eb);
+          if (conn->tls && httpd_tls_ops.write_fn) {
+              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                  conn->tls, (int64_t)(intptr_t)eb, el);
           } else {
-              int l = (int)(line_end - p);
-              if (l > 0 && l < 1023) {
-                  memcpy(conn->path, p, (size_t)l);
-                  conn->path[l] = '\0';
-              }
+              send(conn->fd, eb, (size_t)el, 0);
           }
+          free(buf);
+          httpd_hyconn_hyrelease((void *)conn);
+          break;
       }
-      /* Scan headers: pick out Connection / Content-Length for routing,
-       * AND capture every header into conn->req_headers so middleware can
-       * read arbitrary names via httpd-req-header. */
-      int is_http_11   = (strstr(conn->version, "1.1") != NULL);
-      int conn_keep    = is_http_11;   /* default by version */
-      int conn_close   = 0;
-      int content_len  = 0;
-      HttpdHeader *req_tail = NULL;
-      char *h = strpbrk(buf, "\r\n");
-      if (h) {
-          while (h[0] == '\r' || h[0] == '\n') h++;
-          while (h < hdr_end) {
-              char *eol = strpbrk(h, "\r\n");
-              if (!eol || eol > hdr_end) eol = hdr_end;
-              if (eol > h) {
-                  char *colon = (char *)memchr(h, ':', (size_t)(eol - h));
-                  if (colon) {
-                      int name_len = (int)(colon - h);
-                      char *val = colon + 1;
-                      while (val < eol && (*val == ' ' || *val == '\t')) val++;
-                      int val_len = (int)(eol - val);
-                      if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
-                          if (val_len >= 5  && strncasecmp(val, "close", 5) == 0) conn_close = 1;
-                          if (val_len >= 10 && strncasecmp(val, "keep-alive", 10) == 0) conn_keep = 1;
-                      } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
-                          content_len = (int)strtol(val, NULL, 10);
-                          if (content_len < 0) content_len = 0;
-                      }
-                      /* M0: stash a copy on req_headers (always, even for
-                       * Connection / Content-Length, so a handler can read
-                       * them by name without a second special case). */
-                      if (name_len > 0) {
-                          HttpdHeader *rh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
-                          if (rh) {
-                              rh->name  = (char *)malloc((size_t)name_len + 1);
-                              rh->value = (char *)malloc((size_t)val_len  + 1);
-                              if (rh->name && rh->value) {
-                                  memcpy(rh->name,  h,   (size_t)name_len); rh->name[name_len]  = '\0';
-                                  if (val_len > 0) memcpy(rh->value, val, (size_t)val_len);
-                                  rh->value[val_len] = '\0';
-                                  if (req_tail) { req_tail->next = rh; req_tail = rh; }
-                                  else { conn->req_headers = rh; req_tail = rh; }
-                              } else {
-                                  if (rh->name)  free(rh->name);
-                                  if (rh->value) free(rh->value);
-                                  free(rh);
-                              }
-                          }
-                      }
-                  }
-              }
-              if (eol >= hdr_end) break;
-              h = eol;
-              while (h < hdr_end && (h[0] == '\r' || h[0] == '\n')) h++;
-          }
-      }
-      conn->client_keep_alive = (conn_keep && !conn_close);
+      int is_http_11 = (strstr(conn->version, "1.1") != NULL);
       /* Read body if Content-Length present. */
       if (content_len > 0) {
-          int body_in_buf = total - hdrs_total;
+          int64_t body_in_buf = (int64_t)total - hdrs_total;
           if (body_in_buf < 0) body_in_buf = 0;
           if (body_in_buf > content_len) body_in_buf = content_len;
           conn->body = (char *)malloc((size_t)content_len + 1);
-          if (conn->body) {
-              if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
-              int need = content_len - body_in_buf;
-              int got  = body_in_buf;
-              while (need > 0) {
-                  ssize_t r;
-                  if (conn->tls && httpd_tls_ops.read_fn) {
-                      r = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
-                              conn->tls, (int64_t)(intptr_t)(conn->body + got), (int64_t)need);
-                  } else {
-                      r = recv(conn->fd, conn->body + got, (size_t)need, 0);
-                  }
-                  if (r <= 0) break;
-                  got  += (int)r;
-                  need -= (int)r;
+          if (!conn->body) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
+          if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
+          int64_t got = body_in_buf;
+          while (got < content_len) {
+              ssize_t r;
+              if (conn->tls && httpd_tls_ops.read_fn) {
+                  r = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
+                          conn->tls, (int64_t)(intptr_t)(conn->body + got), content_len - got);
+              } else {
+                  r = recv(conn->fd, conn->body + got, (size_t)(content_len - got), 0);
               }
-              conn->body[got] = '\0';
-              conn->body_len = got;
+              if (r <= 0) break;
+              got += (int64_t)r;
           }
+          conn->body[got] = '\0';
+          conn->body_len = (int)got;
+          /* A body shorter than its Content-Length (timeout, peer closed) is
+           * not a request: drop the connection rather than hand the handler
+           * a truncated one. */
+          if (got < content_len) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
       }
       /* Read buffer is no longer needed past this point. */
       free(buf);
@@ -361,180 +679,37 @@
       typedef void (*fn1_t)(void *, void *);
       ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
       /* Write response. */
-      int status = conn->resp_status ? conn->resp_status : 200;
-      const char *stxt = (status == 200) ? "OK" :
-                         (status == 201) ? "Created" :
-                         (status == 204) ? "No Content" :
-                         (status == 400) ? "Bad Request" :
-                         (status == 404) ? "Not Found" :
-                         (status == 500) ? "Internal Server Error" : "OK";
-      const char *body  = conn->resp_body ? conn->resp_body : "";
-      int         blen  = conn->resp_body ? conn->resp_body_len : 0;
-      const char *ver   = is_http_11 ? "HTTP/1.1" : "HTTP/1.0";
-      const char *chdr  = conn->client_keep_alive ? "keep-alive" : "close";
-      /* M0: emit user-set response headers between the hardcoded
-       * Content-Length / Connection lines and the blank line. Drop any
-       * user-set Content-Length (we control the actual byte count) and
-       * note whether Content-Type was provided so we can default. */
-      int has_content_type = 0;
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
-          while (rh) {
-              if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) {
-                  has_content_type = 1; break;
-              }
-              rh = rh->next;
-          }
-      }
-      /* Build the header block in a growable buffer (large cookie jars,
-       * many user headers easily overflow a fixed 512 B stack buffer). */
-      size_t hbuf_cap = 1024;
-      char  *hbuf     = (char *)malloc(hbuf_cap);
+      const char *body = conn->resp_body ? conn->resp_body : "";
+      int         blen = conn->resp_body ? conn->resp_body_len : 0;
+      int64_t hlen = 0;
+      char *hbuf = (char *)httpd_hyresp_hyhead((void *)conn, (int64_t)is_http_11, (void *)&hlen);
       if (!hbuf) {
           /* fall back to a minimal status-only response */
-          char tiny[128];
-          int tl = snprintf(tiny, sizeof(tiny),
-              "%s 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-              ver);
+          char tiny[160];
+          int64_t tl = httpd_hyerror_hyresponse(500, (void *)tiny, (int64_t)sizeof tiny);
           if (conn->tls && httpd_tls_ops.write_fn) {
               ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)tiny, (int64_t)tl);
+                  conn->tls, (int64_t)(intptr_t)tiny, tl);
           } else {
               send(conn->fd, tiny, (size_t)tl, 0);
           }
           keep_going = 0;
-          goto __cleanup_iteration;
-      }
-      int hlen = snprintf(hbuf, hbuf_cap,
-          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n",
-          ver, status, stxt, blen, chdr);
-      if (!has_content_type) {
-          int need = hlen + 64;
-          if ((size_t)need > hbuf_cap) {
-              size_t nc = hbuf_cap;
-              while (nc < (size_t)need) nc *= 2;
-              char *nh = (char *)realloc(hbuf, nc);
-              if (nh) { hbuf = nh; hbuf_cap = nc; }
-          }
-          hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
-              "Content-Type: text/plain; charset=utf-8\r\n");
-      }
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
-          while (rh) {
-              if (!rh->name || strcasecmp(rh->name, "Content-Length") == 0) {
-                  rh = rh->next; continue;  /* drop user-set Content-Length */
-              }
-              size_t nlen = strlen(rh->name);
-              size_t vlen = rh->value ? strlen(rh->value) : 0;
-              size_t need = (size_t)hlen + nlen + vlen + 8;  /* ": ", "\r\n", slack */
-              if (need > hbuf_cap) {
-                  size_t nc = hbuf_cap;
-                  while (nc < need) nc *= 2;
-                  char *nh = (char *)realloc(hbuf, nc);
-                  if (!nh) break;
-                  hbuf = nh; hbuf_cap = nc;
-              }
-              hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
-                  "%s: %s\r\n", rh->name, rh->value ? rh->value : "");
-              rh = rh->next;
-          }
-      }
-      /* Terminating blank line. */
-      if ((size_t)hlen + 3 > hbuf_cap) {
-          char *nh = (char *)realloc(hbuf, (size_t)hlen + 3);
-          if (nh) { hbuf = nh; hbuf_cap = (size_t)hlen + 3; }
-      }
-      hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen, "\r\n");
-      if (conn->tls && httpd_tls_ops.write_fn) {
-          ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-              conn->tls, (int64_t)(intptr_t)hbuf, (int64_t)hlen);
-          if (blen > 0) {
-              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)body, (int64_t)blen);
-          }
       } else {
-          send(conn->fd, hbuf, (size_t)hlen, 0);
-          if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
-      }
-      free(hbuf);
-      keep_going = conn->client_keep_alive;
-  __cleanup_iteration:
-      if (conn->body)      free(conn->body);
-      if (conn->resp_body) free(conn->resp_body);
-      /* Free per-request header lists. */
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->req_headers;
-          while (rh) {
-              HttpdHeader *nx = rh->next;
-              if (rh->name)  free(rh->name);
-              if (rh->value) free(rh->value);
-              free(rh);
-              rh = nx;
+          if (conn->tls && httpd_tls_ops.write_fn) {
+              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                  conn->tls, (int64_t)(intptr_t)hbuf, hlen);
+              if (blen > 0) {
+                  ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                      conn->tls, (int64_t)(intptr_t)body, (int64_t)blen);
+              }
+          } else {
+              send(conn->fd, hbuf, (size_t)hlen, 0);
+              if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
           }
-          conn->req_headers = NULL;
+          free(hbuf);
+          keep_going = conn->client_keep_alive;
       }
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
-          while (rh) {
-              HttpdHeader *nx = rh->next;
-              if (rh->name)  free(rh->name);
-              if (rh->value) free(rh->value);
-              free(rh);
-              rh = nx;
-          }
-          conn->resp_headers = NULL;
-      }
-      /* M3: free any cached JSON body parsed by httpd-req-json / mw-json-body. */
-      if (conn->req_json_cache) {
-          json_slfree(conn->req_json_cache);
-          conn->req_json_cache = 0;
-      }
-      /* M7: free any cached multipart parts. */
-      if (conn->req_multipart_parts) {
-          /* Same shape as HttpdPart below; redeclared here so cleanup is
-           * self-contained. */
-          typedef struct __HttpdPart {
-              char *name; char *filename; char *content_type;
-              char *data; int data_len;
-              struct __HttpdPart *next;
-          } HttpdPart;
-          HttpdPart *pp = (HttpdPart *)conn->req_multipart_parts;
-          while (pp) {
-              HttpdPart *nx = pp->next;
-              if (pp->name)         free(pp->name);
-              if (pp->filename)     free(pp->filename);
-              if (pp->content_type) free(pp->content_type);
-              if (pp->data)         free(pp->data);
-              free(pp);
-              pp = nx;
-          }
-          conn->req_multipart_parts = NULL;
-      }
-      /* MW2: free per-request attribute list. */
-      if (conn->attr_list) {
-          HttpdAttr *ap = (HttpdAttr *)conn->attr_list;
-          while (ap) {
-              HttpdAttr *nx = ap->next;
-              if (ap->key)   free(ap->key);
-              if (ap->value) free(ap->value);
-              free(ap);
-              ap = nx;
-          }
-          conn->attr_list = NULL;
-      }
-      /* httpd-request-accessor-cstr-leak: free the per-request accessor strings
-       * (httpd-req-cookie / httpd-req-form results) registered on owned_cstrs. */
-      if (conn->owned_cstrs) {
-          HttpdOwnedStr *op = (HttpdOwnedStr *)conn->owned_cstrs;
-          while (op) {
-              HttpdOwnedStr *nx = op->next;
-              if (op->s) free(op->s);
-              free(op);
-              op = nx;
-          }
-          conn->owned_cstrs = NULL;
-      }
+      httpd_hyconn_hyrelease((void *)conn);
   }
   if (tls && httpd_tls_ops.shutdown) {
       ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)((int64_t)tls);
@@ -705,6 +880,13 @@
       void *tls_ctx;
   } HttpdBlock;
   if (workers <= 0) workers = 4;
+  /* `workers * sizeof(pthread_t)` wrapped for a huge count and the first
+     pthread_create wrote past the block; the spawn loop is `int i` too
+     (security audit WP5, M-5). */
+  if (workers > INT32_MAX || (uint64_t)workers > SIZE_MAX / sizeof(pthread_t)) {
+    TUR_CLOSURE_DROP(handler);
+    return NULL;
+  }
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   int opt = 1;
@@ -714,10 +896,12 @@
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family      = AF_INET;
-  /* Default to INADDR_ANY (a real server wants all interfaces). The test suite
-   * exports TUR_BIND_LOOPBACK to force loopback-only, which stops Windows
-   * Firewall prompting "allow this app" for every fixture binary. */
-  addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
+  /* Loopback unless the program opted in to every interface with
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
+   * server that is reachable from the network should be one somebody asked
+   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
+   * loopback. */
+  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
   addr.sin_port        = htons((uint16_t)port);
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
@@ -1485,15 +1669,29 @@
   const char *cdom   = opts.domain    ? opts.domain    : "";
   const char *csame  = opts.same_site ? opts.same_site : "";
   if (!*cname) return;
-  char buf[2048];
-  int n = snprintf(buf, sizeof(buf), "%s=%s", cname, cval);
-  if (*cpath)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Path=%s",   cpath);
-  if (*cdom)               n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Domain=%s", cdom);
-  if (opts.max_age >= 0)   n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Max-Age=%lld", (long long)opts.max_age);
-  if (opts.secure)         n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Secure");
-  if (opts.http_only)      n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; HttpOnly");
-  if (*csame)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; SameSite=%s", csame);
+  /* Sized to the attributes rather than a fixed 2 KiB: the old buffer summed
+   * snprintf's would-be lengths into n, so once name=value passed 2 KiB,
+   * sizeof(buf) - n wrapped and the next attribute was written past the end
+   * of the stack buffer (security-audit-plan M-4). */
+  size_t cap = strlen(cname) + strlen(cval) + strlen(cpath) + strlen(cdom)
+             + strlen(csame) + 128;
+  char *buf = (char *)malloc(cap);
+  if (!buf) return;
+  size_t n = 0;
+  #define HTTPD_COOKIE_ADD(...) do { \
+      int w_ = snprintf(buf + n, cap - n, __VA_ARGS__); \
+      if (w_ > 0) n += ((size_t)w_ < cap - n) ? (size_t)w_ : cap - n - 1; \
+  } while (0)
+  HTTPD_COOKIE_ADD("%s=%s", cname, cval);
+  if (*cpath)              HTTPD_COOKIE_ADD("; Path=%s",   cpath);
+  if (*cdom)               HTTPD_COOKIE_ADD("; Domain=%s", cdom);
+  if (opts.max_age >= 0)   HTTPD_COOKIE_ADD("; Max-Age=%lld", (long long)opts.max_age);
+  if (opts.secure)         HTTPD_COOKIE_ADD("; Secure");
+  if (opts.http_only)      HTTPD_COOKIE_ADD("; HttpOnly");
+  if (*csame)              HTTPD_COOKIE_ADD("; SameSite=%s", csame);
+  #undef HTTPD_COOKIE_ADD
   __TUR_CNAME_httpd-resp-header-add!__((void *)conn, "Set-Cookie", buf);
+  free(buf);
   ```)
 ;; =============================================================================
 ;; M3: Body parsers -- URL-encoded forms + JSON
@@ -1988,6 +2186,9 @@
       }
   }
   raw[out] = '\0';
+  /* A decoded NUL would truncate the user or password the verifier sees
+   * ("secret\0junk" checked as "secret"): refuse the header instead. */
+  if (memchr(raw, '\0', out)) { free(raw); return 0; }
   /* Split on the first ':' -- everything before is user, after is pass. */
   char *colon = (char *)memchr(raw, ':', out);
   if (!colon) { free(raw); return 0; }
@@ -2144,6 +2345,7 @@
                   const char *nend = (const char *)memchr(nk, '"', (size_t)(eol - nk));
                   if (nend) {
                       size_t nl = (size_t)(nend - nk);
+                      free(p_name);   /* a repeated header replaces, not leaks */
                       p_name = (char *)malloc(nl + 1);
                       if (p_name) { memcpy(p_name, nk, nl); p_name[nl] = '\0'; }
                   }
@@ -2154,6 +2356,7 @@
                   const char *fend = (const char *)memchr(fk, '"', (size_t)(eol - fk));
                   if (fend) {
                       size_t fl = (size_t)(fend - fk);
+                      free(p_filename);
                       p_filename = (char *)malloc(fl + 1);
                       if (p_filename) { memcpy(p_filename, fk, fl); p_filename[fl] = '\0'; }
                   }
@@ -2164,6 +2367,7 @@
                   const char *vs = colon + 1;
                   while (vs < eol && (*vs == ' ' || *vs == '\t')) vs++;
                   size_t vl = (size_t)(eol - vs);
+                  free(p_ctype);
                   p_ctype = (char *)malloc(vl + 1);
                   if (p_ctype) { memcpy(p_ctype, vs, vl); p_ctype[vl] = '\0'; }
               }
@@ -2421,9 +2625,11 @@
           ssize_t n = recv(fd, buf + total, buf_cap - 1 - (size_t)total, 0);
           if (n < 0) {
               if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                  /* Park until readable; -1 = wait forever. */
-                  int ev = (int)tur_local_park_fd(group, fd, 1, -1);
-                  if (ev < 0) break;   /* fiber-driver error */
+                  /* Park until readable, 5 s per wait as the blocking
+                   * pool's SO_RCVTIMEO -- it used to wait forever, so a
+                   * client that sent half a request held its fiber. */
+                  int ev = (int)tur_local_park_fd(group, fd, 1, 5000);
+                  if (ev < 0) break;   /* timeout (-2) or driver error */
                   continue;
               }
               break;
@@ -2435,115 +2641,47 @@
           if (!hdr_end) hdr_end = strstr(buf, "\n\n");
       }
       if (!hdr_end) { free(buf); break; }
-      int hdr_sep_len = (hdr_end[0] == '\r') ? 4 : 2;
-      int hdrs_total  = (int)(hdr_end - buf) + hdr_sep_len;
-      /* Request line + headers parsing -- identical to the blocking
-       * httpd-handle. Inlined here to avoid threading large state
-       * through a separate call. */
-      char *line_end = strpbrk(buf, "\r\n");
-      if (!line_end || line_end > buf + total) line_end = buf + total;
-      char *p = buf;
-      if (p < line_end) {
-          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
-          if (sp) {
-              int l = (int)(sp - p);
-              if (l > 0 && l < 15) { memcpy(conn->method, p, (size_t)l); conn->method[l] = '\0'; }
-              p = sp + 1;
-          }
+      /* security-audit-plan M-4: the same head parser as httpd-handle. */
+      int64_t content_len = 0;
+      int64_t hdrs_total = httpd_hyparse_hyhead((void *)conn, (void *)buf,
+                                                (int64_t)total, (void *)&content_len);
+      if (hdrs_total < 0) {
+          /* One best-effort write: the response is a few dozen bytes and the
+           * connection closes either way. */
+          char eb[160];
+          int64_t el = httpd_hyerror_hyresponse(-hdrs_total, (void *)eb, (int64_t)sizeof eb);
+          (void)send(fd, eb, (size_t)el, 0);
+          free(buf);
+          httpd_hyconn_hyrelease((void *)conn);
+          break;
       }
-      if (p < line_end) {
-          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
-          if (sp) {
-              int l = (int)(sp - p);
-              if (l > 0 && l < 1023) { memcpy(conn->path, p, (size_t)l); conn->path[l] = '\0'; }
-              p = sp + 1;
-              char *vlen_end = (char *)memchr(p, '\r', (size_t)(line_end - p));
-              if (!vlen_end) vlen_end = line_end;
-              int vl = (int)(vlen_end - p);
-              if (vl > 0 && vl < 15) { memcpy(conn->version, p, (size_t)vl); conn->version[vl] = '\0'; }
-          } else {
-              int l = (int)(line_end - p);
-              if (l > 0 && l < 1023) { memcpy(conn->path, p, (size_t)l); conn->path[l] = '\0'; }
-          }
-      }
-      int is_http_11   = (strstr(conn->version, "1.1") != NULL);
-      int conn_keep    = is_http_11;
-      int conn_close   = 0;
-      int content_len  = 0;
-      HttpdHeader *req_tail = NULL;
-      char *h = strpbrk(buf, "\r\n");
-      if (h) {
-          while (h[0] == '\r' || h[0] == '\n') h++;
-          while (h < hdr_end) {
-              char *eol = strpbrk(h, "\r\n");
-              if (!eol || eol > hdr_end) eol = hdr_end;
-              if (eol > h) {
-                  char *colon = (char *)memchr(h, ':', (size_t)(eol - h));
-                  if (colon) {
-                      int name_len = (int)(colon - h);
-                      char *val = colon + 1;
-                      while (val < eol && (*val == ' ' || *val == '\t')) val++;
-                      int val_len = (int)(eol - val);
-                      if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
-                          if (val_len >= 5  && strncasecmp(val, "close", 5) == 0) conn_close = 1;
-                          if (val_len >= 10 && strncasecmp(val, "keep-alive", 10) == 0) conn_keep = 1;
-                      } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
-                          content_len = (int)strtol(val, NULL, 10);
-                          if (content_len < 0) content_len = 0;
-                      }
-                      if (name_len > 0) {
-                          HttpdHeader *rh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
-                          if (rh) {
-                              rh->name  = (char *)malloc((size_t)name_len + 1);
-                              rh->value = (char *)malloc((size_t)val_len  + 1);
-                              if (rh->name && rh->value) {
-                                  memcpy(rh->name, h, (size_t)name_len); rh->name[name_len] = '\0';
-                                  if (val_len > 0) memcpy(rh->value, val, (size_t)val_len);
-                                  rh->value[val_len] = '\0';
-                                  if (req_tail) { req_tail->next = rh; req_tail = rh; }
-                                  else { conn->req_headers = rh; req_tail = rh; }
-                              } else {
-                                  if (rh->name) free(rh->name);
-                                  if (rh->value) free(rh->value);
-                                  free(rh);
-                              }
-                          }
-                      }
-                  }
-              }
-              if (eol >= hdr_end) break;
-              h = eol;
-              while (h < hdr_end && (h[0] == '\r' || h[0] == '\n')) h++;
-          }
-      }
-      conn->client_keep_alive = (conn_keep && !conn_close);
-      /* Body (await on EWOULDBLOCK). */
+      int is_http_11 = (strstr(conn->version, "1.1") != NULL);
+      /* Body (await on EWOULDBLOCK; content_len is capped by parse-head). */
       if (content_len > 0) {
-          int body_in_buf = total - hdrs_total;
+          int64_t body_in_buf = (int64_t)total - hdrs_total;
           if (body_in_buf < 0) body_in_buf = 0;
           if (body_in_buf > content_len) body_in_buf = content_len;
           conn->body = (char *)malloc((size_t)content_len + 1);
-          if (conn->body) {
-              if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
-              int need = content_len - body_in_buf;
-              int got  = body_in_buf;
-              while (need > 0) {
-                  ssize_t r = recv(fd, conn->body + got, (size_t)need, 0);
-                  if (r < 0) {
-                      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                          int ev = (int)tur_local_park_fd(group, fd, 1, -1);
-                          if (ev < 0) break;
-                          continue;
-                      }
-                      break;
+          if (!conn->body) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
+          if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
+          int64_t got = body_in_buf;
+          while (got < content_len) {
+              ssize_t r = recv(fd, conn->body + got, (size_t)(content_len - got), 0);
+              if (r < 0) {
+                  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                      /* 5 s per wait, as the blocking pool's SO_RCVTIMEO. */
+                      int ev = (int)tur_local_park_fd(group, fd, 1, 5000);
+                      if (ev < 0) break;   /* timeout (-2) or driver error */
+                      continue;
                   }
-                  if (r == 0) break;
-                  got  += (int)r;
-                  need -= (int)r;
+                  break;
               }
-              conn->body[got] = '\0';
-              conn->body_len = got;
+              if (r == 0) break;
+              got += (int64_t)r;
           }
+          conn->body[got] = '\0';
+          conn->body_len = (int)got;
+          if (got < content_len) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
       }
       free(buf);
       /* Dispatch handler. */
@@ -2556,68 +2694,13 @@
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
       typedef void (*fn1_t)(void *, void *);
       ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
-      /* Build response header block (same as httpd-handle's writer). */
-      int status = conn->resp_status ? conn->resp_status : 200;
-      const char *stxt = (status == 200) ? "OK" :
-                         (status == 201) ? "Created" :
-                         (status == 204) ? "No Content" :
-                         (status == 400) ? "Bad Request" :
-                         (status == 401) ? "Unauthorized" :
-                         (status == 404) ? "Not Found" :
-                         (status == 500) ? "Internal Server Error" : "OK";
-      const char *body  = conn->resp_body ? conn->resp_body : "";
-      int         blen  = conn->resp_body ? conn->resp_body_len : 0;
-      const char *ver   = is_http_11 ? "HTTP/1.1" : "HTTP/1.0";
-      const char *chdr  = conn->client_keep_alive ? "keep-alive" : "close";
-      int has_content_type = 0;
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
-          while (rh) {
-              if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) { has_content_type = 1; break; }
-              rh = rh->next;
-          }
-      }
-      size_t hbuf_cap = 1024;
-      char  *hbuf     = (char *)malloc(hbuf_cap);
-      if (!hbuf) goto __async_cleanup;
-      int hlen = snprintf(hbuf, hbuf_cap,
-          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n",
-          ver, status, stxt, blen, chdr);
-      if (!has_content_type) {
-          if ((size_t)(hlen + 64) > hbuf_cap) {
-              size_t nc = hbuf_cap * 2;
-              char *nh = (char *)realloc(hbuf, nc);
-              if (nh) { hbuf = nh; hbuf_cap = nc; }
-          }
-          hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
-              "Content-Type: text/plain; charset=utf-8\r\n");
-      }
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
-          while (rh) {
-              if (!rh->name || strcasecmp(rh->name, "Content-Length") == 0) {
-                  rh = rh->next; continue;
-              }
-              size_t nlen = strlen(rh->name);
-              size_t vlen = rh->value ? strlen(rh->value) : 0;
-              size_t need = (size_t)hlen + nlen + vlen + 8;
-              if (need > hbuf_cap) {
-                  size_t nc = hbuf_cap;
-                  while (nc < need) nc *= 2;
-                  char *nh = (char *)realloc(hbuf, nc);
-                  if (!nh) break;
-                  hbuf = nh; hbuf_cap = nc;
-              }
-              hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
-                  "%s: %s\r\n", rh->name, rh->value ? rh->value : "");
-              rh = rh->next;
-          }
-      }
-      if ((size_t)hlen + 3 > hbuf_cap) {
-          char *nh = (char *)realloc(hbuf, (size_t)hlen + 3);
-          if (nh) { hbuf = nh; hbuf_cap = (size_t)hlen + 3; }
-      }
-      hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen, "\r\n");
+      /* Build the response head (shared with httpd-handle). */
+      const char *body = conn->resp_body ? conn->resp_body : "";
+      int         blen = conn->resp_body ? conn->resp_body_len : 0;
+      int64_t hlen64 = 0;
+      char *hbuf = (char *)httpd_hyresp_hyhead((void *)conn, (int64_t)is_http_11, (void *)&hlen64);
+      if (!hbuf) { httpd_hyconn_hyrelease((void *)conn); break; }
+      int hlen = (int)hlen64;
       /* Non-blocking write loop -- park on EWOULDBLOCK. */
       {
           int sent = 0;
@@ -2651,42 +2734,9 @@
       }
       free(hbuf);
       keep_going = conn->client_keep_alive;
-  __async_cleanup:
-      if (conn->body)      free(conn->body);
-      if (conn->resp_body) free(conn->resp_body);
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->req_headers;
-          while (rh) {
-              HttpdHeader *nx = rh->next;
-              if (rh->name)  free(rh->name);
-              if (rh->value) free(rh->value);
-              free(rh);
-              rh = nx;
-          }
-      }
-      {
-          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
-          while (rh) {
-              HttpdHeader *nx = rh->next;
-              if (rh->name)  free(rh->name);
-              if (rh->value) free(rh->value);
-              free(rh);
-              rh = nx;
-          }
-      }
-      if (conn->req_json_cache) { json_slfree(conn->req_json_cache); conn->req_json_cache = 0; }
-      /* httpd-request-accessor-cstr-leak: free per-request accessor strings on
-       * the async path too (httpd-req-cookie / httpd-req-form results). */
-      if (conn->owned_cstrs) {
-          HttpdOwnedStr *op = (HttpdOwnedStr *)conn->owned_cstrs;
-          while (op) {
-              HttpdOwnedStr *nx = op->next;
-              if (op->s) free(op->s);
-              free(op);
-              op = nx;
-          }
-          conn->owned_cstrs = NULL;
-      }
+      /* The shared release also frees the multipart parts and attributes,
+       * which this path's own cleanup used to leak. */
+      httpd_hyconn_hyrelease((void *)conn);
   }
   close(fd);
   /* A4: release the in-flight slot. */
@@ -2814,10 +2864,12 @@
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family      = AF_INET;
-  /* Default to INADDR_ANY (a real server wants all interfaces). The test suite
-   * exports TUR_BIND_LOOPBACK to force loopback-only, which stops Windows
-   * Firewall prompting "allow this app" for every fixture binary. */
-  addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
+  /* Loopback unless the program opted in to every interface with
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
+   * server that is reachable from the network should be one somebody asked
+   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
+   * loopback. */
+  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
   addr.sin_port        = htons((uint16_t)port);
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
@@ -3724,10 +3776,13 @@
 ;; configured ceiling. Requests with no `Content-Length` (e.g. simple GET)
 ;; or with a value at or below the cap pass through unchanged.
 ;;
-;; The check is header-only: it does not attempt to enforce the limit on a
-;; chunked request body, because the existing httpd C layer buffers bodies
-;; up-front using the declared Content-Length. Once the response is short-
-;; circuited the downstream handler is never invoked.
+;; The check is header-only, and it runs inside the handler chain -- that is,
+;; AFTER the server has already read the body.  The server-wide ceiling that
+;; stops a body being read or allocated at all is httpd-set-max-body! (8 MiB
+;; by default); mw-body-size is the lower, per-route limit on top of it.
+;; Chunked bodies are refused by the server (501) before any middleware runs.
+;; Once the response is short-circuited the downstream handler is never
+;; invoked.
 ;;; httpd-mw-content-length -- internal: read Content-Length as int64, or -1.
 ;;;
 ;;; Returns -1 when the header is absent or unparseable. A non-negative
@@ -3744,6 +3799,9 @@
   if (*v < '0' || *v > '9') return -1;
   int64_t n = 0;
   while (*v >= '0' && *v <= '9') {
+      /* Saturate rather than overflow; the server already refused anything
+       * above httpd-set-max-body!'s cap before this runs. */
+      if (n > (INT64_MAX - 9) / 10) return INT64_MAX;
       n = n * 10 + (int64_t)(*v - '0');
       v++;
   }
@@ -3757,9 +3815,9 @@
 ;;; Content-Length header, or with a value at or below the cap, are passed
 ;;; through unchanged.
 ;;;
-;;; The cap is on the announced size, not on chunked-transfer bodies; the
-;;; existing httpd layer buffers bodies by Content-Length, so rejecting at
-;;; this stage prevents the body read entirely.
+;;; The cap is on the announced size.  It runs after the server has read
+;;; the body, so it limits what a handler accepts, not what the server
+;;; buffers -- httpd-set-max-body! is the ceiling that stops the read itself.
 ;;;
 ;;; Parameters:
 ;;;   max-bytes -- maximum accepted Content-Length in bytes (>= 0)
@@ -4145,39 +4203,70 @@
   #include <sys/stat.h>
   #include <fcntl.h>
   #include <unistd.h>
+  #include <limits.h>
+  #ifndef O_NOFOLLOW
+  #define O_NOFOLLOW 0
+  #endif
   if (!conn || !root || !*root) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   const char *rp = c->path;
   if (!rp || !*rp) return 0;
-  if (strstr(rp, "..")) return 0;          /* path-traversal guard */
+  /* security-audit-plan M-4.  The request path is used up to its query
+   * string, and refused outright when any segment starts with '.' (".", "..",
+   * and dotfiles such as .env or .git/config -- .well-known excepted) or it
+   * contains a backslash (a separator on Windows).  The substring check stays
+   * as a second line. */
+  size_t rpl = strcspn(rp, "?#");
+  if (memchr(rp, '\\', rpl)) return 0;
+  for (size_t i = 0; i < rpl; i++) {
+      if ((i == 0 || rp[i - 1] == '/') && rp[i] == '.') {
+          size_t sl = strcspn(rp + i, "/?#");
+          if (!(sl == 11 && strncmp(rp + i, ".well-known", 11) == 0)) return 0;
+      }
+  }
+  if (strstr(rp, "..")) return 0;
   /* Build "<root>/<reqpath>" with at most one slash. */
   char full[2048];
   size_t rl = strlen(root);
   if (rl >= sizeof(full) - 2) return 0;
   memcpy(full, root, rl);
   size_t off = rl;
-  if (off > 0 && full[off-1] == '/' && rp[0] == '/') {
-      /* Skip one of the slashes */
-      size_t pl = strlen(rp + 1);
-      if (off + pl + 1 >= sizeof(full)) return 0;
-      memcpy(full + off, rp + 1, pl);
-      off += pl;
-  } else if (off == 0 || full[off-1] == '/' || rp[0] == '/') {
-      size_t pl = strlen(rp);
-      if (off + pl + 1 >= sizeof(full)) return 0;
-      memcpy(full + off, rp, pl);
-      off += pl;
-  } else {
-      size_t pl = strlen(rp);
-      if (off + pl + 2 >= sizeof(full)) return 0;
-      full[off++] = '/';
-      memcpy(full + off, rp, pl);
-      off += pl;
-  }
+  const char *seg = rp;
+  size_t pl = rpl;
+  if (off > 0 && full[off-1] == '/' && seg[0] == '/') { seg++; pl--; }
+  else if (!(off == 0 || full[off-1] == '/' || seg[0] == '/')) full[off++] = '/';
+  if (off + pl + 1 >= sizeof(full)) return 0;
+  memcpy(full + off, seg, pl);
+  off += pl;
   full[off] = '\0';
+  /* Containment: the file, with every symlink resolved, must sit under the
+   * root with every symlink resolved.  A symlink inside the root that points
+   * outside it used to be served, because stat and open both follow it.
+   * The buffers are sized without trusting PATH_MAX to exist: `tur jit`'s C
+   * front end supplies its own <limits.h>, which has none, and a bare
+   * PATH_MAX sent every program reaching this function to the cc fallback.
+   * 4096 is at least PATH_MAX wherever the fallback applies (Linux 4096,
+   * macOS 1024). */
+  #ifdef PATH_MAX
+  #define HTTPD_REALPATH_BUF PATH_MAX
+  #else
+  #define HTTPD_REALPATH_BUF 4096
+  #endif
+  char rroot[HTTPD_REALPATH_BUF], rfull[HTTPD_REALPATH_BUF];
+  #ifdef _WIN32
+  if (!_fullpath(rroot, root, sizeof rroot) || !_fullpath(rfull, full, sizeof rfull)) return 0;
+  #else
+  if (!realpath(root, rroot) || !realpath(full, rfull)) return 0;
+  #endif
+  size_t rrl = strlen(rroot);
+  while (rrl > 1 && (rroot[rrl - 1] == '/' || rroot[rrl - 1] == '\\')) rroot[--rrl] = '\0';
+  if (strncmp(rfull, rroot, rrl) != 0) return 0;
+  if (!(rrl == 1 || rfull[rrl] == '/' || rfull[rrl] == '\\')) return 0;
+  /* Open the resolved path and stat what was opened, not the name. */
+  int ffd = open(rfull, O_RDONLY | O_NOFOLLOW);
+  if (ffd < 0) return 0;
   struct stat sb;
-  if (stat(full, &sb) != 0)        return 0;
-  if (!S_ISREG(sb.st_mode))        return 0;
+  if (fstat(ffd, &sb) != 0 || !S_ISREG(sb.st_mode)) { close(ffd); return 0; }
   /* ETag = "<size>-<mtime>" */
   char etag[64];
   snprintf(etag, sizeof(etag), "\"%llx-%llx\"",
@@ -4186,14 +4275,13 @@
   /* Conditional request: If-None-Match. */
   const char *inm = httpd_hyreq_hyheader((void *)conn, "If-None-Match");
   if (inm && *inm && strcmp(inm, etag) == 0) {
+      close(ffd);
       __TUR_CNAME_httpd-resp-status!__((void *)conn, 304);
       __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
       __TUR_CNAME_httpd-resp-header!__((void *)conn, "ETag", etag);
       return 1;
   }
   /* Read the file into a heap buffer. */
-  int ffd = open(full, O_RDONLY);
-  if (ffd < 0) return 0;
   size_t sz = (size_t)sb.st_size;
   char  *buf = (char *)malloc(sz + 1);
   if (!buf) { close(ffd); return 0; }
@@ -4213,7 +4301,13 @@
    * binary safety is a future enhancement. */
   __TUR_CNAME_httpd-resp-body!__((void *)conn, buf);
   free(buf);
-  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Content-Type", httpd_hymw_hystatic_hymime(c->path));
+  {
+      /* The type comes from the path without its query string. */
+      char mp[1024];
+      size_t ml = rpl < sizeof mp - 1 ? rpl : sizeof mp - 1;
+      memcpy(mp, rp, ml); mp[ml] = '\0';
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Content-Type", httpd_hymw_hystatic_hymime(mp));
+  }
   __TUR_CNAME_httpd-resp-header!__((void *)conn, "ETag", etag);
   return 1;
   ```)

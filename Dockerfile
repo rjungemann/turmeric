@@ -15,7 +15,7 @@
 #   docker run --rm -v "$(pwd)":/workspace turmeric tur --interpret /workspace/hello.tur
 
 # ── stage 1: build ──────────────────────────────────────────────────────
-FROM ubuntu:22.04 AS build
+FROM ubuntu:26.04 AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -31,7 +31,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build -j"$(nproc)"
 
 # ── stage 2: runtime ────────────────────────────────────────────────────
-FROM ubuntu:22.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 

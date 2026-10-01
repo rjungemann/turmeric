@@ -1,0 +1,32 @@
+== case 0
+llo
+3
+exit=0
+== case 1
+exit=1
+bytes-alloc: length -1 out of range
+== case 2
+exit=1
+sized-buf-new-zeroed: length 2305843009213693952 out of range
+== case 3
+42
+exit=0
+== case 4
+exit=1
+sized-buf-with-stack: length -1 out of range
+== case 5
+exit=1
+sized-buf-compute: length -1 out of range
+== case 6
+exit=1
+sized-matrix-new: dimensions 2305843009213693953x8 out of range
+== case 7
+exit=1
+sized-bitvec-new: length 9223372036854775807 out of range
+== case 8
+7
+exit=1
+grid-set!: (2, 0) out of bounds in 2x2
+== case 9
+true
+exit=0

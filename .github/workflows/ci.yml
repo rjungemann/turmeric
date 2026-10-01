@@ -14,6 +14,15 @@ on:
   pull_request:
     branches: [main]
 
+# C-5 in docs/upcoming/security-audit-plan.md.  The repo's default workflow
+# token is already `read`, so this block grants nothing new today -- it moves
+# that guarantee out of a web-UI setting, where one checkbox silently re-widens
+# every job in this file and no diff records it, and into the tree where a
+# change to it has to survive review.  `publish-timings` raises itself to
+# `contents: write` locally; nothing else here needs more than read.
+permissions:
+  contents: read
+
 jobs:
   test:
     # Three jobs per OS, split along ctest boundaries: `fixtures` runs the
@@ -89,7 +98,7 @@ jobs:
         # this job kept the `Test (<os>)` name in the first place.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -123,14 +132,19 @@ jobs:
           # on every macOS run for want of it, so the tutorial steps were only
           # ever asserted on Linux.  Non-fatal on purpose: if neither form
           # installs, the harness still skips honestly rather than failing here.
-          python3 -m pip install pyyaml || python3 -m pip install --break-system-packages pyyaml || true
+          # C-5: pinned to an exact version.  Version only, not a digest: this
+          # is an inline install with no requirements file to carry hashes,
+          # PyYAML ships a per-platform wheel matrix that would need all of
+          # them, and unlike tools/requirements.txt nothing here reaches a
+          # released artifact -- it is a test harness dependency on one leg.
+          python3 -m pip install 'pyyaml==6.0.3' || python3 -m pip install --break-system-packages 'pyyaml==6.0.3' || true
 
       # Restore + explicit save (not the combined cache action): the combined
       # action's post-save defaults to save-always:false, so it would skip
       # saving whenever a later step -- e.g. the fixture suite below -- fails,
       # exactly the runs where the freshly-built ccache is most worth keeping.
       - name: Restore ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
@@ -152,9 +166,13 @@ jobs:
       # looks for emcc, and the harness only needs it on PATH at test time.
       - name: Set up Emscripten (for tur_refine_wasm)
         if: matrix.part == 'aux'
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
-          version: latest
+          # C-5: an exact SDK version, not `latest`.  This is what `latest`
+          # resolved to when the pin was taken, so behaviour is unchanged --
+          # what changes is that a toolchain bump now shows up as a diff
+          # rather than as yesterday's green run going red for no reason.
+          version: 6.0.10
           actions-cache-folder: 'emsdk-cache'
 
       # The sibling checkout that tur_scscm_compile and the requires.spices
@@ -175,6 +193,16 @@ jobs:
           # An `if`, not `[ -x ... ] && GIT=...`: the step shell is `bash -e`,
           # where that list's own non-zero status on a miss ends the step.
           if [ -x /usr/bin/git ]; then GIT=/usr/bin/git; else GIT=git; fi
+          # C-5 asked whether this should be SHA-pinned like the actions above.
+          # Deliberately not, and the reason is recorded here rather than left
+          # to look like an oversight: turmeric-spices is the same owner under
+          # the same account, so it sits INSIDE the trust boundary `main`
+          # already draws, not outside it -- pinning it would defend this repo
+          # against itself.  A pin would also mean a SHA in this file that some
+          # human bumps, which goes stale and then gets bumped blind; see the
+          # comment block at the top of cmake/mir.cmake for that failure mode
+          # observed in this repo.  Revisit if the spices repo ever takes
+          # third-party contributions on its default branch.
           "$GIT" clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
 
       - name: Smoke check (tur --version must not hang)
@@ -329,7 +357,7 @@ jobs:
 
       - name: Upload suite timings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: timings-test-${{ matrix.os }}-${{ matrix.part }}
           path: timings.jsonl
@@ -344,7 +372,7 @@ jobs:
       # because a green run writes no such file, which is the normal outcome.
       - name: Upload compiler sanitizer findings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sanitizer-findings-${{ matrix.os }}-${{ matrix.part }}
           path: build/sanitizer-findings.log
@@ -356,7 +384,7 @@ jobs:
       # pre-exists (it embeds the commit SHA), so this always writes a fresh entry.
       - name: Save ccache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
@@ -409,7 +437,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -434,7 +462,7 @@ jobs:
         run: brew install libedit ccache coreutils || true
 
       - name: Restore ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
@@ -654,7 +682,7 @@ jobs:
       # depends on the step above bounding itself, not on `always()` alone.
       - name: Upload JIT ctest log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: jit-ctest-log-${{ matrix.os }}
           path: jit-ctest.log
@@ -675,7 +703,7 @@ jobs:
 
       - name: Upload suite timings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: timings-jit-${{ matrix.os }}
           path: timings.jsonl
@@ -684,7 +712,7 @@ jobs:
 
       - name: Save ccache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
@@ -714,7 +742,7 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies
         run: |
@@ -725,7 +753,7 @@ jobs:
           sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-split-${{ runner.os }}-${{ github.sha }}
@@ -787,7 +815,7 @@ jobs:
 
       - name: Save ccache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-split-${{ runner.os }}-${{ github.sha }}
@@ -819,11 +847,11 @@ jobs:
     steps:
       # Full history: the publish script pushes a branch, and a shallow clone
       # can have a push rejected with "shallow update not allowed".
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: timings-*
           path: timings-artifacts
@@ -913,7 +941,7 @@ jobs:
         shell: bash
         run: git config --global core.autocrlf input
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # UCRT64 (not MINGW64, not the plain MSYS shell): the port targets the
       # UCRT runtime, and MSYSTEM selects which toolchain lands on PATH.
@@ -934,7 +962,7 @@ jobs:
       # codegen failure).  Two hook.sh fixtures shell out to `python3`.
       # Both are REQUIRED here, so they belong in this all-or-nothing
       # transaction rather than the non-fatal optional step below.
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
           update: true
@@ -1106,7 +1134,7 @@ jobs:
 
       - name: Upload suite log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: suite-log-windows-${{ strategy.job-index }}
           path: ./suite.log
@@ -1147,9 +1175,9 @@ jobs:
         shell: bash
         run: git config --global core.autocrlf input
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
           update: true
@@ -1298,9 +1326,9 @@ jobs:
         shell: bash
         run: git config --global core.autocrlf input
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
           update: true
@@ -1365,7 +1393,7 @@ jobs:
 
       - name: Upload split log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: split-win-${{ strategy.job-index }}
           path: ./split-win*.log
@@ -1383,8 +1411,8 @@ jobs:
       CCACHE_NOHASHDIR: "1"
       CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Install dependencies
@@ -1395,7 +1423,7 @@ jobs:
           sudo apt-get update || { sleep 20; sudo apt-get update; }
           sudo apt-get install -y libedit-dev ccache
       - name: Restore ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-guides-${{ runner.os }}-${{ github.sha }}
@@ -1407,7 +1435,7 @@ jobs:
         run: cmake --build build -j --target tur
       - name: Save ccache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-guides-${{ runner.os }}-${{ github.sha }}
@@ -1418,12 +1446,52 @@ jobs:
     name: Check spaced-type annotations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Check fused annotations in stdlib/ and docs/guides/
         run: python3 tools/spaced-types-rewrite.py --check stdlib/ docs/guides/
+
+  # C-1: tvm is the advertised install path now -- turmeric-lang.com/install
+  # bootstraps it and installs a checksum-verified release through it. Its two
+  # suites ran NOWHERE automatic before that change: not in this file, not in
+  # ctest, not in the Justfile. A version manager nobody tests is a poor thing
+  # to make load-bearing, so they run here.
+  #
+  # Both are fully offline -- a fake release served over file:// URLs -- so
+  # this job is seconds, needs no compiler, and cannot flake on the network.
+  # It runs on both OSes because the install path is platform-shaped: shell rc
+  # detection, tar layouts, `sha256sum` vs `shasum`, and the target triple all
+  # differ, and macOS is where the advertised one-liner is most used.
+  tvm:
+    name: tvm (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The suite asserts `tvm current` is `none` before anything is
+      # installed, which a tur already on PATH would contradict. The runners
+      # have none; this guard says so out loud rather than leaving a future
+      # toolchain image to make it a mystery failure.
+      - name: Check no tur is already on PATH
+        run: |
+          if command -v tur >/dev/null 2>&1; then
+            echo "::error::a tur is already on PATH ($(command -v tur)); the tvm suite assumes none"
+            exit 1
+          fi
+
+      - name: tvm suite
+        run: sh tvm/tests/run.sh
+
+      # Drives web/worker.js's own /install route, so an edit that breaks the
+      # served installer fails here rather than on someone's laptop.
+      - name: Installer end-to-end (C-1)
+        run: sh tvm/tests/install-script.sh
 
   check-snapshots:
     name: Check codegen snapshots
@@ -1439,7 +1507,7 @@ jobs:
       CCACHE_NOHASHDIR: "1"
       CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
 
@@ -1452,7 +1520,7 @@ jobs:
           sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-snapshots-${{ runner.os }}-${{ github.sha }}
@@ -1467,7 +1535,7 @@ jobs:
 
       - name: Save ccache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-snapshots-${{ runner.os }}-${{ github.sha }}
@@ -1490,7 +1558,7 @@ jobs:
       CCACHE_NOHASHDIR: "1"
       CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies (Linux)
         run: |
@@ -1501,7 +1569,7 @@ jobs:
           sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-web-${{ runner.os }}-${{ github.sha }}
@@ -1509,24 +1577,32 @@ jobs:
             ccache-web-${{ runner.os }}-
 
       - name: Set up Python (for gendocs)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
       - name: Install Python doc deps (markdown)
-        run: python3 -m pip install --upgrade -r tools/requirements.txt
+        # C-5: --require-hashes, and NOT --upgrade.  `--upgrade` against a
+        # floor-only requirement took whatever PyPI served that morning; the
+        # file is pinned with digests now, so upgrading past the pin is
+        # exactly what must not happen.
+        run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Set up Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
           # Pinned to a modern release; bump alongside the wasm build if the
           # emcc surface changes (currently only the -sSTACK_SIZE / INITIAL_MEMORY
           # link flags are load-bearing -- see src/CMakeLists.txt).
-          version: latest
+          #
+          # C-5: this comment said "pinned" directly above the word `latest`
+          # for as long as it has existed.  It is pinned now.  Keep this in
+          # step with the tur_refine_wasm job's copy above.
+          version: 6.0.10
           actions-cache-folder: 'emsdk-cache'
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -1540,7 +1616,7 @@ jobs:
 
       - name: Save ccache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-web-${{ runner.os }}-${{ github.sha }}
@@ -1621,6 +1697,7 @@ jobs:
           tests/docs-offline.spec.js tests/lsp.spec.js
           tests/minimap.spec.js tests/footer.spec.js
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
+          tests/security.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
         id: mobile
@@ -1661,7 +1738,7 @@ jobs:
 
       - name: Upload browser suite timings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: timings-web
           path: timings.jsonl
@@ -1674,7 +1751,7 @@ jobs:
       # needed.  The report is the evidence; upload it every time.
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report
           path: web/playwright-report/

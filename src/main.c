@@ -41,6 +41,7 @@
 #include <time.h>
 #include <dirent.h>
 #include "platform_proc.h"
+#include "tur_argcheck.h"
 #include "platform_fs.h"  /* realpath/mkdir/setenv/mkstemps/... on Windows */
 #ifdef _WIN32
 #include <io.h>       /* _setmode, _fileno */
@@ -2239,17 +2240,91 @@ static void rewrite_autolink_relative_paths(const char *flags,
 /* "<tmpdir>/tur-build/" (with trailing separator), created on first use.
  * Exposed so the unlink-vs-keep decision after cc can test membership against
  * the real prefix instead of pattern-matching a hardcoded "/tmp/...". */
+/* WP2 (D-4): is `dir` a directory we can safely reuse?
+ *
+ * `<tmpdir>/tur-build` is a FIXED, world-readable path that every `tur` on the
+ * box shares, and what lives in it is reused: the generated `.c` is written to
+ * a name derived from the input path, and the prelude cache links
+ * `prelude/<hash>.o` into the user's binary on nothing but "the file exists and
+ * is non-empty".  `mkdir(dir, 0700)` with the result discarded does not make
+ * that safe -- on a shared machine another user creates the directory first,
+ * mode 0777, plants an object, and every subsequent build links it.
+ *
+ * So the directory is checked rather than assumed: it must be a real directory
+ * (lstat, so a symlink pointing somewhere else is caught), owned by us, and
+ * not writable by group or other.  A directory that fails is not repaired --
+ * we do not own it -- we fall back to a private `tur-build-<uid>` beside it.
+ *
+ * Not applicable on Windows, which has no uid and gives each user a private
+ * temp directory already. */
+static bool tmp_dir_is_ours(const char *dir) {
+#ifdef _WIN32
+    (void)dir;
+    return true;
+#else
+    struct stat st;
+    if (lstat(dir, &st) != 0) return false;
+    if (!S_ISDIR(st.st_mode)) return false;
+    if (st.st_uid != geteuid()) return false;
+    if (st.st_mode & (S_IWGRP | S_IWOTH)) return false;
+    return true;
+#endif
+}
+
 static const char *stable_c_prefix(void) {
     static char prefix_buf[512];
     static int  made = 0;
     if (!made) {
         char dir[512];
         snprintf(dir, sizeof(dir), "%s/tur-build", tur_temp_dir());
-        mkdir(dir, 0700);
+        if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
+            fprintf(stderr, "tur: cannot create '%s': %s\n",
+                    dir, strerror(errno));
+        }
+        if (!tmp_dir_is_ours(dir)) {
+#ifdef _WIN32
+            fprintf(stderr, "tur: '%s' is not usable\n", dir);
+#else
+            char priv[512];
+            snprintf(priv, sizeof(priv), "%s/tur-build-%u",
+                     tur_temp_dir(), (unsigned)geteuid());
+            fprintf(stderr,
+                "tur: '%s' is not a directory this user owns and controls "
+                "(a build would reuse whatever is in it); using '%s' instead\n",
+                dir, priv);
+            if (mkdir(priv, 0700) != 0 && errno != EEXIST) {
+                fprintf(stderr, "tur: cannot create '%s': %s\n",
+                        priv, strerror(errno));
+            }
+            if (tmp_dir_is_ours(priv))
+                snprintf(dir, sizeof(dir), "%s", priv);
+#endif
+        }
         snprintf(prefix_buf, sizeof(prefix_buf), "%s/", dir);
         made = 1;
     }
     return prefix_buf;
+}
+
+/* WP2 (D-4): open a generated file in the shared build directory for writing,
+ * refusing to follow a symlink.
+ *
+ * The path is derived from the input's name, so it is predictable, and plain
+ * `fopen(path, "wb")` follows a symlink planted at it -- writing the generated
+ * C through to whatever the link names, with the invoking user's permissions.
+ * O_NOFOLLOW refuses that.  O_EXCL is deliberately NOT used: the whole point
+ * of the stable path is that ccache sees the same name every build, so the
+ * file is expected to exist and be overwritten. */
+static FILE *fopen_nofollow_w(const char *path) {
+#ifdef _WIN32
+    return fopen(path, "wb");
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    if (fd < 0) return NULL;
+    FILE *f = fdopen(fd, "wb");
+    if (!f) close(fd);
+    return f;
+#endif
 }
 
 static void stable_c_path(const char *input, char *out, size_t cap) {
@@ -2280,7 +2355,7 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
  * content when non-empty), before any SDK/ASan/anchor resolution -- except that
  * on Windows `-ldl` is dropped here (see below).  Shared by
  * cmd_build and cmd_compile so the two cannot drift. */
-static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
+static bool scan_autolink_markers(const Buf *csrc, Buf *autolink) {
     const char *marker = "/* __tur_autolink__: ";
     size_t mlen = strlen(marker);
     const char *p = csrc->data;
@@ -2288,8 +2363,53 @@ static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
         p += mlen;
         const char *end = strstr(p, " */");
         if (!end) break;
-        if (autolink->len > 0) buf_putc(autolink, ' ');
-        buf_write(autolink, p, (size_t)(end - p));
+        /* WP2 (D-1): the marker body is repo-supplied -- it is whatever text
+         * an inline-C block in any module wrote, a fetched spice's included --
+         * and it used to be copied here verbatim and later spliced into the
+         * string handed to system().  `-lfoo; touch pwned` ran touch.  Check
+         * every token against the documented link vocabulary
+         * (src/tur_argcheck.h) and refuse the build on anything else.
+         *
+         * Tokens, not the whole body: the string that leaves here is
+         * space-joined by contract -- append_include_tokens re-splits it for
+         * the `cc -c` line, autolink_drop_bare_sources re-splits it to drop
+         * bare .c args libturi.a supersedes, and the ASan probe scans it for
+         * -L -- so quoting it instead was not available.  A grammar at this
+         * boundary is what makes the space-joined contract safe to keep. */
+        const char *prev_tok = NULL;
+        char prev_buf[512];
+        for (const char *q = p; q < end; ) {
+            while (q < end && *q == ' ') q++;
+            if (q >= end) break;
+            const char *tstart = q;
+            while (q < end && *q != ' ') q++;
+            size_t tlen = (size_t)(q - tstart);
+            char tok[1024];
+            if (tlen >= sizeof(tok)) {
+                fprintf(stderr,
+                    "tur: __tur_autolink__ token is too long (%zu bytes)\n",
+                    tlen);
+                return false;
+            }
+            memcpy(tok, tstart, tlen);
+            tok[tlen] = '\0';
+            if (!tur_link_token_ok(tok, prev_tok)) {
+                fprintf(stderr,
+                    "tur: refusing link flag '%s' from an __tur_autolink__ "
+                    "marker.\n"
+                    "  marker: %.*s\n"
+                    "  A module may contribute -l<name>, -L<dir>, -I<dir>, "
+                    "-D<key>[=<val>], -framework <name>, -Wl,<...>, a source "
+                    "or object path, or a bare toolchain flag -- nothing that "
+                    "the shell would read as syntax.\n",
+                    tok, (int)(end - p), p);
+                return false;
+            }
+            if (autolink->len > 0) buf_putc(autolink, ' ');
+            buf_write(autolink, tok, tlen);
+            snprintf(prev_buf, sizeof(prev_buf), "%s", tok);
+            prev_tok = prev_buf;
+        }
         p = end + 3;
     }
     /* Two markers may name the same bare runtime source -- src/runtime/
@@ -2359,6 +2479,7 @@ static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
     }
 #endif
     if (autolink->len > 0) buf_putc(autolink, '\0');
+    return true;
 }
 
 /* ffi-spices-integration-plan S1: append the project manifest's
@@ -2383,6 +2504,11 @@ static void append_manifest_link_flags(const char *proj_root, Buf *cmake_flags) 
     PkgManifest pm;
     memset(&pm, 0, sizeof(pm));
     if (pkg_manifest_read(bm, &pm)) {
+        /* WP2 (D-1): both vectors are grammar-checked in pkg_manifest_read
+         * (check_link_vec), which is what makes appending them unquoted safe
+         * -- a token that reached here cannot carry shell syntax.  They stay
+         * unquoted because `:link-flags` is documented as the verbatim
+         * sibling: `-framework Cocoa` is one entry and two arguments. */
         for (int i = 0; i < pm.n_link_libs; i++) {
             if (pm.link_libs[i] && pm.link_libs[i][0])
                 buf_printf(cmake_flags, " -l%s", pm.link_libs[i]);
@@ -2400,8 +2526,53 @@ static void append_manifest_link_flags(const char *proj_root, Buf *cmake_flags) 
  * `:c-includes` (-I) and `:c-sources` (vendored .c) by walking up from the
  * input file to the project root.  No-op when the input is not inside a
  * manifested project.  Shared by cmd_build and cmd_compile. */
+/* Compose the `:web` emcc flags for a wasm link of `input` into `out`.
+ *
+ * Walks up from the input file the same way collect_build_aux does, so a
+ * single-file `tur build --target wasm game.tur` inside a project picks up
+ * that project's `:web` block.  Returns false when the manifest's `:web :gl`
+ * contradicts a cmake dep's `:wasm-options` -- caught here, before the link,
+ * because the browser's own report of that mismatch names neither. */
+static bool collect_web_link_flags(const char *input, Buf *out) {
+    char input_dir[4096];
+    strncpy(input_dir, input, sizeof(input_dir) - 1);
+    input_dir[sizeof(input_dir) - 1] = '\0';
+    char *slash = strrchr(input_dir, '/');
+    if (slash) *slash = '\0';
+    else strncpy(input_dir, ".", sizeof(input_dir));
+    char abs_dir[4096];
+    if (realpath(input_dir, abs_dir)) {
+        strncpy(input_dir, abs_dir, sizeof(input_dir) - 1);
+        input_dir[sizeof(input_dir) - 1] = '\0';
+    }
+    char *proj_root = find_project_root(input_dir);
+    PkgWebOpts web;
+    pkg_web_opts_defaults(&web);
+    bool ok = true;
+    if (proj_root) {
+        char mpath[4096];
+        snprintf(mpath, sizeof(mpath), "%s/build.tur", proj_root);
+        PkgManifest m;
+        if (pkg_manifest_read(mpath, &m)) {
+            ok = pkg_web_check_gl_agreement(&m.web, m.cmake_deps,
+                                            m.n_cmake_deps);
+            if (ok) pkg_web_compose_link_flags(&m.web, out);
+            pkg_manifest_free(&m);
+        } else {
+            pkg_web_compose_link_flags(&web, out);
+        }
+        free(proj_root);
+    } else {
+        /* No manifest: still a valid wasm link, just with the defaults. */
+        pkg_web_compose_link_flags(&web, out);
+    }
+    pkg_web_opts_free(&web);
+    return ok;
+}
+
 static void collect_build_aux(const char *input, Buf *cmake_flags,
-                              Buf *aux_includes, Buf *aux_sources) {
+                              Buf *aux_includes, Buf *aux_sources,
+                              const char *target) {
     /* Walk up from the input file's directory to find project root.  Resolve
      * to an absolute path first -- find_project_root walks via strrchr('/'),
      * so a bare "." or "foo.tur" would stop after one step. */
@@ -2419,8 +2590,8 @@ static void collect_build_aux(const char *input, Buf *cmake_flags,
     char *proj_root = find_project_root(input_dir);
     if (proj_root) {
         char manifest_path[4096];
-        snprintf(manifest_path, sizeof(manifest_path),
-                 "%s/cmake/spice-deps-manifest.json", proj_root);
+        snprintf(manifest_path, sizeof(manifest_path), "%s/cmake/%s",
+                 proj_root, pkg_cmake_manifest_name(target));
         PkgCmakeManifest cmake_manifest;
         if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
             pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
@@ -2854,6 +3025,32 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
     }
 }
 
+/* WP2 (D-1): append `s` to a command string as ONE shell-quoted argument.
+ *
+ * The driver assembles its cc invocations as shell command strings -- see the
+ * note in tur_argcheck.h for why they stay strings rather than becoming an
+ * argv -- and every path it splices in is a path the user or the project
+ * chose.  An unquoted one with a space in it silently became two arguments
+ * (a checkout under `~/My Projects/` could not link at all), and one with a
+ * quote in it ended the argument early.
+ *
+ * Returns false when the argument will not fit quoted.  Callers must treat
+ * that as a hard failure: a truncated command string is worse than no command
+ * at all (platform_proc.h says the same about tur_shell_quote). */
+static bool buf_put_quoted(Buf *b, const char *s) {
+    char q[9000];
+    if (!s || tur_shell_quote(s, q, sizeof q) != 0) return false;
+    /* buf_printf, not buf_puts.  buf_printf reserves n+1 bytes and lets
+     * vsnprintf write its NUL at data[len], so a Buf built entirely out of
+     * buf_printf is incidentally readable as a C string BEFORE anyone appends
+     * an explicit terminator -- and link_command_run does exactly that with
+     * the aux_includes/aux_sources buffers this helper fills.  buf_puts
+     * reserves only n, so switching to it read one byte past the allocation
+     * (caught by ASan in tests/spice-c-sources-tests.sh). */
+    buf_printf(b, "%s", q);
+    return true;
+}
+
 /* tur-link-and-build-split-plan Phase 1: assemble and run the final link `cc`
  * command.  `inputs` is the space-joined list of primary inputs -- the single
  * generated `.c` for the monolithic path, or one-or-more `.o`/`.c` args for the
@@ -2872,15 +3069,30 @@ static int link_command_run(const char *cc, const char *cc_flags,
                             const char *out_path) {
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "%s %s" TUR_EMITTED_C_CC_FLAGS " -o %s %s", cc, cc_flags, out_path, inputs);
+    bool quoted_ok = true;
+    buf_printf(&cmd, "%s %s" TUR_EMITTED_C_CC_FLAGS " -o ", cc, cc_flags);
+    quoted_ok = buf_put_quoted(&cmd, out_path) && quoted_ok;
+    buf_putc(&cmd, ' ');
+    /* `inputs` arrives already quoted per path -- both callers build it with
+     * buf_put_quoted, because it is a LIST and quoting it whole would make it
+     * one argument. */
+    buf_puts(&cmd, inputs);
     if (aux_includes && aux_includes->len > 0) buf_puts(&cmd, aux_includes->data);
     if (aux_sources  && aux_sources->len  > 0) buf_puts(&cmd, aux_sources->data);
     if (autolink && autolink->len > 0) buf_printf(&cmd, " %s", autolink->data);
     if (needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
     if (cmake_flags && cmake_flags->len > 0) buf_puts(&cmd, cmake_flags->data);
     for (int _i = 0; _i < n_include_dirs; _i++) {
-        if (include_dirs[_i] && include_dirs[_i][0])
-            buf_printf(&cmd, " -I%s", include_dirs[_i]);
+        if (include_dirs[_i] && include_dirs[_i][0]) {
+            buf_puts(&cmd, " -I");
+            quoted_ok = buf_put_quoted(&cmd, include_dirs[_i]) && quoted_ok;
+        }
+    }
+    if (!quoted_ok) {
+        fprintf(stderr, "tur: a path on the link line was too long to quote; "
+                        "refusing to run a truncated cc command\n");
+        buf_free(&cmd);
+        return 2;
     }
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
@@ -2942,7 +3154,7 @@ static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *
     for (int k = 0; rc == 0 && k < np; k++) {
         snprintf(src[k], sizeof src[k], "%s.p%d.c", stem, k);
         snprintf(obj[k], sizeof obj[k], "%s.p%d.o", stem, k);
-        FILE *f = fopen(src[k], "wb");
+        FILE *f = fopen_nofollow_w(src[k]);
         if (!f || fwrite(pieces[k].data, 1, pieces[k].len, f) != pieces[k].len) rc = 2;
         if (f) fclose(f);
         written = k + 1;
@@ -2956,10 +3168,16 @@ static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *
          * the unit and uses a share of them: the rest are unused, which is
          * no news. */
         Buf cmd; buf_init(&cmd);
-        for (int k = 0; k < np; k++)
+        bool pq_ok = true;
+        for (int k = 0; k < np; k++) {
             buf_printf(&cmd, "%s %s -Wno-unused-function -Wno-unused-variable "
-                             "-Wno-unused-const-variable -c -o %s %s & p%d=$!; ",
-                       cc, flags, obj[k], src[k], k);
+                             "-Wno-unused-const-variable -c -o ", cc, flags);
+            pq_ok = buf_put_quoted(&cmd, obj[k]) && pq_ok;
+            buf_putc(&cmd, ' ');
+            pq_ok = buf_put_quoted(&cmd, src[k]) && pq_ok;
+            buf_printf(&cmd, " & p%d=$!; ", k);
+        }
+        if (!pq_ok) { buf_free(&cmd); return 2; }
         buf_puts(&cmd, "ok=0;");
         for (int k = 0; k < np; k++) buf_printf(&cmd, " wait $p%d || ok=1;", k);
         buf_puts(&cmd, " exit $ok");
@@ -2970,9 +3188,15 @@ static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *
     }
     if (rc == 0) {
         Buf cmd; buf_init(&cmd);
-        buf_printf(&cmd, "%s -r -nostdlib -o %s", cc, out_obj);
-        for (int k = 0; k < np; k++) buf_printf(&cmd, " %s", obj[k]);
+        bool pq_ok = true;
+        buf_printf(&cmd, "%s -r -nostdlib -o ", cc);
+        pq_ok = buf_put_quoted(&cmd, out_obj) && pq_ok;
+        for (int k = 0; k < np; k++) {
+            buf_putc(&cmd, ' ');
+            pq_ok = buf_put_quoted(&cmd, obj[k]) && pq_ok;
+        }
         buf_putc(&cmd, '\0');
+        if (!pq_ok) { buf_free(&cmd); return 2; }
         if (show) fprintf(stderr, "CC: %s\n", cmd.data);
         rc = system(cmd.data) != 0;
         buf_free(&cmd);
@@ -2983,6 +3207,24 @@ static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *
     }
     if (rc != 0) unlink(out_obj);
     return rc;
+}
+
+/* WP2 (D-4): may we reuse this cached prelude object?
+ *
+ * The test used to be `stat(obj) == 0 && st_size > 0` -- existence and
+ * non-emptiness -- for a file whose name is a hash an attacker can compute and
+ * whose contents go straight onto the link line.  Now it must also be a
+ * regular file (lstat: not a symlink into someone else's object, not a fifo)
+ * that we own and that nobody else can write. */
+static bool prelude_object_usable(const char *obj, struct stat *st) {
+    if (lstat(obj, st) != 0) return false;
+    if (!S_ISREG(st->st_mode)) return false;
+    if (st->st_size <= 0) return false;
+#ifndef _WIN32
+    if (st->st_uid != geteuid()) return false;
+    if (st->st_mode & (S_IWGRP | S_IWOTH)) return false;
+#endif
+    return true;
 }
 
 /* r7rs-programs-compile-slowly: the object of a split build's library unit
@@ -3022,8 +3264,15 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
             }
         }
     }
-    for (int i = 0; i < n_include_dirs; i++)
-        if (include_dirs[i] && include_dirs[i][0]) buf_printf(&flags, " -I%s", include_dirs[i]);
+    for (int i = 0; i < n_include_dirs; i++) {
+        if (include_dirs[i] && include_dirs[i][0]) {
+            buf_puts(&flags, " -I");
+            if (!buf_put_quoted(&flags, include_dirs[i])) {
+                buf_free(&flags);
+                return 2;
+            }
+        }
+    }
     buf_putc(&flags, '\0');
 
     Buf key; buf_init(&key);
@@ -3034,10 +3283,25 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
 
     char dir[1024];
     snprintf(dir, sizeof dir, "%sprelude", stable_c_prefix());
-    mkdir(dir, 0700);
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
+        fprintf(stderr, "tur: cannot create '%s': %s\n", dir, strerror(errno));
+        buf_free(&flags);
+        return 2;
+    }
+    /* WP2 (D-4): the cached object is LINKED INTO the user's binary, so the
+     * directory holding it has to be one we own -- stable_c_prefix already
+     * refuses a parent we do not, and this is the same check one level down,
+     * because the prelude dir may predate that rule. */
+    if (!tmp_dir_is_ours(dir)) {
+        fprintf(stderr,
+            "tur: refusing to use the prelude cache in '%s' -- it is not a "
+            "directory this user owns and controls\n", dir);
+        buf_free(&flags);
+        return 2;
+    }
     snprintf(obj, obj_cap, "%s/%016llx.o", dir, (unsigned long long)h);
     struct stat st;
-    if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+    if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
 
     /* One compile per library.  The unit exports every stdlib definition, so
      * cc cannot drop the ones no program reaches, and the compile costs more
@@ -3051,18 +3315,18 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     int lock_fd = open(lock, O_CREAT | O_EXCL | O_WRONLY, 0600);
     if (lock_fd < 0 && errno == EEXIST) {
         for (int tick = 0; tick < 1200; tick++) {   /* 100 ms ticks, 120 s */
-            if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+            if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
             if (stat(lock, &st) != 0) break;
             if (difftime(time(NULL), st.st_mtime) > 120) break;
             usleep(100000);
         }
-        if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+        if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
     }
 
     char src[1100], tmp_obj[1100];
     snprintf(src, sizeof src, "%s/%016llx.%ld.c", dir, (unsigned long long)h, (long)getpid());
     snprintf(tmp_obj, sizeof tmp_obj, "%s/%016llx.%ld.o", dir, (unsigned long long)h, (long)getpid());
-    FILE *f = fopen(src, "wb");
+    FILE *f = fopen_nofollow_w(src);
     if (!f || fwrite(lib_c->data, 1, lib_c->len, f) != lib_c->len) {
         if (f) fclose(f);
         buf_free(&flags);
@@ -3081,8 +3345,15 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     }
     if (rc != 0) {
         Buf cmd; buf_init(&cmd);
-        buf_printf(&cmd, "%s %s -c -o %s %s", cc, flags.data, tmp_obj, src);
+        bool pq_ok = true;
+        buf_printf(&cmd, "%s %s -c -o ", cc, flags.data);
+        pq_ok = buf_put_quoted(&cmd, tmp_obj) && pq_ok;
+        buf_putc(&cmd, ' ');
+        pq_ok = buf_put_quoted(&cmd, src) && pq_ok;
         buf_putc(&cmd, '\0');
+        if (!pq_ok) { buf_free(&cmd); buf_free(&flags);
+                      if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
+                      return 2; }
         if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
         rc = system(cmd.data);
         buf_free(&cmd);
@@ -3181,7 +3452,7 @@ static int cmd_build_once(const char *input, const char *out_path,
      * temp if the stable path cannot be constructed (e.g. path too long). */
     char tmpl[1024];
     stable_c_path(input, tmpl, sizeof(tmpl));
-    FILE *tf = tmpl[0] ? fopen(tmpl, "wb") : NULL;
+    FILE *tf = tmpl[0] ? fopen_nofollow_w(tmpl) : NULL;
     if (!tf) {
         /* fallback: random temp */
         char fallback[512];
@@ -3253,10 +3524,13 @@ static int cmd_build_once(const char *input, const char *out_path,
         buf_write(&both, csrc.data, csrc.len);
         buf_putc(&both, '\n');
         buf_write(&both, split_lib.data, split_lib.len);
-        scan_autolink_markers(&both, &autolink);
+        bool al_ok = scan_autolink_markers(&both, &autolink);
         buf_free(&both);
+        if (!al_ok) { buf_free(&csrc); buf_free(&autolink); return 2; }
     } else {
-        scan_autolink_markers(&csrc, &autolink);
+        if (!scan_autolink_markers(&csrc, &autolink)) {
+            buf_free(&csrc); buf_free(&autolink); return 2;
+        }
     }
     buf_free(&csrc);
 
@@ -3312,7 +3586,15 @@ static int cmd_build_once(const char *input, const char *out_path,
      * manifest dir found by walking up from the input file. */
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources,
+                      target);
+    /* `:web` -> emcc flags.  Appended to cmake_flags because that Buf is
+     * already spliced verbatim into the link command. */
+    if (wasm_target && !collect_web_link_flags(input, &cmake_flags)) {
+        buf_free(&cmake_flags); buf_free(&aux_includes); buf_free(&aux_sources);
+        buf_free(&autolink);
+        return 2;
+    }
 
     /* tur-link-and-build-split-plan Phase 2/3c: under --runtime=lib, swap bare
      * runtime .c autolink sources for a link against the prebuilt libturi.a
@@ -3370,8 +3652,14 @@ static int cmd_build_once(const char *input, const char *out_path,
     /* r7rs-programs-compile-slowly: the program unit links the library
      * unit's cached object; a failure at either step sends cmd_build back to
      * a one-unit build. */
-    char inputs[2200];
-    snprintf(inputs, sizeof inputs, "%s", tmpl);
+    /* Quoted per path: link_command_run splices this in verbatim, so each
+     * element carries its own quoting (D-1). */
+    char inputs[4600];
+    {
+        Buf _in; buf_init(&_in);
+        if (!buf_put_quoted(&_in, tmpl)) { buf_free(&_in); inputs[0] = '\0'; }
+        else { buf_putc(&_in, '\0'); snprintf(inputs, sizeof inputs, "%s", _in.data); buf_free(&_in); }
+    }
     if (prelude_split) {
         char obj[1024];
         if (prelude_split_object(&split_lib, cc, cc_flags, &aux_includes, &autolink,
@@ -3387,7 +3675,16 @@ static int cmd_build_once(const char *input, const char *out_path,
             buf_free(&split_flags);
             return 2;
         }
-        snprintf(inputs, sizeof inputs, "%s %s", tmpl, obj);
+        {
+            Buf _in; buf_init(&_in);
+            bool _ok = buf_put_quoted(&_in, tmpl);
+            buf_putc(&_in, ' ');
+            _ok = buf_put_quoted(&_in, obj) && _ok;
+            buf_putc(&_in, '\0');
+            if (_ok) snprintf(inputs, sizeof inputs, "%s", _in.data);
+            else inputs[0] = '\0';
+            buf_free(&_in);
+        }
     }
     buf_free(&split_lib);
     int link_rc = link_command_run(cc, cc_flags, inputs, &aux_includes,
@@ -4374,7 +4671,13 @@ static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
             char ic[4096];
             const char *ikey = realpath(path, ic) ? ic : path;
             if (aux_c_seen(&inc_seen, &n_inc, &cap_inc, ikey)) continue;
-            buf_printf(includes, " -I%s", path);
+            /* D-1: `path` is <spice dir>/<manifest's :c-includes entry>.  The
+             * entry is grammar-checked at manifest-parse time; the spice dir
+             * is the user's own path and only needs quoting. */
+            buf_puts(includes, " -I");
+            if (!buf_put_quoted(includes, path))
+                fprintf(stderr, "tur: skipping :c-includes path (too long to "
+                                "quote): %s\n", path);
         }
         for (int i = 0; i < m.n_c_sources; i++) {
             char path[4096];
@@ -4382,7 +4685,10 @@ static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
             char sc[4096];
             const char *skey = realpath(path, sc) ? sc : path;
             if (aux_c_seen(&src_seen, &n_src, &cap_src, skey)) continue;
-            buf_printf(sources, " %s", path);
+            buf_putc(sources, ' ');
+            if (!buf_put_quoted(sources, path))
+                fprintf(stderr, "tur: skipping :c-sources path (too long to "
+                                "quote): %s\n", path);
         }
         /* Enqueue this manifest's own :spices for the next level.  The
          * resolver is the one the :cmake-deps walk uses, so both closures
@@ -4805,7 +5111,9 @@ static int cmd_jit(int argc, char **argv) {
     hoist_tur_include_directives(&csrc);
     Buf autolink;
     buf_init(&autolink);
-    scan_autolink_markers(&csrc, &autolink);
+    if (!scan_autolink_markers(&csrc, &autolink)) {
+        buf_free(&csrc); buf_free(&autolink); free(user_inc); return 2;
+    }
 
     /* S2 (findings 19.4 item 3): swap the fixed preamble for the committed
      * declarations region when this compiler still matches the committed
@@ -5249,7 +5557,9 @@ static int repl_jit_build(const char *build_dir, void **out_image,
     hoist_tur_include_directives(&csrc);
     Buf autolink;
     buf_init(&autolink);
-    scan_autolink_markers(&csrc, &autolink);
+    if (!scan_autolink_markers(&csrc, &autolink)) {
+        buf_free(&csrc); buf_free(&autolink); buf_free(&manifest); return -1;
+    }
 
     /* ffi-spices-integration-plan S1: the subprocess build injects the
      * spice's cmake-dep and :link-libs flags into cc's link line; the
@@ -5268,7 +5578,7 @@ static int repl_jit_build(const char *build_dir, void **out_image,
         buf_init(&auxs);
         char probe[4400];
         snprintf(probe, sizeof(probe), "%s/build.tur", rootd);
-        collect_build_aux(probe, &cmk, &auxi, &auxs);
+        collect_build_aux(probe, &cmk, &auxi, &auxs, NULL);
         bool have_aux_sources = auxs.len > 0;
         if (cmk.len > 0) {
             if (autolink.len > 0) {
@@ -5504,13 +5814,16 @@ static int cmd_run(int argc, char **argv) {
         if (_rc != 0) { unlink(out_path); for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]); free(spice_inc_dirs); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
-        buf_printf(&_cmd, TUR_SHQ "%s" TUR_SHQ, out_path);               \
+        bool _q = buf_put_quoted(&_cmd, out_path);                       \
         if (passthrough_start >= 0) {                                    \
-            for (int _i = passthrough_start; _i < argc; _i++)           \
-                buf_printf(&_cmd, " " TUR_SHQ "%s" TUR_SHQ, argv[_i]);  \
+            for (int _i = passthrough_start; _i < argc; _i++) {          \
+                buf_putc(&_cmd, ' ');                                    \
+                _q = buf_put_quoted(&_cmd, argv[_i]) && _q;              \
+            }                                                            \
         }                                                                \
         buf_putc(&_cmd, '\0');                                           \
-        int _sys = system(_cmd.data);                                    \
+        int _sys = _q ? system(_cmd.data) : 2;                           \
+        if (!_q) fprintf(stderr, "tur run: an argument was too long to quote\n"); \
         buf_free(&_cmd);                                                  \
         unlink(out_path);                                                \
         for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]); \
@@ -5570,12 +5883,16 @@ static int cmd_run(int argc, char **argv) {
             unlink(src_tmp);
             if (brc != 0) { unlink(out_path); free(user_inc); return brc; }
             Buf run_cmd; buf_init(&run_cmd);
-            buf_printf(&run_cmd, TUR_SHQ "%s" TUR_SHQ, out_path);
+            bool rq = buf_put_quoted(&run_cmd, out_path);
             if (passthrough_start >= 0)
-                for (int i = passthrough_start; i < argc; i++)
-                    buf_printf(&run_cmd, " " TUR_SHQ "%s" TUR_SHQ, argv[i]);
+                for (int i = passthrough_start; i < argc; i++) {
+                    buf_putc(&run_cmd, ' ');
+                    rq = buf_put_quoted(&run_cmd, argv[i]) && rq;
+                }
             buf_putc(&run_cmd, '\0');
-            int sys = system(run_cmd.data);
+            if (!rq)
+                fprintf(stderr, "tur run: an argument was too long to quote\n");
+            int sys = rq ? system(run_cmd.data) : 2;
             buf_free(&run_cmd);
             unlink(out_path);
             free(user_inc);
@@ -5724,31 +6041,18 @@ static int cmd_run(int argc, char **argv) {
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
                              spices_dir, s->name);
                 struct stat _dstat;
-                if (stat(dep_dir, &_dstat) != 0 || !S_ISDIR(_dstat.st_mode)) {
+                if (stat(dep_dir, &_dstat) != 0 || !S_ISDIR(_dstat.st_mode))
                     need_fetch = true;
-                } else {
-                    /* Verify SHA-256 matches lock (if lock has entry). */
-                    PkgLockEntry *le = pkg_lock_find(&lock, s->name, false);
-                    /* Only a hash THIS algorithm produced can be compared.  A
-                     * lockfile written by an older tur carries a `tar -c |
-                     * sha256sum` digest (or the git-SHA fallback), which is not
-                     * comparable and must not be reported as tampering -- the
-                     * next `tur fetch` rewrites it in the current format. */
-                    if (le && pkg_hash_comparable(le->sha256)) {
-                        char actual_sha[PKG_HASH_MAX];
-                        if (pkg_hash_dir(dep_dir, actual_sha) &&
-                            strcmp(actual_sha, le->sha256) != 0) {
-                            fprintf(stderr,
-                                "tur run: integrity check failed for '%s'.\n"
-                                "  Run `tur fetch --update` to re-download.\n",
-                                s->name);
-                            pkg_lock_free(&lock);
-                            pkg_manifest_free(&m);
-                            free(root);
-                            return 1;
-                        }
-                    }
-                }
+            }
+            /* C-3: the per-dep hash comparison used to be open-coded right
+             * here and existed nowhere else in the tree, so `tur build` --
+             * the command that actually compiles a dependency's code --
+             * checked nothing at all.  One implementation, three callers. */
+            if (!pkg_verify_locked_spices(root, &m, &lock, "tur run")) {
+                pkg_lock_free(&lock);
+                pkg_manifest_free(&m);
+                free(root);
+                return 1;
             }
             if (need_fetch) {
                 /* LS5: partial-fetch isolation -- a single broken URL dep
@@ -6093,9 +6397,9 @@ static int cmd_test(const char *dir) {
              * contain spaces -- "C:\Users\Foo Bar\AppData\Local\Temp" is a
              * perfectly ordinary Windows path. */
             Buf test_cmd; buf_init(&test_cmd);
-            buf_printf(&test_cmd, TUR_SHQ "%s" TUR_SHQ, out_path);
+            bool tq = buf_put_quoted(&test_cmd, out_path);
             buf_putc(&test_cmd, '\0');
-            int status = system(test_cmd.data);
+            int status = tq ? system(test_cmd.data) : 2;
             buf_free(&test_cmd);
             run_rc = decode_exit_status(status);
         }
@@ -6833,7 +7137,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         if (proj_root) {
             char manifest_path[4096];
             snprintf(manifest_path, sizeof(manifest_path),
-                     "%s/cmake/spice-deps-manifest.json", proj_root);
+                     "%s/cmake/%s", proj_root,
+                     pkg_cmake_manifest_name(NULL));
             PkgCmakeManifest cmake_manifest;
             if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
                 pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
@@ -6884,19 +7189,27 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 #  endif
 #endif
     }
-    buf_printf(&cmd, " -o %s", out_path);
+    bool mm_quoted_ok = true;
+    buf_puts(&cmd, " -o ");
+    mm_quoted_ok = buf_put_quoted(&cmd, out_path) && mm_quoted_ok;
     /* build-output-directory-plan: every generated .c includes its sibling .h
      * by bare name (`#include "modname.h"`), so the obj dir must be on the
      * include path even when it's not cwd. */
-    buf_printf(&cmd, " -I%s", obj_dir);
+    buf_puts(&cmd, " -I");
+    mm_quoted_ok = buf_put_quoted(&cmd, obj_dir) && mm_quoted_ok;
     /* Add _main.c first (executable mode only) */
-    if (!shared) buf_printf(&cmd, " %s", main_c_path);
+    if (!shared) {
+        buf_putc(&cmd, ' ');
+        mm_quoted_ok = buf_put_quoted(&cmd, main_c_path) && mm_quoted_ok;
+    }
     /* The shared-runtime owner TU (defines the runtime globals once). */
-    buf_printf(&cmd, " %s", rt_c_path);
+    buf_putc(&cmd, ' ');
+    mm_quoted_ok = buf_put_quoted(&cmd, rt_c_path) && mm_quoted_ok;
     /* Add own .c files only (dep-only files beyond n_own supply headers but
      * are not linked into this output -- they ship as separate libraries). */
     for (int i = 0; i < n_own; i++) {
-        buf_printf(&cmd, " %s", c_files[i]);
+        buf_putc(&cmd, ' ');
+        mm_quoted_ok = buf_put_quoted(&cmd, c_files[i]) && mm_quoted_ok;
     }
     /* spices-c-sources-plan: vendored .c sources compiled alongside the
      * spice's own translation units, before -lm so they can resolve math
@@ -6978,6 +7291,15 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 #endif
     /* Ensure null termination before passing to system(). */
     buf_putc(&cmd, '\0');
+    if (!mm_quoted_ok) {
+        fprintf(stderr, "tur build: a path on the link line was too long to "
+                        "quote; refusing to run a truncated cc command\n");
+        buf_free(&cmd);
+        for (int i = 0; i < n_files; i++) { free(h_files[i]); free(c_files[i]); free(mod_names[i]); }
+        free(h_files); free(c_files); free(mod_names);
+        free_tur_files(tur_files, n_files);
+        return 2;
+    }
     if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
@@ -7072,7 +7394,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
 static int cmd_build_project(const char *root_in, const char *out_path,
                              bool shared, const char *manifest_path,
                              const char **user_inc, int n_user_inc,
-                             const char *cli_build_dir) {
+                             const char *cli_build_dir,
+                             const char *target) {
     /* Resolve `root_in` to an absolute path so transitive-dep walking can
      * climb out via `:path "../sibling"` references.  When `tur build .` is
      * run from a spice directory, `root_in` is "." and the dep-resolution
@@ -7130,6 +7453,29 @@ static int cmd_build_project(const char *root_in, const char *out_path,
         if (pkg_resolve_manifest_path(root, mpath, sizeof(mpath))) {
             PkgManifest dm; memset(&dm, 0, sizeof(dm));
             if (pkg_manifest_read(mpath, &dm)) {
+                /* C-3: `tur build` verifies the spice trees it is about to
+                 * compile, exactly as `tur run` does.  It never did, which was
+                 * the sharper half of the gap: `tur run` interprets, while
+                 * this is the path that turns a dependency's source into a
+                 * binary you keep and ship. */
+                {
+                    char lpath[4096];
+                    snprintf(lpath, sizeof(lpath), "%s/tur.lock", root);
+                    PkgLockFile vlock;
+                    memset(&vlock, 0, sizeof(vlock));
+                    vlock.format_version = 1;
+                    if (pkg_lock_read(lpath, &vlock)) {
+                        bool vok = pkg_verify_locked_spices(root, &dm, &vlock,
+                                                            "tur build");
+                        pkg_lock_free(&vlock);
+                        if (!vok) {
+                            pkg_manifest_free(&dm);
+                            free_tur_files(tur_files, n_files);
+                            return 1;
+                        }
+                    }
+                }
+
                 PkgCmakeDep *closure = NULL;
                 int n_closure = 0;
                 if (pkg_collect_transitive_cmake_deps(
@@ -7137,11 +7483,19 @@ static int cmd_build_project(const char *root_in, const char *out_path,
                         /*include_workspace_siblings=*/false,
                         &closure, &n_closure)
                     && n_closure > 0) {
-                    char cmake_lists[4096];
-                    snprintf(cmake_lists, sizeof(cmake_lists),
-                             "%s/cmake/CMakeLists.txt", root);
+                    /* Keyed on the ARM's own dep manifest, not on
+                     * cmake/CMakeLists.txt.  The generated CMakeLists is
+                     * shared by both arms, so statting it reported "already
+                     * built" for a wasm build whose deps had only ever been
+                     * configured natively -- the dep build was skipped and the
+                     * link then failed on missing wasm libraries.  The
+                     * manifest is the artifact the link step actually
+                     * consumes, and there is one per arm. */
+                    char cmake_marker[4096];
+                    snprintf(cmake_marker, sizeof(cmake_marker), "%s/cmake/%s",
+                             root, pkg_cmake_manifest_name(target));
                     struct stat _cmst;
-                    bool already_built = (stat(cmake_lists, &_cmst) == 0);
+                    bool already_built = (stat(cmake_marker, &_cmst) == 0);
                     if (!already_built) {
                         char lock_path[4096];
                         snprintf(lock_path, sizeof(lock_path),
@@ -7154,7 +7508,7 @@ static int cmd_build_project(const char *root_in, const char *out_path,
                         mu.cmake_deps   = closure;
                         mu.n_cmake_deps = n_closure;
                         if (pkg_gen_cmake_deps(root, &mu)
-                            && pkg_cmake_build(root, &mu, &lock, NULL)) {
+                            && pkg_cmake_build(root, &mu, &lock, target)) {
                             pkg_lock_write(lock_path, &lock);
                         } else {
                             fprintf(stderr,
@@ -7564,8 +7918,9 @@ static int cmd_compile(const char *input, const char *out_obj,
 
     Buf autolink;
     buf_init(&autolink);
-    scan_autolink_markers(&csrc, &autolink);
+    bool al_ok = scan_autolink_markers(&csrc, &autolink);
     buf_free(&csrc);
+    if (!al_ok) { buf_free(&autolink); return 2; }
 
     /* Phase 2/3c: --runtime=lib swaps bare runtime sources for libturi.a so the
      * sidecar records the -lturi link and the object never carries the runtime
@@ -7584,7 +7939,8 @@ static int cmd_compile(const char *input, const char *out_obj,
     Buf cmake_flags;  buf_init(&cmake_flags);
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources,
+                      NULL);
 
     bool needs_asan = false;
     resolve_autolink_flags(&autolink, cc_flags, &needs_asan);
@@ -7594,16 +7950,28 @@ static int cmd_compile(const char *input, const char *out_obj,
      * -I.  -l/-L and bare .c sources are link-time only and stay out of here. */
     Buf cmd;
     buf_init(&cmd);
+    bool cc_quoted_ok = true;
     buf_printf(&cmd, "%s %s" TUR_EMITTED_C_CC_FLAGS, cc, cc_flags);
     if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
     if (cmake_flags.len > 0)  buf_puts(&cmd, cmake_flags.data);
     append_include_tokens(&cmd, autolink.len > 0 ? autolink.data : NULL);
     for (int i = 0; i < n_include_dirs; i++) {
-        if (include_dirs[i] && include_dirs[i][0])
-            buf_printf(&cmd, " -I%s", include_dirs[i]);
+        if (include_dirs[i] && include_dirs[i][0]) {
+            buf_puts(&cmd, " -I");
+            cc_quoted_ok = buf_put_quoted(&cmd, include_dirs[i]) && cc_quoted_ok;
+        }
     }
-    buf_printf(&cmd, " -c %s -o %s", cpath, out_obj);
+    buf_puts(&cmd, " -c ");
+    cc_quoted_ok = buf_put_quoted(&cmd, cpath) && cc_quoted_ok;
+    buf_puts(&cmd, " -o ");
+    cc_quoted_ok = buf_put_quoted(&cmd, out_obj) && cc_quoted_ok;
     buf_putc(&cmd, '\0');
+    if (!cc_quoted_ok) {
+        fprintf(stderr, "tur compile: a path was too long to quote\n");
+        buf_free(&cmd); buf_free(&aux_includes);
+        buf_free(&autolink); buf_free(&cmake_flags);
+        return 2;
+    }
     if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
@@ -7656,9 +8024,11 @@ static int cmd_link(const char *out, const char **inputs, int n_inputs,
     char **seen_cm = NULL; int n_seen_cm = 0;
     char **seen_ax = NULL; int n_seen_ax = 0;
 
+    bool inputs_quoted_ok = true;
     for (int i = 0; i < n_inputs; i++) {
         if (inputs_joined.len > 0) buf_putc(&inputs_joined, ' ');
-        buf_puts(&inputs_joined, inputs[i]);
+        inputs_quoted_ok = buf_put_quoted(&inputs_joined, inputs[i])
+                           && inputs_quoted_ok;
         /* A .o (or bare object) may carry a sidecar; look it up. */
         char side[1100];
         obj_sibling_path(inputs[i], ".link", side, sizeof(side));
@@ -7700,6 +8070,12 @@ static int cmd_link(const char *out, const char **inputs, int n_inputs,
         out = out_buf;
     }
 
+    if (!inputs_quoted_ok) {
+        fprintf(stderr, "tur link: an input path was too long to quote\n");
+        buf_free(&inputs_joined); buf_free(&autolink);
+        buf_free(&cmake_flags); buf_free(&aux_sources); buf_free(&cc_flags);
+        return 2;
+    }
     int link_rc = link_command_run(cc, cc_flags.data, inputs_joined.data,
                                    NULL, &aux_sources, &autolink, needs_asan,
                                    &cmake_flags, NULL, 0, out);
@@ -7828,12 +8204,22 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
                     close(new_fd);
                 }
                 const char *label = path ? path : "<stdin>";
-                char diff_cmd[8192];
-                /* -L flag supported by both GNU diff and BSD diff (macOS) */
-                snprintf(diff_cmd, sizeof(diff_cmd),
-                         "diff -u -L '%s' -L '%s' '%s' '%s'",
-                         label, label, orig_tmp, new_tmp);
-                int diff_rc = system(diff_cmd);
+                /* WP2 (D-7): `'%s'` is not quoting -- a `'` in the path ends
+                 * the argument, and cmd.exe does not read `'` as a quote at
+                 * all.  tur_shell_quote is the one that handles both. */
+                Buf diff_cmd; buf_init(&diff_cmd);
+                bool dq = true;
+                buf_puts(&diff_cmd, "diff -u -L ");
+                dq = buf_put_quoted(&diff_cmd, label) && dq;
+                buf_puts(&diff_cmd, " -L ");
+                dq = buf_put_quoted(&diff_cmd, label) && dq;
+                buf_putc(&diff_cmd, ' ');
+                dq = buf_put_quoted(&diff_cmd, orig_tmp) && dq;
+                buf_putc(&diff_cmd, ' ');
+                dq = buf_put_quoted(&diff_cmd, new_tmp) && dq;
+                buf_putc(&diff_cmd, '\0');
+                int diff_rc = dq ? system(diff_cmd.data) : 2;
+                buf_free(&diff_cmd);
                 unlink(orig_tmp);
                 unlink(new_tmp);
                 /* diff exits 1 when files differ, 0 when same */
@@ -8125,11 +8511,19 @@ static int fmt_process_file(const char *path, ReaderType force_lang,
                 ssize_t _w2 = write(nfd, out.data, out.len); (void)_w2;
                 close(nfd);
             }
-            char diff_cmd[8192];
-            snprintf(diff_cmd, sizeof(diff_cmd),
-                     "diff -u -L '%s' -L '%s' '%s' '%s'",
-                     path, path, orig_tmp, new_tmp);
-            int diff_rc = system(diff_cmd);
+            Buf diff_cmd; buf_init(&diff_cmd);
+            bool dq = true;
+            buf_puts(&diff_cmd, "diff -u -L ");
+            dq = buf_put_quoted(&diff_cmd, path) && dq;
+            buf_puts(&diff_cmd, " -L ");
+            dq = buf_put_quoted(&diff_cmd, path) && dq;
+            buf_putc(&diff_cmd, ' ');
+            dq = buf_put_quoted(&diff_cmd, orig_tmp) && dq;
+            buf_putc(&diff_cmd, ' ');
+            dq = buf_put_quoted(&diff_cmd, new_tmp) && dq;
+            buf_putc(&diff_cmd, '\0');
+            int diff_rc = dq ? system(diff_cmd.data) : 2;
+            buf_free(&diff_cmd);
             unlink(orig_tmp);
             unlink(new_tmp);
             buf_free(&out);
@@ -9307,6 +9701,9 @@ static int cmd_image_verify(const char *path, const char *binary) {
     if (!f) { fprintf(stderr, "tur image-verify: cannot open '%s'\n", path); return 2; }
     TurImageHeader h;
     TurImageError e = tur_image_read_header(f, &h);
+    /* The payload too (security-audit-plan M-1): its length against the file,
+     * and its CRC when the header carries one. */
+    if (e == IMAGE_OK) e = tur_image_verify_payload(f, &h);
     fclose(f);
     if (e != IMAGE_OK) {
         fprintf(stderr, "FAIL: %s: %s\n", path, tur_image_strerror(e));
@@ -9325,7 +9722,7 @@ static int cmd_image_verify(const char *path, const char *binary) {
         printf("OK: header valid and build-stamp matches '%s'\n", binary);
         return 0;
     }
-    printf("OK: header valid (magic/version/CRC). build-stamp: ");
+    printf("OK: header and payload valid (magic/version/flags/CRCs). build-stamp: ");
     tur_image_print_stamp(h.build_stamp); printf("\n");
     printf("note: pass a loader binary as the 2nd arg to verify the build-stamp.\n");
     return 0;
@@ -10506,8 +10903,13 @@ static int open_in_browser(const char *url) {
 #else
     const char *opener = "xdg-open";
 #endif
-    char cmd[8192];
-    int n = snprintf(cmd, sizeof(cmd), "%s \"%s\"", opener, url);
+    /* WP2 (D-7): a bare `"%s"` left `$`, backtick and `\` live on POSIX.  The
+     * URL here is one we built, but quoting it properly costs nothing and the
+     * next caller may not be. */
+    char q[8192];
+    if (tur_shell_quote(url, q, sizeof q) != 0) return -1;
+    char cmd[8300];
+    int n = snprintf(cmd, sizeof(cmd), "%s %s", opener, q);
     if (n < 0 || (size_t)n >= sizeof(cmd)) return -1;
     int rc = system(cmd);
     return (rc == 0) ? 0 : -1;
@@ -12536,7 +12938,7 @@ static int tur_main_inner(int argc, char **argv) {
             if (stat(proj_manifest, &mst) == 0 && S_ISREG(mst.st_mode)) {
                 rc = cmd_build_project(input, out, shared, manifest_out,
                                        (const char **)build_inc, n_build_inc,
-                                       cli_build_dir);
+                                       cli_build_dir, build_target);
             } else {
                 rc = cmd_build_multi(input, out, shared, manifest_out,
                                      cli_build_dir);

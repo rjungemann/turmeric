@@ -1368,7 +1368,10 @@ static char *upgrade_ls_remote(const char *url, const char *ref) {
     Buf cmd; buf_init(&cmd);
     buf_puts(&cmd, "git ls-remote ");
     bool ok = pkg_cmd_arg(&cmd, url);
-    buf_putc(&cmd, ' ');
+    /* WP2 (D-6): `--` before the positional ref, same reason as
+     * pkg_git_fetch's update path -- shell-quoting does not stop git from
+     * reading a leading `--` as an option. */
+    buf_puts(&cmd, " -- ");
     ok = pkg_cmd_arg(&cmd, ref ? ref : "HEAD") && ok;
     buf_puts(&cmd, " 2>" TUR_DEVNULL);
     buf_putc(&cmd, '\0');

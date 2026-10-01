@@ -1,0 +1,5 @@
+3defn square [x : float] : float
+  *(x x)
+
+let [v square(7.1)]
+  println $ str "v=" v

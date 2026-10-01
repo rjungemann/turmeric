@@ -542,6 +542,8 @@ static int jit_pthread_create (pthread_t *tid, const pthread_attr_t *attr,
 static jmp_buf g_jit_err_jb;
 static volatile int g_jit_err_active = 0;
 
+static void MIR_NO_RETURN jit_mir_error (MIR_error_type_t type, const char *fmt, ...)
+    TUR_PRINTF_FMT(2, 3);
 static void MIR_NO_RETURN jit_mir_error (MIR_error_type_t type, const char *fmt, ...) {
   va_list ap;
   va_start (ap, fmt);

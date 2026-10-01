@@ -47,6 +47,50 @@ static int write_image(const char *path,
     return e == IMAGE_OK ? 0 : -1;
 }
 
+static void put_le32(uint8_t *p, uint32_t v)
+{
+    for (int i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i));
+}
+
+static void put_le64(uint8_t *p, uint64_t v)
+{
+    for (int i = 0; i < 8; i++) p[i] = (uint8_t)(v >> (8 * i));
+}
+
+/* Recompute the header CRC over [0, 68) after patching a field. */
+static void reseal(uint8_t hdr[72])
+{
+    put_le32(hdr + 68, test_crc32(0, hdr, 68));
+}
+
+static void write_raw(const char *p, const uint8_t hdr[72],
+                      const uint8_t *payload, size_t plen, const uint8_t *tail)
+{
+    FILE *w = fopen(p, "wb");
+    fwrite(hdr, 1, 72, w);
+    fwrite(payload, 1, plen, w);
+    if (tail) fwrite(tail, 1, 4, w);
+    fclose(w);
+}
+
+static TurImageError read_hdr(const char *p, TurImageHeader *h)
+{
+    FILE *r = fopen(p, "rb");
+    TurImageError e = tur_image_read_header(r, h);
+    fclose(r);
+    return e;
+}
+
+static TurImageError verify_file(const char *p)
+{
+    TurImageHeader h;
+    FILE *r = fopen(p, "rb");
+    TurImageError e = tur_image_read_header(r, &h);
+    if (e == IMAGE_OK) e = tur_image_verify_payload(r, &h);
+    fclose(r);
+    return e;
+}
+
 int main(void)
 {
     /* AI1.1 -- size is fixed at 72 bytes. */
@@ -152,7 +196,62 @@ int main(void)
         CHECK(e == IMAGE_TRUNCATED, "short file -> IMAGE_TRUNCATED");
     }
 
+    /* security-audit-plan M-1: the flags word, globals_offset, and the payload
+     * the header describes.  Each case forges a header with a valid CRC so the
+     * check under test is the only one that can fire. */
+    {
+        uint8_t hdr[72];
+        FILE *r = fopen(path, "rb");
+        if (fread(hdr, 1, 72, r) != 72) { failures++; }
+        fclose(r);
+
+        /* An unknown flag bit. */
+        uint8_t h2[72]; memcpy(h2, hdr, 72);
+        put_le32(h2 + 64, 0x2u); reseal(h2);
+        write_raw("image_flags.tmp.img", h2, payload, plen, NULL);
+        CHECK(read_hdr("image_flags.tmp.img", &h) == IMAGE_BAD_FLAGS,
+              "unknown flag bit -> IMAGE_BAD_FLAGS");
+
+        /* globals_offset past the end of the payload. */
+        memcpy(h2, hdr, 72);
+        put_le64(h2 + 56, 72 + plen + 1); reseal(h2);
+        write_raw("image_goff.tmp.img", h2, payload, plen, NULL);
+        CHECK(read_hdr("image_goff.tmp.img", &h) == IMAGE_BAD_PAYLOAD,
+              "globals_offset outside the payload -> IMAGE_BAD_PAYLOAD");
+
+        /* A legacy image (flags 0) verifies on length alone. */
+        CHECK(verify_file(path) == IMAGE_OK, "flags-0 image verifies");
+
+        /* payload_len claiming a terabyte: rejected by streaming, not by
+         * an allocation of that size. */
+        memcpy(h2, hdr, 72);
+        put_le64(h2 + 40, (uint64_t)1 << 40); reseal(h2);
+        write_raw("image_plen.tmp.img", h2, payload, plen, NULL);
+        CHECK(verify_file("image_plen.tmp.img") == IMAGE_BAD_PAYLOAD,
+              "payload_len beyond the file -> IMAGE_BAD_PAYLOAD");
+
+        /* The payload CRC trailer: correct, then one payload byte flipped. */
+        memcpy(h2, hdr, 72);
+        put_le32(h2 + 64, TUR_IMAGE_FLAG_PAYLOAD_CRC); reseal(h2);
+        uint8_t tail[4];
+        put_le32(tail, test_crc32(0, payload, plen));
+        write_raw("image_pcrc.tmp.img", h2, payload, plen, tail);
+        CHECK(verify_file("image_pcrc.tmp.img") == IMAGE_OK,
+              "payload CRC trailer verifies");
+        uint8_t bad[sizeof payload]; memcpy(bad, payload, plen); bad[0] ^= 0x01;
+        write_raw("image_pcrc.tmp.img", h2, bad, plen, tail);
+        CHECK(verify_file("image_pcrc.tmp.img") == IMAGE_BAD_PAYLOAD,
+              "flipped payload byte -> IMAGE_BAD_PAYLOAD");
+        write_raw("image_pcrc.tmp.img", h2, payload, plen, NULL);
+        CHECK(verify_file("image_pcrc.tmp.img") == IMAGE_BAD_PAYLOAD,
+              "missing CRC trailer -> IMAGE_BAD_PAYLOAD");
+    }
+
     remove(path);
+    remove("image_flags.tmp.img");
+    remove("image_goff.tmp.img");
+    remove("image_plen.tmp.img");
+    remove("image_pcrc.tmp.img");
     remove("image_bad_magic.tmp.img");
     remove("image_bad_crc.tmp.img");
     remove("image_bad_ver.tmp.img");

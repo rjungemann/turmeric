@@ -7,6 +7,19 @@
 
 #include "compiler/forms.h"
 
+/* printf-style format checking for the wrappers below: under -Wformat=2 the
+ * compiler checks every call's arguments against its format and refuses a
+ * non-literal one (security audit WP5).  Off on Windows, where MinGW's printf
+ * archetype disagrees with the C99 specifiers used here and -Werror is off. */
+#ifndef TUR_PRINTF_FMT
+#  if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+#    define TUR_PRINTF_FMT(fmt_idx, first_arg) \
+         __attribute__((format(printf, fmt_idx, first_arg)))
+#  else
+#    define TUR_PRINTF_FMT(fmt_idx, first_arg)
+#  endif
+#endif
+
 /* Forward declaration for Buf (defined in buf.h) */
 struct Buf;
 
@@ -708,11 +721,13 @@ uint16_t diag_autoload_file_ids_end(void);
 Span diag_translate_span(Span span);
 
 /* Core diagnostic emission */
-void diag_emit(DiagLevel level, Span span, const char *fmt, ...);
-void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap);
+void diag_emit(DiagLevel level, Span span, const char *fmt, ...) TUR_PRINTF_FMT(3, 4);
+void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap)
+    TUR_PRINTF_FMT(3, 0);
 
 /* Enhanced diagnostics with code and notes (Phase 8) */
-void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *fmt, ...);
+void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *fmt, ...)
+    TUR_PRINTF_FMT(4, 5);
 void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
                           DiagNote *notes, size_t note_count);
 void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,

@@ -1139,6 +1139,14 @@ static void json_enc_str(tur_json_encbuf *b, const char *s) {
         else if (*sp == '\n') json_enc_append_s(b, "\\n");
         else if (*sp == '\r') json_enc_append_s(b, "\\r");
         else if (*sp == '\t') json_enc_append_s(b, "\\t");
+        else if (*sp == '\b') json_enc_append_s(b, "\\b");
+        else if (*sp == '\f') json_enc_append_s(b, "\\f");
+        else if ((unsigned char)*sp < 0x20) {
+            /* Any other control character is not legal raw in a JSON string. */
+            char esc[8];
+            snprintf(esc, sizeof esc, "\\u%04x", (unsigned)(unsigned char)*sp);
+            json_enc_append_s(b, esc);
+        }
         else                  json_enc_append_c(b, *sp);
     }
     json_enc_append_c(b, '"');
@@ -1200,20 +1208,46 @@ static TuriValue native_json_encode(TuriEnv *e, TuriValue *a, uint32_t n, void *
 }
 
 /* --- decoder: recursive-descent over a {s, pos, err} context --- */
-typedef struct { const char *s; size_t pos; int err; } tur_json_ctx;
+typedef struct { const char *s; size_t pos; int err; int depth; } tur_json_ctx;
 static void json_dec_skip_ws(tur_json_ctx *c) {
     while (c->s[c->pos] == ' ' || c->s[c->pos] == '\n' ||
            c->s[c->pos] == '\r' || c->s[c->pos] == '\t') c->pos++;
 }
+/* Four hex digits at s[0..3] -> *out; false on a non-hex digit (NUL
+ * included, so this never reads past the terminator). */
+static bool json_dec_hex4(const char *s, uint32_t *out) {
+    uint32_t v = 0;
+    for (int k = 0; k < 4; k++) {
+        char h = s[k];
+        uint32_t d = (h >= '0' && h <= '9') ? (uint32_t)(h - '0')
+                   : (h >= 'a' && h <= 'f') ? (uint32_t)(h - 'a' + 10)
+                   : (h >= 'A' && h <= 'F') ? (uint32_t)(h - 'A' + 10) : 99u;
+        if (d == 99u) return false;
+        v = v * 16 + d;
+    }
+    *out = v;
+    return true;
+}
+/* Kept step-for-step identical to stdlib/json.tur's json-dec-parse-string-
+ * (the compiled twin); a fix to one is a fix to both. */
 static char *json_dec_parse_string(tur_json_ctx *c) {
     if (c->s[c->pos] != '"') { c->err = 1; return NULL; }
     c->pos++;
     size_t cap = 64, len = 0;
     char *buf = malloc(cap);
+    if (!buf) { c->err = 1; return NULL; }
     while (c->s[c->pos] && c->s[c->pos] != '"') {
-        if (len + 4 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+        /* Room for a 4-byte UTF-8 sequence plus the terminator. */
+        if (len + 4 >= cap) {
+            char *nb = realloc(buf, cap * 2);
+            if (!nb) { free(buf); c->err = 1; return NULL; }
+            buf = nb; cap *= 2;
+        }
         if (c->s[c->pos] == '\\') {
             c->pos++;
+            /* A backslash at the very end of the input: the old code copied
+             * the NUL, stepped past it and kept reading (M-2). */
+            if (!c->s[c->pos]) break;
             switch (c->s[c->pos]) {
                 case '"':  buf[len++] = '"';  break;
                 case '\\': buf[len++] = '\\'; break;
@@ -1223,6 +1257,42 @@ static char *json_dec_parse_string(tur_json_ctx *c) {
                 case 't':  buf[len++] = '\t'; break;
                 case 'b':  buf[len++] = '\b'; break;
                 case 'f':  buf[len++] = '\f'; break;
+                case 'u': {
+                    /* \uXXXX (+ a surrogate pair above U+FFFF) to UTF-8.  A
+                     * lone surrogate is an error, and so is \u0000: the value
+                     * is a C string and cannot carry a NUL. */
+                    uint32_t cpt;
+                    if (!json_dec_hex4(c->s + c->pos + 1, &cpt)) { free(buf); c->err = 1; return NULL; }
+                    c->pos += 4;
+                    if (cpt >= 0xDC00 && cpt <= 0xDFFF) { free(buf); c->err = 1; return NULL; }
+                    if (cpt >= 0xD800 && cpt <= 0xDBFF) {
+                        uint32_t lo;
+                        if (c->s[c->pos + 1] != '\\' || c->s[c->pos + 2] != 'u' ||
+                            !json_dec_hex4(c->s + c->pos + 3, &lo) ||
+                            lo < 0xDC00 || lo > 0xDFFF) {
+                            free(buf); c->err = 1; return NULL;
+                        }
+                        c->pos += 6;
+                        cpt = 0x10000 + ((cpt - 0xD800) << 10) + (lo - 0xDC00);
+                    }
+                    if (cpt == 0) { free(buf); c->err = 1; return NULL; }
+                    if (cpt < 0x80) {
+                        buf[len++] = (char)cpt;
+                    } else if (cpt < 0x800) {
+                        buf[len++] = (char)(0xC0 | (cpt >> 6));
+                        buf[len++] = (char)(0x80 | (cpt & 0x3F));
+                    } else if (cpt < 0x10000) {
+                        buf[len++] = (char)(0xE0 | (cpt >> 12));
+                        buf[len++] = (char)(0x80 | ((cpt >> 6) & 0x3F));
+                        buf[len++] = (char)(0x80 | (cpt & 0x3F));
+                    } else {
+                        buf[len++] = (char)(0xF0 | (cpt >> 18));
+                        buf[len++] = (char)(0x80 | ((cpt >> 12) & 0x3F));
+                        buf[len++] = (char)(0x80 | ((cpt >> 6) & 0x3F));
+                        buf[len++] = (char)(0x80 | (cpt & 0x3F));
+                    }
+                    break;
+                }
                 default:   buf[len++] = c->s[c->pos]; break;
             }
         } else {
@@ -1234,6 +1304,30 @@ static char *json_dec_parse_string(tur_json_ctx *c) {
     c->pos++;
     buf[len] = '\0';
     return buf;
+}
+/* Recursively free a decoded node tree (the decoder's own error paths; the
+ * interpreter's json/free stays a no-op under its process-lifetime policy). */
+static void json_dec_free_node(int64_t node) {
+    if (!node) return;
+    int64_t *np = (int64_t *)(intptr_t)node;
+    if (np[0] == 4) {
+        free((void *)(intptr_t)np[1]);
+    } else if (np[0] == 5) {
+        tur_json_vec *v = (tur_json_vec *)(intptr_t)np[1];
+        for (size_t i = 0; i < v->len; i++) json_dec_free_node(v->data[i]);
+        free(v->data);
+        free(v);
+    } else if (np[0] == 6) {
+        int64_t cur = np[1];
+        while (cur) {
+            int64_t *ent = (int64_t *)(intptr_t)cur;
+            free((void *)(intptr_t)ent[0]);
+            json_dec_free_node(ent[1]);
+            cur = ent[2];
+            free(ent);
+        }
+    }
+    free(np);
 }
 static int64_t json_dec_parse_value(tur_json_ctx *c) {
     json_dec_skip_ws(c);
@@ -1274,68 +1368,94 @@ static int64_t json_dec_parse_value(tur_json_ctx *c) {
         int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 2; node[1] = ival;
         return (int64_t)(intptr_t)node;
     }
+    /* Nesting is capped so a hostile document cannot recurse this parser off
+     * the end of the C stack (M-2). */
+    if ((ch == '[' || ch == '{') && ++c->depth > 256) { c->err = 1; return 0; }
     if (ch == '[') {
         c->pos++;
+        int64_t *node = malloc(2 * sizeof(int64_t));
         tur_json_vec *v = malloc(sizeof(*v));
+        if (!node || !v) { free(node); free(v); c->err = 1; return 0; }
         v->data = NULL; v->len = 0; v->cap = 0;
+        /* Built as a node up front so an error part-way through frees the
+         * elements already parsed, not just the vector. */
+        node[0] = 5; node[1] = (int64_t)(intptr_t)v;
         json_dec_skip_ws(c);
         if (c->s[c->pos] != ']') {
             for (;;) {
                 int64_t elem = json_dec_parse_value(c);
-                if (c->err) { free(v->data); free(v); return 0; }
+                if (c->err) { json_dec_free_node((int64_t)(intptr_t)node); return 0; }
                 if (v->len >= v->cap) {
-                    v->cap = v->cap > 0 ? v->cap * 2 : 4;
-                    v->data = realloc(v->data, v->cap * sizeof(int64_t));
+                    size_t ncap = v->cap > 0 ? v->cap * 2 : 4;
+                    int64_t *nd = realloc(v->data, ncap * sizeof(int64_t));
+                    if (!nd) {
+                        json_dec_free_node(elem); json_dec_free_node((int64_t)(intptr_t)node);
+                        c->err = 1; return 0;
+                    }
+                    v->data = nd; v->cap = ncap;
                 }
                 v->data[v->len++] = elem;
                 json_dec_skip_ws(c);
                 if (c->s[c->pos] == ']') break;
-                if (c->s[c->pos] != ',') { c->err = 1; free(v->data); free(v); return 0; }
+                if (c->s[c->pos] != ',') { c->err = 1; json_dec_free_node((int64_t)(intptr_t)node); return 0; }
                 c->pos++;
             }
         }
         c->pos++;
-        int64_t *node = malloc(2 * sizeof(int64_t));
-        node[0] = 5; node[1] = (int64_t)(intptr_t)v;
+        c->depth--;
         return (int64_t)(intptr_t)node;
     }
     if (ch == '{') {
         c->pos++;
-        int64_t *node = malloc(2 * sizeof(int64_t)); node[0] = 6; node[1] = 0;
+        int64_t *node = malloc(2 * sizeof(int64_t));
+        if (!node) { c->err = 1; return 0; }
+        node[0] = 6; node[1] = 0;
         json_dec_skip_ws(c);
         if (c->s[c->pos] != '}') {
             for (;;) {
                 json_dec_skip_ws(c);
                 char *key = json_dec_parse_string(c);
-                if (!key || c->err) { free(node); return 0; }
+                if (!key || c->err) { free(key); c->err = 1; json_dec_free_node((int64_t)(intptr_t)node); return 0; }
                 json_dec_skip_ws(c);
-                if (c->s[c->pos] != ':') { c->err = 1; free(key); free(node); return 0; }
+                if (c->s[c->pos] != ':') { c->err = 1; free(key); json_dec_free_node((int64_t)(intptr_t)node); return 0; }
                 c->pos++;
                 int64_t val = json_dec_parse_value(c);
-                if (c->err) { free(key); free(node); return 0; }
+                if (c->err) { free(key); json_dec_free_node((int64_t)(intptr_t)node); return 0; }
                 int64_t *entry = malloc(3 * sizeof(int64_t));
+                if (!entry) {
+                    free(key); json_dec_free_node(val); json_dec_free_node((int64_t)(intptr_t)node);
+                    c->err = 1; return 0;
+                }
                 entry[0] = (int64_t)(intptr_t)key;
                 entry[1] = val;
                 entry[2] = node[1];
                 node[1] = (int64_t)(intptr_t)entry;
                 json_dec_skip_ws(c);
                 if (c->s[c->pos] == '}') break;
-                if (c->s[c->pos] != ',') { c->err = 1; free(node); return 0; }
+                if (c->s[c->pos] != ',') { c->err = 1; json_dec_free_node((int64_t)(intptr_t)node); return 0; }
                 c->pos++;
             }
         }
         c->pos++;
+        c->depth--;
         return (int64_t)(intptr_t)node;
     }
     c->err = 1;
     return 0;
 }
+int64_t turi_json_decode_cstr(const char *s) {
+    if (!s) return 0;
+    tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
+    int64_t result = json_dec_parse_value(&ctx);
+    return ctx.err ? 0 : result;
+}
+void turi_json_free_tree(int64_t node) { json_dec_free_node(node); }
 static TuriValue native_json_decode(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 1) return turi_int(0);
     const char *s = json_arg_cstr(a[0]);
     if (!s) return turi_int(0);
-    tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
+    tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
     int64_t result = json_dec_parse_value(&ctx);
     if (ctx.err) return turi_int(0);
     return turi_int(result);
@@ -1370,7 +1490,7 @@ static TuriValue native_json_decode_file(TuriEnv *e, TuriValue *a, uint32_t n, v
     }
     fclose(f);
     buf[len] = 0;
-    tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0;
+    tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
     int64_t result = json_dec_parse_value(&ctx);
     /* The node tree copies what it needs out of the source, as json/decode's
      * does; the buffer is ours to release. */
@@ -2115,11 +2235,16 @@ static TuriValue native_grid_new(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     (void)env; (void)ud;
     int64_t w = (n >= 1) ? a[0].as_int : 0;
     int64_t h = (n >= 2) ? a[1].as_int : 0;
+    /* The compiled twin's bound (stdlib/grid.tur, security audit WP5). */
+    if (w < 0 || h < 0 || w > INT_MAX || h > INT_MAX ||
+        (h > 0 && (uint64_t)w > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)h))
+        return turi_errorf("grid-new: dimensions %lldx%lld out of range",
+                           (long long)w, (long long)h);
     TuriGridRep *g = (TuriGridRep *)malloc(sizeof(*g));
     if (!g) return turi_int(0);
     g->width = (int)w; g->height = (int)h; g->cx = 0; g->cy = 0;
-    int64_t cells = w * h; if (cells < 0) cells = 0;
-    g->data = (int64_t *)calloc((size_t)cells, sizeof(int64_t));
+    g->data = (int64_t *)calloc((size_t)w * (size_t)h, sizeof(int64_t));
+    if (!g->data && w > 0 && h > 0) { free(g); return turi_error("grid-new: out of memory"); }
     return turi_int((int64_t)(intptr_t)g);
 }
 static TuriValue native_grid_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2128,6 +2253,9 @@ static TuriValue native_grid_get(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
     if (!g || !g->data) return turi_int(0);
     int64_t x = a[1].as_int, y = a[2].as_int;
+    if (x < 0 || y < 0 || x >= g->width || y >= g->height)
+        return turi_errorf("grid-get: (%lld, %lld) out of bounds in %dx%d",
+                           (long long)x, (long long)y, g->width, g->height);
     return turi_int(g->data[(size_t)(y * g->width + x)]);
 }
 static TuriValue native_grid_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2136,6 +2264,9 @@ static TuriValue native_grid_set(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     TuriGridRep *g = (TuriGridRep *)(intptr_t)a[0].as_int;
     if (!g || !g->data) return turi_nil();
     int64_t x = a[1].as_int, y = a[2].as_int, v = a[3].as_int;
+    if (x < 0 || y < 0 || x >= g->width || y >= g->height)
+        return turi_errorf("grid-set!: (%lld, %lld) out of bounds in %dx%d",
+                           (long long)x, (long long)y, g->width, g->height);
     g->data[(size_t)(y * g->width + x)] = v;
     return turi_nil();
 }
@@ -2169,19 +2300,27 @@ static TuriSizedBufRep *sbuf_of(TuriValue v) { return (TuriSizedBufRep *)(intptr
 static TuriValue native_sbuf_new_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     int64_t k = (n >= 1) ? a[0].as_int : 0;
+    /* The compiled twin's bound (stdlib/sized-buf.tur): `k * 8` wrapped for a
+     * huge k, leaving a tiny block under a huge len (security audit WP5). */
+    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t))
+        return turi_errorf("sized-buf-new: length %lld out of range", (long long)k);
     TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
     if (!b) return turi_int(0);
     b->len = k;
     b->data = k > 0 ? (int64_t *)malloc((size_t)k * sizeof(int64_t)) : NULL;
+    if (k > 0 && !b->data) { free(b); return turi_error("sized-buf-new: out of memory"); }
     return turi_int((int64_t)(intptr_t)b);
 }
 static TuriValue native_sbuf_new_zeroed_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     int64_t k = (n >= 1) ? a[0].as_int : 0;
+    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t))
+        return turi_errorf("sized-buf-new-zeroed: length %lld out of range", (long long)k);
     TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
     if (!b) return turi_int(0);
     b->len = k;
     b->data = k > 0 ? (int64_t *)calloc((size_t)k, sizeof(int64_t)) : NULL;
+    if (k > 0 && !b->data) { free(b); return turi_error("sized-buf-new-zeroed: out of memory"); }
     return turi_int((int64_t)(intptr_t)b);
 }
 static TuriValue native_sbuf_free_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2573,9 +2712,7 @@ static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, vo
     int d = (n > 1) ? (int)a[1].as_int : 6;
     if (d < 0) d = 0;
     if (d > 17) d = 17;
-    char fmt[16];
-    snprintf(fmt, sizeof(fmt), "%%.%df\n", d);
-    printf(fmt, x);
+    printf("%.*f\n", d, x);
     return turi_nil();
 }
 /* r7rs-lang-plan R2: the three newline-free write primitives the R7RS prelude
@@ -3599,8 +3736,15 @@ static TuriValue native_r7rs_substring(TuriEnv *env, TuriValue *a, uint32_t n, v
     const char *s = r7rs_arg_cstr(a, n, 0);
     int64_t st = r7rs_arg_int(a, n, 1), en = r7rs_arg_int(a, n, 2);
     size_t len = strlen(s);
-    if (st < 0 || en < st || (size_t)en > len) turi_runtime_panic(env, "substring: range out of bounds");
+    if (st < 0 || en < st || (size_t)en > len) {
+        /* turi_runtime_panic RETURNS under a catch boundary; falling through
+         * copied `en - st` bytes -- SIZE_MAX for en = -1 -- from outside the
+         * string (security audit WP5, M-5). */
+        turi_runtime_panic(env, "substring: range out of bounds");
+        return turi_nil();
+    }
     char *r = (char *)malloc((size_t)(en - st) + 1);
+    if (!r) return turi_error("substring: out of memory");
     memcpy(r, s + st, (size_t)(en - st)); r[en - st] = 0;
     return turi_cstr(r);
 }
@@ -4723,6 +4867,9 @@ static TuriValue native_chan_new(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     (void)env; (void)ud;
     int64_t cap = (n > 0) ? a[0].as_int : 0;
     if (cap < 1) cap = 1;
+    /* `8 * cap` wrapped for a huge cap (security audit WP5, M-5). */
+    if ((uint64_t)cap > SIZE_MAX / sizeof(int64_t))
+        return turi_errorf("chan-new: capacity %lld out of range", (long long)cap);
     WkChan *ch = (WkChan *)malloc(sizeof(WkChan));
     if (!ch) return turi_nil();
     ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);

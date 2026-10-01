@@ -657,10 +657,14 @@ bool turi_trace_next(TurTraceReader *r, TurTraceRecord *out) {
     case TUR_TRACE_OUTPUT: {
         if (left < 1 + 4) return false;
         uint32_t n = rd_u32(p + 1);
-        if (1u + 4u + n > left) return false;
+        /* `1u + 4u + n` was 32-bit arithmetic: n >= 0xFFFFFFFB wrapped it
+         * small, a 4 GiB payload passed, and `used` wrapped to 0 so replay
+         * never advanced.  The recording is a user-loaded file (security
+         * audit WP5, M-5); compare in size_t against what is left. */
+        if ((size_t)n > left - 5) return false;
         out->payload     = p + 5;
         out->payload_len = n;
-        used = 5u + n;
+        used = 5 + (size_t)n;
         break;
     }
     default:

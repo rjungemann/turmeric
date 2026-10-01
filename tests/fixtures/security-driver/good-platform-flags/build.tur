@@ -1,0 +1,23 @@
+;;; The grammar's vocabulary is cross-platform even though no single linker
+;;; accepts all of it: `-framework X` and `-Wl,-dead_strip` are ld64-only,
+;;; `-Wl,--build-id` and `-Wl,-z,now` are GNU-only.  A manifest written for
+;;; macOS is still PARSED on Linux -- by `tur check`, by an editor, by a
+;;; workspace build that skips the member -- so the grammar must admit all of
+;;; them everywhere, and only the linker gets to complain.
+;;;
+;;; This fixture therefore asserts the grammar alone: the runner checks that
+;;; no token was refused, and does not care whether the link succeeds.
+(defpackage sec-good-platform-flags
+  :name "sec-good-platform-flags"
+  :modules [main]
+  :build-opts #map{
+    :link-libs  ["m"]
+    :link-flags ["-framework Foundation"
+                 "-Wl,-dead_strip"
+                 "-Wl,--build-id"
+                 "-Wl,-z,now"
+                 "-L/tur-sec-marker"
+                 "-I/tur-sec-inc"
+                 "-DTUR_SEC_MARKER=1"
+                 "-pthread"]
+  })

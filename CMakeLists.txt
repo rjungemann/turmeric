@@ -51,6 +51,18 @@ if(TUR_DEBUG_SANITIZE AND WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     "Build with the MSYS2 clang toolchain to get sanitizer coverage on Windows.")
 endif()
 
+# security-audit-plan WP4: libFuzzer targets for the parsers that take
+# untrusted bytes (tests/fuzz/README.md).  Clang only -- libFuzzer ships with
+# compiler-rt.  Use a build directory of its own; it instruments tur_core:
+#   cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=Debug \
+#         -DCMAKE_C_COMPILER=clang -DTUR_FUZZ=ON
+option(TUR_FUZZ "Build the libFuzzer parser targets in tests/fuzz (clang only)" OFF)
+if(TUR_FUZZ AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+  message(FATAL_ERROR
+    "TUR_FUZZ needs clang: libFuzzer ships with compiler-rt. "
+    "Configure with -DCMAKE_C_COMPILER=clang.")
+endif()
+
 if(TUR_DEBUG_SANITIZE)
   set(TUR_ASAN_FLAGS "-fsanitize=address,undefined")
 else()
@@ -982,6 +994,19 @@ add_test(
   COMMAND bash tests/run-build-project.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# WP2 of docs/upcoming/security-audit-plan.md: the compiler driver used to
+# splice repo-supplied text -- a manifest's :link-flags, a spice's :c-sources,
+# an __tur_autolink__ marker, a Justfile backtick -- into the shell command
+# string it hands to system(), and into directories it then wrote to.  Each
+# fixture under tests/fixtures/security-driver/ carries one such payload; the
+# assertion is a diagnostic AND the absence of the file the payload creates,
+# because "failed to build" and "ran, then failed to build" look identical
+# otherwise.
+add_test(
+  NAME tur_security_driver
+  COMMAND bash tests/run-security-driver.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # result-typedef-duplicated-across-modules regression: two modules export
 # functions returning the same (Result cstr cstr) instantiation; a third
 # module imports both.  Without a per-instantiation include guard around
@@ -1169,7 +1194,9 @@ add_test(
 set_tests_properties(tur_init_r7rs PROPERTIES TIMEOUT 600)
 # r7rs-lang-plan R10: chibi-scheme's R7RS test suite, as a pass COUNT with a
 # floor, so a regression fails and progress only needs the floor raised.  Both
-# back ends, about two minutes together.  Skips cleanly without python3.
+# back ends; the compiled one is a single build of the whole suite, 2-4 minutes
+# under the Debug `tur`, and the runner's per-program timeout is sized for it
+# (tests/run-r7rs-conformance.sh).  Skips cleanly without python3.
 #
 # NOT RUN_SERIAL.  It was, on the grounds that "the compiled pass is one large
 # C build" -- but one large single-threaded `cc` is the case RUN_SERIAL serves
@@ -1372,6 +1399,18 @@ add_test(
 # a missing one is a failure with an actionable message.
 set_tests_properties(tur_spice_fetch_tests PROPERTIES
   ENVIRONMENT "TUR_REQUIRE_GIT=1")
+# tools/ci/sentry-report.py, against a stub Sentry on a loopback port.
+#
+# This carries more weight than a CI helper usually would: the fuzz and TSan
+# workflows send findings to Sentry and NOTHING else -- no public artifact, no
+# target names in the log -- so a bug here loses a memory-safety finding
+# silently, which is worse than the public issue it replaced.  Needs no tur and
+# no network.
+add_test(
+  NAME tur_sentry_report_tests
+  COMMAND bash tests/run-sentry-report.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME turi_fixture_tests
   COMMAND bash tests/run-turi.sh

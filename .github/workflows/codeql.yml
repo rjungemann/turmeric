@@ -1,0 +1,92 @@
+name: CodeQL
+
+# C-8 in docs/upcoming/security-audit-plan.md.
+#
+# Static analysis over the two languages in this repo that take untrusted
+# input: the compiler and runtime in C, and the Try Turmeric playground in
+# JavaScript. It complements what already runs rather than repeating it -- the
+# Debug build's ASan/UBSan and the libFuzzer targets (WP4) find bugs on paths a
+# test actually executes, and CodeQL reads paths no test reaches.
+#
+# Deliberately NOT on pull_request. The C analysis has to build the compiler,
+# so it costs a full Debug build on top of the eleven jobs ci.yml already runs,
+# and this project's standing position is that CI is a signal rather than a
+# gate -- a slower PR is a real cost paid for a result nobody is required to
+# act on before merging. Weekly plus every push to main catches the same
+# regressions a few hours later, which is the right trade here. Add
+# `pull_request:` if that ever stops being true.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 05:30 UTC Mondays -- an hour after the nightly fuzz run (fuzz.yml) so the
+    # two never contend for runners, and off the hour because a cron on the
+    # hour is the one most likely to be silently dropped by GitHub's scheduler.
+    - cron: "30 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # The one scope this needs: writing results to the Security tab.
+      security-events: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `manual` rather than autobuild: autobuild guesses at the CMake
+          # invocation, and a guess that configures without TUR_JIT or with a
+          # different build type analyzes code the project does not ship.
+          - language: c-cpp
+            build-mode: manual
+          # `none` -- JavaScript needs no build step, and web/ is analyzed as
+          # source. WP6 hardened this surface; this watches it.
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended adds the checks that matter for a C codebase
+          # parsing untrusted bytes -- the taint and bounds queries the audit's
+          # M-rows are about -- at the cost of a longer run and more results to
+          # triage. This is not a gate, so the extra results are worth having.
+          queries: security-extended
+
+      - name: Install build dependencies
+        if: matrix.language == 'c-cpp'
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+
+      - name: Build
+        if: matrix.language == 'c-cpp'
+        # Release, not the Debug build the fixture suite uses: the sanitizers
+        # rewrite the code CodeQL would otherwise read, and their instrumentation
+        # is not what ships. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 matches every
+        # other configure in this repo.
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build -j"$(nproc)"
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: "/language:${{ matrix.language }}"
