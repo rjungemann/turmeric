@@ -3,6 +3,26 @@
 **Severity:** medium (a user-facing feature that has no working path). Not a
 security finding; found during security-audit-plan WP6.
 
+**Status: RESOLVED 2026-10-01** by the first fix direction. The codec moved to
+`web/share-codec.js` and uses the browser's own `CompressionStream('gzip')` /
+`DecompressionStream`: no dependency, nothing for the CSP to allow. The payload
+format is unchanged (UTF-8, gzip, unpadded base64url -- what `pako.gzip`
+produced), so a link minted by any build that did have pako still decodes; a
+payload without the gzip magic is read as uncompressed UTF-8, and anything that
+is not valid UTF-8 loads nothing. `shareCode`, `updateUrlHash` (now with a
+sequence check so an older encode cannot land after a newer one) and
+`loadFromUrlHash` are async. `web/tests/share-link.spec.js` is the round trip
+the last direction asked for: Share, open what it copied in a NEW browser
+context (the persisted tabs in the old one restore the buffer on their own, so
+the same context would pass without the link working), compare the buffer --
+whose first line is `#lang x"onfocus="window.__pwned=1"autofocus="`, and
+`window.__pwned` stays undefined. Also: an edited buffer reaches the hash, and
+a mangled `#code=` leaves the editor alone.
+
+Verified locally against the dev server with the WASM worker stubbed (no
+Emscripten in that environment): 3/3 pass, and with the old `main.js` the
+Share and hash tests fail.
+
 ## Summary
 
 The Share button reports **"Failed to encode code"** every time, the editor's

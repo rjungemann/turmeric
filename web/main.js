@@ -5,6 +5,7 @@
 
 import { TUTORIAL_STEPS } from './tutorials.js';
 import { createLspClient } from './lsp-client.js';
+import { encodeShareCode, decodeShareCode } from './share-codec.js';
 
 // ============================================================================
 // WASM Module State
@@ -1126,46 +1127,15 @@ function updateExecTime(timeMs) {
 }
 
 /**
- * Encode state to URL hash
- */
-function encodeState(code) {
-    try {
-        const compressed = pako.gzip(code);
-        const base64 = btoa(String.fromCharCode(...compressed));
-        return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    } catch (e) {
-        console.error('Failed to encode state:', e);
-        return '';
-    }
-}
-
-/**
- * Decode state from URL hash
- */
-function decodeState(hash) {
-    try {
-        if (!hash) return '';
-        const base64 = hash.replace(/-/g, '+').replace(/_/g, '/');
-        // Pad with '=' to make length a multiple of 4
-        const padLength = (4 - (base64.length % 4)) % 4;
-        const padded = base64 + '='.repeat(padLength);
-        const binary = atob(padded);
-        const compressed = new Uint8Array(binary.split('').map(c => c.charCodeAt(0)));
-        return pako.ungzip(compressed, { to: 'string' });
-    } catch (e) {
-        console.error('Failed to decode state:', e);
-        return '';
-    }
-}
-
-/**
  * Update URL hash with current code
  */
-function updateUrlHash() {
+let urlHashSeq = 0;
+async function updateUrlHash() {
     if (!editor) return;
-    const code = editor.getValue();
-    const encoded = encodeState(code);
-    if (encoded) {
+    // Encoding is async; a slower, older encode must not land after a newer one.
+    const seq = ++urlHashSeq;
+    const encoded = await encodeShareCode(editor.getValue());
+    if (encoded && seq === urlHashSeq) {
         // Merge rather than assign: the docs pane keeps a `doc=` key in the
         // same hash, and clobbering it would close the pane mid-read.
         setHashParam('code', encoded);
@@ -1175,13 +1145,11 @@ function updateUrlHash() {
 /**
  * Load code from URL hash
  */
-function loadFromUrlHash() {
-    const hash = window.location.hash.slice(1);
-    const params = new URLSearchParams(hash);
-    const encoded = params.get('code');
+async function loadFromUrlHash() {
+    const encoded = getHashParam('code');
     if (encoded) {
-        const code = decodeState(encoded);
-        if (code && editor) {
+        const code = await decodeShareCode(encoded);
+        if (code && editor && code !== editor.getValue()) {
             editor.setValue(code);
         }
     }
@@ -3162,11 +3130,11 @@ function initProjectDrop() {
 /**
  * Share the current code
  */
-function shareCode() {
+async function shareCode() {
     if (!editor) return;
     
     const code = editor.getValue();
-    const encoded = encodeState(code);
+    const encoded = await encodeShareCode(code);
     
     if (encoded) {
         const url = `${window.location.origin}${window.location.pathname}#code=${encoded}`;
@@ -4607,13 +4575,6 @@ function showTutorialOverlay() {
         overlay.style.display = 'flex';
     }
 }
-
-// ============================================================================
-// pako (zlib) for URL compression
-// ============================================================================
-
-// We'll use a lightweight implementation or load pako from CDN
-// For now, we'll use a simple base64 encoding without compression
 
 // ============================================================================
 // Main Initialization

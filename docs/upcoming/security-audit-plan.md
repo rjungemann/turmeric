@@ -928,7 +928,7 @@ policy is exactly the one worth not having. The generators changed instead.
   nothing loads; both swallow the `ReferenceError`, so Share reports "Failed to
   encode code" and a `#code=` link decodes to nothing. Not a security defect --
   it removed a vector rather than adding one -- so it is filed as
-  [try-share-links-never-encode](../reported/try-share-links-never-encode.md).
+  [try-share-links-never-encode](../archive/try-share-links-never-encode.md).
 - **The service-worker kill switch could not be built from a clean tree.**
   The Cloudflare plugin builds the Worker as its own Vite environment and that
   bundle closes first, before `dist/client/` exists, so `TUR_SW_KILL=1 npm run
