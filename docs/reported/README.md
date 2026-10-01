@@ -2451,7 +2451,7 @@ tracked in `docs/upcoming/security-audit-plan.md`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [stm-inside-closure-captured-tvar-undeclared](stm-inside-closure-captured-tvar-undeclared.md) | medium | `(atomically (stm (tvar/write tv v)))` inside any lambda that captures `tv` passes `tur check` and fails in cc with `'tv_N' undeclared`: the capture is lost where the lambda's lift and `stm`'s nest. Every `with-region` body is a lambda, so a transaction cannot run inside a bracket |
+| ~~[stm-inside-closure-captured-tvar-undeclared](../archive/stm-inside-closure-captured-tvar-undeclared.md)~~ | medium | **RESOLVED 2026-10-01** (archived): `collect_free_vars` dropped every capture under a node kind it had no arm for (`stm`/`atomically`/`tvar/*`, `select`, dynamic `binding`, `with-handler`), so the lambda lifted captureless; its `default:` now falls back to `cps_visit_children`. Same change: its fixed 256-entry stacks (a compiler heap overflow on a 300-form lambda body) grow, `(with-handler (handler ...) body)` elaborates to the `handle` it is, and the interpreter zeroes a handler value's `HandleExpr`. Pinned by `closure-captures-under-every-form` and `with-handler-literal-lowers-as-handle` |
 
 ## Found resolving the wasm-spices plan's open questions (filed 2026-09-30)
 

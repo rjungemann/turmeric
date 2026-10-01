@@ -263,6 +263,15 @@ static const char *cps_form_name(const Expr *e) {
         case EX_SELECT:        return "EX_SELECT";
         case EX_STM:           return "EX_STM";
         case EX_ATOMICALLY:    return "EX_ATOMICALLY";
+        case EX_RETRY:         return "EX_RETRY";
+        case EX_CHECK:         return "EX_CHECK";
+        case EX_OR_ELSE:       return "EX_OR_ELSE";
+        case EX_TVAR_NEW:      return "EX_TVAR_NEW";
+        case EX_TVAR_READ:     return "EX_TVAR_READ";
+        case EX_TVAR_WRITE:    return "EX_TVAR_WRITE";
+        case EX_TVAR_MODIFY:   return "EX_TVAR_MODIFY";
+        case EX_TVAR_SWAP:     return "EX_TVAR_SWAP";
+        case EX_TVAR_CAS:      return "EX_TVAR_CAS";
         case EX_WITH_HANDLER:  return "EX_WITH_HANDLER";
         case EX_COMPOSE_HANDLERS: return "EX_COMPOSE_HANDLERS";
         case EX_HANDLER_LIT:   return "EX_HANDLER_LIT";
