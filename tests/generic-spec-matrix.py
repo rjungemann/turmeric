@@ -87,6 +87,11 @@ TYPES = {
     "optint":  ("(Option int)", "(some 7)", "(unwrap-or %s 0)", "7"),
     "resint":  ("(Result int cstr)", '(:: (ok 5) (Result int cstr))',
                 "(ok-val %s)", "5"),
+    # A sub-word payload: the float32 word pad fixed the payload's size but
+    # not its offset, so a carrier read of a boxed `(Option float32)` landed
+    # on the pad (docs/archive/subword-payload-box-read-at-wrong-offset.md).
+    "optf32":  ("(Option float32)", "(some (:: 2.5 float32))",
+                "(unwrap-or %s (:: 0.5 float32))", "2.5"),
 }
 
 PRELUDE = """\

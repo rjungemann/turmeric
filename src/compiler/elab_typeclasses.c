@@ -8578,6 +8578,18 @@ found_method:;
             best_inst = user_fallback_inst;
             goto resolved_user_fallback;
         }
+        /* rank2-class-float-float32-ambiguous: an ABSTRACT type-variable
+         * receiver in a constrained generic is never ambiguous -- the instance
+         * that runs comes from the dictionary (or per-spec re-resolution), and
+         * best_inst is only the base clone's representative.  The carrier tier
+         * above finds one when the class has an int-like instance; a class
+         * whose instances are all floats or aggregates (`float` and
+         * `float32`) fell through to here and was refused outright.  Keep the
+         * first candidate the search recorded. */
+        if (obj_is_abstract_tyvar && best_method && best_inst) {
+            exact_match_found = true;
+            goto resolved_user_fallback;
+        }
         /* A RETURN-directed method reached through the dot form.
          *
          * `.m` means "dispatch on the first argument", which is the wrong
