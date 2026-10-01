@@ -3779,6 +3779,9 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                 }
             }
             if (!ret_c) ret_c = emit_type_c_name(ctx, call->type);
+            /* dict-slot-classvar-scalar-result: the slot returns the word. */
+            if (dict_slot_result_is_word_scalar(tc, slot, mimpl, NULL))
+                ret_c = "int64_t";
             buf_printf(&b2, "((%s (*)(", ret_c);
             /* MB2 (constrained-hkt-forall-mode-b-plan): the dispatched signature
              * must mirror the dict field layout (emit_stmt.c) exactly -- a

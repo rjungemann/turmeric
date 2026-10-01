@@ -7114,7 +7114,7 @@ static int64_t point_hyx_un_undict_un55(int64_t __dict_56, int64_t g, int64_t s)
         void *__t72 = (void *)(intptr_t)(__t71);
         int64_t __ps_73 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_56)[0])(__ps_68, (tur_poly_fn_t){ __t72, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t72)) }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_73;
+        return __ps_73;
 }
 
 static int64_t __poly_59(void * __poly_env_60, int64_t __poly_x0_62, int64_t __poly_x1_64, int64_t __poly_x2_66) {
@@ -7134,7 +7134,7 @@ static int64_t point_hyy_un_undict_un70(int64_t __dict_71, int64_t g, int64_t s)
         void *__t78 = (void *)(intptr_t)(__t77);
         int64_t __ps_79 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_71)[0])(__ps_74, (tur_poly_fn_t){ __t78, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t78)) }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_79;
+        return __ps_79;
 }
 
 static int64_t __poly_74(void * __poly_env_75, int64_t __poly_x0_77, int64_t __poly_x1_79, int64_t __poly_x2_81) {
@@ -7154,7 +7154,7 @@ static int64_t point_hyx_un_undict_un85(int64_t __dict_56, int64_t g, int64_t s)
         void *__t84 = (void *)(intptr_t)(__t83);
         int64_t __ps_85 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_56)[0])(__ps_80, (tur_poly_fn_t){ __t84, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t84)) }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_85;
+        return __ps_85;
 }
 
 static int64_t __poly_87(void * __poly_env_88, int64_t __poly_x0_90, int64_t __poly_x1_92, int64_t __poly_x2_94) {
@@ -7182,7 +7182,7 @@ static int64_t point_hyy_un_undict_un107(int64_t __dict_71, int64_t g, int64_t s
         void *__t90 = (void *)(intptr_t)(__t89);
         int64_t __ps_91 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_71)[0])(__ps_86, (tur_poly_fn_t){ __t90, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t90)) }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_91;
+        return __ps_91;
 }
 
 static int64_t __poly_109(void * __poly_env_110, int64_t __poly_x0_112, int64_t __poly_x1_114, int64_t __poly_x2_116) {

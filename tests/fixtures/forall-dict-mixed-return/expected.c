@@ -7005,7 +7005,7 @@ static int64_t __poly_23(void * __poly_env_24, int64_t __poly_x0_26, int64_t __p
 static int64_t poly_hyrank_un_undict_un31(int64_t __dict_32, int64_t x) {
         int64_t __ps_63 = (((int64_t (*)(int64_t))((void **)(intptr_t)__dict_32)[0])(x));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_63;
+        return __ps_63;
 }
 
 static int64_t __poly_35(void * __poly_env_36, int64_t __poly_x0_38, int64_t __poly_x1_40) {

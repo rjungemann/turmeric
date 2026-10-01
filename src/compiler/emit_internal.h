@@ -1580,6 +1580,8 @@ bool carrier_fatshim_applies(Type result_type, const Type *param_types,
 struct TypeClass;
 bool dict_slot_param_is_word_scalar(const struct TypeClass *tc, int slot,
                                     const FnDef *mi, uint32_t j);
+bool dict_slot_result_is_word_scalar(const struct TypeClass *tc, int slot,
+                                     const FnDef *mi, const char **impl_rc);
 char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
                               const char **pc, uint8_t n);
 char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,

@@ -7201,27 +7201,32 @@ static void * __inst_Arrow_second_arrow(void * f) {
 }
 
 typedef struct dict_Arrow_T {
-    void * (*arr)(int64_t);
-    void * (*_gt_gt_gt)(int64_t, int64_t);
-    void * (*_lt_lt_lt)(int64_t, int64_t);
-    void * (*first)(int64_t);
-    void * (*second)(int64_t);
+    int64_t (*arr)(int64_t);
+    int64_t (*_gt_gt_gt)(int64_t, int64_t);
+    int64_t (*_lt_lt_lt)(int64_t, int64_t);
+    int64_t (*first)(int64_t);
+    int64_t (*second)(int64_t);
 } dict_Arrow_T;
 
-static void * __dictwrap_Arrow_arr_T(int64_t __a0) {
-    return __inst_Arrow_arr_arrow((void *)(intptr_t)__a0);
+static int64_t __dictwrap_Arrow_arr_T(int64_t __a0) {
+    void * __r = __inst_Arrow_arr_arrow((void *)(intptr_t)__a0);
+    return (int64_t)(intptr_t)__r;
 }
-static void * __dictwrap_Arrow__gt_gt_gt_T(int64_t __a0, int64_t __a1) {
-    return __inst_Arrow__gt_gt_gt_arrow((void *)(intptr_t)__a0, (void *)(intptr_t)__a1);
+static int64_t __dictwrap_Arrow__gt_gt_gt_T(int64_t __a0, int64_t __a1) {
+    void * __r = __inst_Arrow__gt_gt_gt_arrow((void *)(intptr_t)__a0, (void *)(intptr_t)__a1);
+    return (int64_t)(intptr_t)__r;
 }
-static void * __dictwrap_Arrow__lt_lt_lt_T(int64_t __a0, int64_t __a1) {
-    return __inst_Arrow__lt_lt_lt_arrow((void *)(intptr_t)__a0, (void *)(intptr_t)__a1);
+static int64_t __dictwrap_Arrow__lt_lt_lt_T(int64_t __a0, int64_t __a1) {
+    void * __r = __inst_Arrow__lt_lt_lt_arrow((void *)(intptr_t)__a0, (void *)(intptr_t)__a1);
+    return (int64_t)(intptr_t)__r;
 }
-static void * __dictwrap_Arrow_first_T(int64_t __a0) {
-    return __inst_Arrow_first_arrow((void *)(intptr_t)__a0);
+static int64_t __dictwrap_Arrow_first_T(int64_t __a0) {
+    void * __r = __inst_Arrow_first_arrow((void *)(intptr_t)__a0);
+    return (int64_t)(intptr_t)__r;
 }
-static void * __dictwrap_Arrow_second_T(int64_t __a0) {
-    return __inst_Arrow_second_arrow((void *)(intptr_t)__a0);
+static int64_t __dictwrap_Arrow_second_T(int64_t __a0) {
+    void * __r = __inst_Arrow_second_arrow((void *)(intptr_t)__a0);
+    return (int64_t)(intptr_t)__r;
 }
 static dict_Arrow_T dict_Arrow_T_singleton = {
     .arr = __dictwrap_Arrow_arr_T,

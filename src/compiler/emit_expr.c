@@ -13836,6 +13836,39 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_free(&pb);
                     }
                 }
+                /* carrier-word-into-concrete-param: the reverse crossing.  An
+                 * argument typed with an unresolved type variable is the int64
+                 * carrier word here (a carrier base), passed to a parameter the
+                 * callee is EMITTED with at a concrete float kind or by-value
+                 * aggregate -- the mixed clone a sole-instance method gets from
+                 * a carrier base (`__inst_Cid_cid_float__spec__int64_t_double(x)`).
+                 * C converted the word by VALUE (I2F).  Unpack the bits / the
+                 * box instead. */
+                if (fn_binding && !fn_binding->closure_fn_binding && raw &&
+                    emit_str_is_bare_ident(raw) && arg_expr &&
+                    arg_expr->type.kind == TY_TYVAR) {
+                    const char *sp = emit_sig_lookup_param_ctype(fn_name, i);
+                    Type art = emit_resolve_type(ctx, arg_expr->type);
+                    const char *ac = emit_type_c_name(ctx, art);
+                    const char *rc2 = emit_localvar_lookup_ctype(raw);
+                    bool is_word = (rc2 && strcmp(rc2, "int64_t") == 0) ||
+                                   (!rc2 && ac && strcmp(ac, "int64_t") == 0);
+                    if (sp && is_word) {
+                        Buf pb; buf_init(&pb);
+                        if (strcmp(sp, "double") == 0)
+                            buf_printf(&pb, "((union { int64_t i; double d; }){ .i = (%s) }).d", raw);
+                        else if (strcmp(sp, "float") == 0)
+                            buf_printf(&pb, "((union { uint32_t u; float f; }){ .u = (uint32_t)(%s) }).f", raw);
+                        else if (strncmp(sp, "tur_adt_", 8) == 0 && !strchr(sp, '*'))
+                            buf_printf(&pb, "(*(%s *)(intptr_t)(%s))", sp, raw);
+                        if (pb.len > 0) {
+                            buf_putc(&pb, '\0');
+                            free(raw);
+                            raw = strdup(pb.data);
+                        }
+                        buf_free(&pb);
+                    }
+                }
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);

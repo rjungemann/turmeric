@@ -7138,7 +7138,7 @@ static int64_t tag_hylens_un_undict_un54(int64_t __dict_55, int64_t __dict_57, i
         void *__t72 = (void *)(intptr_t)(__t71);
         int64_t __ps_73 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_55)[0])(__ps_68, (tur_poly_fn_t){ __t72, __tur_fat2word_const_char___int64_t }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_73;
+        return __ps_73;
 }
 
 static int64_t __poly_60(void * __poly_env_61, int64_t __poly_x0_63, int64_t __poly_x1_65, int64_t __poly_x2_67, int64_t __poly_x3_69, int64_t __poly_x4_71) {
@@ -7160,7 +7160,7 @@ static int64_t tag_hylens_un_undict_un74(int64_t __dict_55, int64_t __dict_57, i
         void *__t78 = (void *)(intptr_t)(__t77);
         int64_t __ps_79 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_55)[0])(__ps_74, (tur_poly_fn_t){ __t78, __tur_fat2word_const_char___int64_t }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_79;
+        return __ps_79;
 }
 
 static int64_t __poly_76(void * __poly_env_77, int64_t __poly_x0_79, int64_t __poly_x1_81, int64_t __poly_x2_83, int64_t __poly_x3_85, int64_t __poly_x4_87) {
@@ -7182,7 +7182,7 @@ static int64_t tag_hylens_un_undict_un90(int64_t __dict_55, int64_t __dict_57, i
         void *__t84 = (void *)(intptr_t)(__t83);
         int64_t __ps_85 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_55)[0])(__ps_80, (tur_poly_fn_t){ __t84, __tur_fat2word_const_char___int64_t }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_85;
+        return __ps_85;
 }
 
 static int64_t __poly_92(void * __poly_env_93, int64_t __poly_x0_95, int64_t __poly_x1_97, int64_t __poly_x2_99, int64_t __poly_x3_101, int64_t __poly_x4_103) {

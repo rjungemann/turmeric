@@ -25,6 +25,60 @@ void emit_write_inline_c_fns(Buf *out) {
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path, g_panic_trace */
 
+/* carrier-return-concrete-tail: an `int64_t` (carrier) return fed a value whose
+ * emitted C is concrete -- a by-value aggregate or a float kind.  The mixed
+ * clone the ABI scan mints for a sole-instance method called from a carrier
+ * base (`__inst_Rc_rm_W__spec__int64_t_tur_adt_W(tur_adt_W x) { return x; }`)
+ * returned the struct into the int64 (invalid C), and a `double` there is a
+ * VALUE conversion.  Box the aggregate / put the float in as its bits, the
+ * carrier convention.  With `out` NULL, only answers whether it applies. */
+/* Does the function being emitted return the int64 word in its EMITTED C
+ * signature?  The declared kind can say `int` while an earlier rule retyped
+ * the C return to the body's aggregate (`opt-carrier : int` returning an
+ * `(Option int)`); the signature table records what was actually printed. */
+static bool fn_emitted_ret_is_word(EmitCtx *ctx, const FnDef *fd, bool use_abi_spec) {
+    char *cn = (use_abi_spec && ctx->current_abi_specialization->clone_name)
+        ? strdup(ctx->current_abi_specialization->clone_name)
+        : (fd && fd->binding ? raw_name_for_binding(fd->binding) : NULL);
+    const char *rc = cn ? emit_sig_lookup_ret_ctype(cn) : NULL;
+    bool w = rc && strcmp(rc, "int64_t") == 0;
+    free(cn);
+    return w;
+}
+
+static bool carrier_return_concrete_stmt(EmitCtx *ctx, const Expr *tail_e,
+                                         const char *ret_val, Buf *out) {
+    const char *c = NULL;
+    if (emit_str_is_bare_ident(ret_val)) c = emit_localvar_lookup_ctype(ret_val);
+    if (!c) {
+        Type rt = emit_resolve_type(ctx, tail_e->type);
+        if (rt.kind == TY_FLOAT || rt.kind == TY_FLOAT64) c = "double";
+        else if (rt.kind == TY_FLOAT32) c = "float";
+        else if ((rt.kind == TY_ADT || rt.kind == TY_APP) &&
+                 !type_is_heap_adt(rt) && !type_is_heap_struct(rt))
+            c = emit_type_c_name(ctx, rt);
+    }
+    if (!c) return false;
+    bool flt = strcmp(c, "double") == 0 || strcmp(c, "float") == 0;
+    bool agg = strncmp(c, "tur_adt_", 8) == 0 && !strchr(c, '*');
+    if (!flt && !agg) return false;
+    if (!out) return true;
+    if (flt) {
+        Type ft = emit_type_from_kind(strcmp(c, "float") == 0 ? TY_FLOAT32 : TY_FLOAT);
+        char *w = emit_word_slot_bits(&ft, ret_val);
+        buf_printf(out, "return %s;\n", w);
+        free(w);
+    } else {
+        buf_printf(out,
+            "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+            "*__tur_ret_p = %s; "
+            "TUR_REGION_NOTE_WORDS(__tur_ret_p, sizeof *__tur_ret_p); "
+            "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+            c, c, c, ret_val);
+    }
+    return true;
+}
+
 /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...md, as ONE
  * answer: does this non-spec instance-method impl return the int64 carrier
  * because its declared result rides the carrier ABI?  The impl signature
@@ -4351,6 +4405,19 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          * into garbage. */
         TypeKind clone_rk = tail_e
             ? emit_resolve_type(ctx, tail_e->type).kind : TY_UNKNOWN;
+        /* dict-slot-classvar-scalar-result: a dispatch through a slot whose
+         * class result is the class variable now returns the WORD (the slot
+         * wrapper boxed / bit-packed it), into a temp recorded `int64_t` --
+         * even where the elaborator typed the call with a sole instance's
+         * concrete result (`W`, `double`).  That value is already the carrier;
+         * boxing or bit-packing it again would double-convert. */
+        if (ret_val && emit_str_is_bare_ident(ret_val)) {
+            const char *rvc = emit_localvar_lookup_ctype(ret_val);
+            if (rvc && strcmp(rvc, "int64_t") == 0) {
+                buf_printf(out, "return %s;\n", ret_val);
+                goto clone_ret_done;
+            }
+        }
         /* hkt-dict-clone-tail-generic-call: the body is NOT always a single
          * dispatch.  A constrained generic that calls ANOTHER constrained
          * generic -- `(defn add-two [^Monad M] ... (add-one (add-one m)))` --
@@ -4791,6 +4858,17 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
         buf_printf(out, "(void)(%s);\n", ret_val);
         indent_buf(out, ctx->indent);
         buf_puts(out, "return;\n");
+    } else if (ret_is_int64_carrier && tail_e && ret_val &&
+               /* the function as actually EMITTED returns the word -- a
+                * declared `: int` an earlier rule retyped to the body's
+                * `(Option int)` returns that aggregate, not the carrier */
+               fn_emitted_ret_is_word(ctx, fd, use_abi_spec) &&
+               carrier_return_concrete_stmt(ctx, tail_e, ret_val, NULL)) {
+        Buf rs; buf_init(&rs);
+        carrier_return_concrete_stmt(ctx, tail_e, ret_val, &rs);
+        buf_putc(&rs, '\0');
+        buf_puts(out, rs.data);
+        buf_free(&rs);
     } else {
         buf_printf(out, "return %s;\n", ret_val);
     }
