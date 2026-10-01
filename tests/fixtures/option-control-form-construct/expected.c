@@ -9849,8 +9849,7 @@ static int64_t res_hyok(tur_adt_Result__int__cstr r) {
         bool __ps_187 = (ok___spec__bool_tur_adt_Result__int__cstr(r));
         if (tur_panicking) return ((int64_t)0);
         if (__ps_187) {
-            TUR_MUSTTAIL_SELF(res_hyok);
-            TUR_MUSTTAIL return ok_val__spec__int64_t_tur_adt_Result__int__cstr(r);
+            return ok_val__spec__int64_t_tur_adt_Result__int__cstr(r);
         } else {
             return (INT64_C(0)) - (INT64_C(1));
         }

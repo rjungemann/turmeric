@@ -136,7 +136,12 @@ one_case() {
         echo "FAIL $name -- timed out (>300s) under TUR_GC_TORTURE=$TORTURE"
         sed -n '/^--- stacks at the/,$p' "$WORK/$name.err"
     elif { [ "$want" = nonzero ] && [ "$rc" = 0 ]; } || { [ "$want" != nonzero ] && [ "$rc" != "$want" ]; }; then
-        echo "FAIL $name -- exit $rc, expected $want: $(tail -1 "$WORK/$name.err" | cut -c1-120)"
+        echo "FAIL $name -- exit $rc, expected $want under TUR_GC_TORTURE=$TORTURE; stderr tail:"
+        # The whole tail, not one line cut at 120 columns: a panic line
+        # starts with the emitted unit's path, and macOS's long $TMPDIR put
+        # the message itself past the cut (saffron-class-fn-extra on #1007
+        # showed only "panic at /var/folders/.../..._input_tur.c:27").
+        tail -6 "$WORK/$name.err" | cut -c1-400 | sed 's/^/    /'
     elif ! diff -q "$WORK/$name.out" "$dir/expected.stdout" > /dev/null; then
         echo "FAIL $name -- stdout differs with the collector"
         diff "$WORK/$name.out" "$dir/expected.stdout" | head -6 | sed 's/^/    /'
