@@ -10109,8 +10109,7 @@ static tur_adt_Option__P some__spec__tur_adt_Option__P_tur_adt_P(tur_adt_P x) {
 }
 
 static tur_adt_Option__Q__int some__spec__tur_adt_Option__Q__int_tur_adt_Q__int(tur_adt_Q__int x) {
-        TUR_MUSTTAIL_SELF(some__spec__tur_adt_Option__Q__int_tur_adt_Q__int);
-        TUR_MUSTTAIL return ctor_Option_Some__Q__int(x);
+        return ctor_Option_Some__Q__int(x);
 }
 
 static tur_adt_Result__Vec__int__cstr ok__spec__tur_adt_Result__Vec__int__cstr_tur_adt_Vec__int__(tur_adt_Vec__int * x) {
@@ -10119,8 +10118,7 @@ static tur_adt_Result__Vec__int__cstr ok__spec__tur_adt_Result__Vec__int__cstr_t
 }
 
 static tur_adt_Option__Option__int some__spec__tur_adt_Option__Option__int_tur_adt_Option__int(tur_adt_Option__int x) {
-        TUR_MUSTTAIL_SELF(some__spec__tur_adt_Option__Option__int_tur_adt_Option__int);
-        TUR_MUSTTAIL return ctor_Option_Some__Option__int(x);
+        return ctor_Option_Some__Option__int(x);
 }
 
 static tur_adt_Option__int some__spec__tur_adt_Option__int_int64_t(int64_t x) {

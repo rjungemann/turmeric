@@ -9721,8 +9721,7 @@ static int64_t inner(tur_adt_Result__int__int r) {
 }
 
 static int64_t describe(tur_adt_Result__int__int r) {
-        TUR_MUSTTAIL_SELF(describe);
-        TUR_MUSTTAIL return inner(r);
+        return inner(r);
 }
 
 static int64_t __cu_group_0(int __pc, int64_t __a0, int64_t __a1) {

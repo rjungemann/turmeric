@@ -1615,6 +1615,32 @@ static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
  *     `&&`) is sound, if blunt.
  *
  * Refusing costs nothing: the call is still T2's `return f(args);`. */
+/* musttail-indirect-aggregate-arg-dangles-on-aarch64: may a parameter of
+ * this C type ride a `musttail` call?  Yes for a pointer, a scalar, and the
+ * 16-byte `tur_tagged_t`; no for any other by-value aggregate.  AAPCS64
+ * passes an aggregate over 16 bytes INDIRECTLY -- the caller makes a copy
+ * in its own frame and passes its address -- and a musttail call's frame is
+ * gone by the time the callee reads that copy.  SysV x86-64 passes the same
+ * aggregate in the outgoing argument area, which musttail reuses safely, so
+ * only arm64 saw it: `__dynwit_Comb_comb_Two` forwarding its 32-byte
+ * `tur_adt_Two__any` printed nothing and panicked on macOS
+ * (saffron-class-fn-extra, #1007).  A by-value ADT's size is not visible in
+ * its spelling, so every aggregate other than `tur_tagged_t` is refused;
+ * the call is still an ordinary `return f(args);`. */
+static bool musttail_param_in_registers(const char *c) {
+    if (!c || !*c) return false;
+    if (strchr(c, '*')) return true;
+    static const char *const ok[] = {
+        "tur_tagged_t", "int64_t", "int32_t", "int16_t", "int8_t",
+        "uint64_t", "uint32_t", "uint16_t", "uint8_t", "double", "float",
+        "bool", "_Bool", "char", "int", "unsigned", "long", "size_t",
+        "intptr_t", "uintptr_t", NULL
+    };
+    for (int i = 0; ok[i]; i++)
+        if (strcmp(c, ok[i]) == 0) return true;
+    return false;
+}
+
 static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) {
     if (!ctx->mt_fn_cname || !v || body != ctx->mt_body_buf) return false;
     const char *q = v;
@@ -1650,6 +1676,7 @@ static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) 
         const char *b = emit_sig_lookup_param_ctype(callee, (uint32_t)i);
         if (!a || !b || strcmp(a, b) != 0) return false;
         if (strncmp(a, "const ", 6) == 0) return false;
+        if (!musttail_param_in_registers(a)) return false;
     }
     const char *segs[2] = { body->data + ctx->mt_body_start, v };
     size_t lens[2] = { body->len - ctx->mt_body_start, strlen(v) };

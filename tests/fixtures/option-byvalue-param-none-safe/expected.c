@@ -9858,8 +9858,7 @@ static int64_t takes_hybyval(tur_adt_Option__int o) {
         bool __ps_172 = (some___spec__bool_tur_adt_Option__int(o));
         if (tur_panicking) return ((int64_t)0);
         if (__ps_172) {
-            TUR_MUSTTAIL_SELF(takes_hybyval);
-            TUR_MUSTTAIL return unwrap__spec__int64_t_tur_adt_Option__int(o);
+            return unwrap__spec__int64_t_tur_adt_Option__int(o);
         } else {
             return INT64_C(-1);
         }
