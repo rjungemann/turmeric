@@ -299,6 +299,104 @@ static bool dict_slot_param_is_carrier(EmitCtx *ctx, const FnDef *mi,
     return emit_type_is_byvalue_adt(ctx, pt);
 }
 
+/* dict-slot-classvar-scalar-param: a parameter the CLASS declares as its
+ * bare class variable (`(sh [x : a])`) is erased to the int64 word at every
+ * dict-passing dispatch site -- the site cannot know the instance -- while the
+ * instance impl takes it at its own C type: `bool`, `double`, `const char *`.
+ * The raw impl in the slot was then called through `(ret (*)(int64_t))`: an
+ * fnsan trap for a bool or a pointer, and for a `double` a SILENT WRONG ANSWER
+ * (the word went in an integer register, the impl read a float register:
+ * `Sh float`'s `(sh 7.1)` answered as if for garbage).  Such a slot holds a
+ * per-instance wrapper that takes the word and converts it (bits for a float
+ * kind), exactly as D8 piece 2 already does for a by-value aggregate.  The
+ * dispatch site (emit_call_name) asks this same question. */
+bool dict_slot_param_is_word_scalar(const TypeClass *tc, int slot,
+                                    const FnDef *mi, uint32_t j) {
+    if (!tc || slot < 0 || slot >= tc->n_methods || !mi || !mi->param_types)
+        return false;
+    const TypeClassMethod *m = &tc->methods[slot];
+    if (!m->param_types || j >= m->n_params || j >= mi->n_params) return false;
+    /* An UNANNOTATED class parameter (`(show [x] : cstr)`) is the class
+     * variable too: param_types defaults it to int, and param_explicit_type
+     * says the user wrote nothing (the instance rewrite substitutes the class
+     * variable into it, elab_definstance). */
+    bool classvar = m->param_types[j].kind == TY_TYVAR ||
+                    (m->param_explicit_type && !m->param_explicit_type[j]);
+    if (!classvar) return false;
+    if (mi->params && mi->params[j] && mi->params[j]->is_poly_fn) return false;
+    const char *c = type_c_name(mi->param_types[j]);
+    if (!c || !*c) return false;
+    size_t L = strlen(c);
+    if (c[L - 1] == '*') return true;
+    return strcmp(c, "double") == 0 || strcmp(c, "float") == 0 ||
+           strcmp(c, "bool") == 0 || strcmp(c, "int8_t") == 0 ||
+           strcmp(c, "int16_t") == 0 || strcmp(c, "int32_t") == 0 ||
+           strcmp(c, "uint8_t") == 0 || strcmp(c, "uint16_t") == 0 ||
+           strcmp(c, "uint32_t") == 0;
+}
+
+/* dict-slot-classvar-scalar-result: the RESULT twin.  A method whose class
+ * result is the bare class variable (`(cid [x : a] : a)`) is read as the word
+ * at every dict-passing dispatch site, while the instance impl returns its own
+ * C type.  A `double` read through `(double (*)(int64_t))` by the
+ * representative instance's spelling and then handed on as the carrier was
+ * VALUE-converted (`(int64_t)(intptr_t)` of a double: a rank-2 identity at
+ * 7.1 answered 3.45846e-323).  Such a slot's wrapper returns the word -- bits
+ * for a float kind -- and the dispatch site reads `int64_t`.  Returns the
+ * impl's C result spelling through `*impl_rc` when it holds. */
+static bool dsr_mentions_tyvar(const Type *t, const char *name, int depth) {
+    if (!t || depth > 32) return false;
+    if (t->kind == TY_TYVAR)
+        return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+    if (t->kind == TY_APP)
+        return dsr_mentions_tyvar(t->as.app.fn, name, depth + 1) ||
+               dsr_mentions_tyvar(t->as.app.arg, name, depth + 1);
+    return false;
+}
+bool dict_slot_result_is_word_scalar(const TypeClass *tc, int slot,
+                                     const FnDef *mi, const char **impl_rc) {
+    if (!tc || slot < 0 || slot >= tc->n_methods || !mi || !mi->binding ||
+        mi->binding->type.kind != TY_FN)
+        return false;
+    const Type *crt = &tc->methods[slot].return_type;
+    /* class-var-applied-result: a kind-* class whose result mentions its
+     * variable inside an application -- `(co [x : a] : (Option a))`.  Each
+     * instance's impl returns its OWN by-value monomorph (`tur_adt_Option__float`,
+     * `tur_adt_Option__cstr`), and a dispatch site cast to the representative's
+     * struct read another instance's payload from the wrong register.  The
+     * carrier spells an open `(Option A)` as a word pointing at the aggregate,
+     * so the slot hands back exactly that: the impl's result, boxed. */
+    bool cv_app = crt->kind == TY_APP && tc->n_type_params >= 1 &&
+                  tc->type_params && tc->type_params[0] &&
+                  !(tc->type_param_kinds && tc->type_param_kinds[0] != KIND_STAR) &&
+                  dsr_mentions_tyvar(crt, tc->type_params[0]->name, 0);
+    if (crt->kind != TY_TYVAR && !cv_app) return false;
+    const Type *rft = mi->binding->type.as.fn.result_full_type;
+    Type rt = rft ? *rft : emit_type_from_kind(mi->binding->type.as.fn.result_kind);
+    const char *c = type_c_name(rt);
+    if (!c || !*c) return false;
+    size_t L = strlen(c);
+    /* A by-value aggregate result (`tur_adt_W`) rides the word as a heap box,
+     * the convention the carrier call's result unbox already expects. */
+    bool agg = strncmp(c, "tur_adt_", 8) == 0 && c[L - 1] != '*' &&
+               !type_is_heap_adt(rt) && !type_is_heap_struct(rt);
+    if (cv_app) {
+        /* Only the by-value aggregate: a :heap app is already a pointer word,
+         * and an impl whose result rides the carrier returns int64_t now. */
+        bool ok_app = agg && !type_uses_carrier_abi(rt);
+        if (ok_app && impl_rc) *impl_rc = c;
+        return ok_app;
+    }
+    bool ok = agg || (c[L - 1] == '*') ||
+              strcmp(c, "double") == 0 || strcmp(c, "float") == 0 ||
+              strcmp(c, "bool") == 0 || strcmp(c, "int8_t") == 0 ||
+              strcmp(c, "int16_t") == 0 || strcmp(c, "int32_t") == 0 ||
+              strcmp(c, "uint8_t") == 0 || strcmp(c, "uint16_t") == 0 ||
+              strcmp(c, "uint32_t") == 0;
+    if (ok && impl_rc) *impl_rc = c;
+    return ok;
+}
+
 /* saffron-applied-class-var-result-takes-one-instances-type: the C return type
  * of an instance-method impl, spelled the way emit_fns.c spells its signature
  * (emit_inst_result_rides_carrier is that one decision, consulted, not
@@ -384,6 +482,11 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
              * inverse of what the widen wrote), as the direct shim below
              * already spells it. */
             buf_puts(ctx->file, "((union { double d; int64_t i; }){.i = __r}).d");
+        else if (rr.kind == TY_FLOAT32)
+            /* A float32 rides `any` as its promoted double (emit_any_type_id);
+             * `(float)(intptr_t)__r` read the bit pattern as a count. */
+            buf_puts(ctx->file,
+                     "TUR_AS(float, ((union { double d; int64_t i; }){.i = __r}).d)");
         else
             buf_printf(ctx->file, "(%s)(intptr_t)__r", rcn);
         for (uint32_t k = 0; k < nx; k++) buf_printf(ctx->file, ", __a%u", k + 1);
@@ -438,7 +541,10 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
         } else if (strchr(pcn, '*') != NULL) {
             snprintf(conv, sizeof(conv), "(%s)(intptr_t)__r", pcn);
         } else if (pt.kind == TY_FLOAT32) {
-            continue;   /* not yet: the box's 32-bit widen shape is its own question */
+            /* The box holds the float32 as its promoted double, under the
+             * float tag (emit_any_type_id): read the double, narrow. */
+            snprintf(conv, sizeof(conv),
+                     "TUR_AS(float, ((union { double d; int64_t i; }){.i = __r}).d)");
         } else {
             snprintf(conv, sizeof(conv), "(%s)__r", pcn);
         }
@@ -1019,6 +1125,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                         emit_inst_fn_return_carrier(method_impl, &ret_type);
                     if (carrier) ret_c_name = carrier;
                 }
+                if (dict_slot_result_is_word_scalar(tc, (int)i, method_impl, NULL))
+                    ret_c_name = "int64_t";
                 buf_printf(ctx->file, "%s", ret_c_name);
                 buf_puts(ctx->file, " (*");
                 buf_printf(ctx->file, "%s", sanitized_method_name);
@@ -1038,7 +1146,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (!method_impl->closure && !body_is_inline_c
                             && type_struct_pass_by_ptr(pt)) {
                             buf_printf(ctx->file, "const %s *", type_c_name(pt));
-                        } else if (dict_slot_param_is_carrier(ctx, method_impl, j)) {
+                        } else if (dict_slot_param_is_carrier(ctx, method_impl, j) ||
+                                   dict_slot_param_is_word_scalar(tc, (int)i, method_impl, j)) {
                             /* D8 piece 2 (forall-dict-byvalue-receiver): a
                              * BY-VALUE aggregate parameter is spelled as the
                              * CARRIER here, and the slot is filled with a
@@ -1078,10 +1187,19 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * and the cast finally agree. */
             for (uint8_t i = 0; i < tc->n_methods; i++) {
                 FnDef *mi = inst->method_impls[i];
-                if (!mi || !mi->param_types) continue;
-                bool needs_wrap = false;
+                if (!mi) continue;
+                /* A zero-parameter method (`default-of [] : a`) has no
+                 * param_types, but its class-variable RESULT still needs the
+                 * word-returning wrapper the slot fill below points at. */
+                if (!mi->param_types &&
+                    !dict_slot_result_is_word_scalar(tc, (int)i, mi, NULL))
+                    continue;
+                const char *res_impl_c = NULL;
+                bool res_word = dict_slot_result_is_word_scalar(tc, (int)i, mi, &res_impl_c);
+                bool needs_wrap = res_word;
                 for (uint32_t j = 0; j < mi->n_params; j++)
-                    if (dict_slot_param_is_carrier(ctx, mi, j)) {
+                    if (dict_slot_param_is_carrier(ctx, mi, j) ||
+                        dict_slot_param_is_word_scalar(tc, (int)i, mi, j)) {
                         needs_wrap = true; break;
                     }
                 if (!needs_wrap) continue;
@@ -1096,20 +1214,23 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     wret = mi->body->type;
                 }
                 buf_printf(ctx->file, "static %s __dictwrap_%s_%s%s(",
-                           dict_slot_ret_c_name(ctx, mi, wret), tc->name->name,
-                           sanitized_method_name, type_suffix);
+                           res_word ? "int64_t" : dict_slot_ret_c_name(ctx, mi, wret),
+                           tc->name->name, sanitized_method_name, type_suffix);
                 for (uint32_t j = 0; j < mi->n_params; j++) {
                     if (j) buf_puts(ctx->file, ", ");
                     if (mi->params && mi->params[j]->is_poly_fn)
                         buf_printf(ctx->file, "tur_poly_fn_t __a%u", j);
-                    else if (dict_slot_param_is_carrier(ctx, mi, j))
+                    else if (dict_slot_param_is_carrier(ctx, mi, j) ||
+                             dict_slot_param_is_word_scalar(tc, (int)i, mi, j))
                         buf_printf(ctx->file, "int64_t __a%u", j);
                     else
                         buf_printf(ctx->file, "%s __a%u",
                                    type_c_name(mi->param_types[j]), j);
                 }
                 if (mi->n_params == 0) buf_puts(ctx->file, "void");
-                buf_puts(ctx->file, ") {\n    return ");
+                buf_puts(ctx->file, ") {\n    ");
+                if (res_word) buf_printf(ctx->file, "%s __r = ", res_impl_c);
+                else          buf_puts(ctx->file, "return ");
                 if (mi->binding && mi->binding->name)
                     buf_printf(ctx->file, "%s(", mi->binding->name->name);
                 else
@@ -1120,10 +1241,47 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (dict_slot_param_is_carrier(ctx, mi, j))
                         buf_printf(ctx->file, "*(%s *)(intptr_t)__a%u",
                                    type_c_name(mi->param_types[j]), j);
+                    else if (dict_slot_param_is_word_scalar(tc, (int)i, mi, j)) {
+                        /* The word carries a float kind as its bits (the
+                         * carrier convention, emit_word_slot_bits); a pointer
+                         * or a narrower integer is the word itself. */
+                        const char *pc = type_c_name(mi->param_types[j]);
+                        size_t pL = strlen(pc);
+                        if (strcmp(pc, "double") == 0)
+                            buf_printf(ctx->file,
+                                "((union { int64_t i; double d; }){ .i = __a%u }).d", j);
+                        else if (strcmp(pc, "float") == 0)
+                            buf_printf(ctx->file,
+                                "((union { uint32_t u; float f; }){ .u = (uint32_t)__a%u }).f", j);
+                        else if (pc[pL - 1] == '*')
+                            buf_printf(ctx->file, "(%s)(intptr_t)__a%u", pc, j);
+                        else
+                            buf_printf(ctx->file, "(%s)__a%u", pc, j);
+                    }
                     else
                         buf_printf(ctx->file, "__a%u", j);
                 }
-                buf_puts(ctx->file, ");\n}\n");
+                if (res_word) {
+                    size_t rL = strlen(res_impl_c);
+                    buf_puts(ctx->file, ");\n");
+                    if (strcmp(res_impl_c, "double") == 0)
+                        buf_puts(ctx->file, "    return ((union { double d; int64_t i; }){ .d = __r }).i;\n}\n");
+                    else if (strcmp(res_impl_c, "float") == 0)
+                        buf_puts(ctx->file, "    return (int64_t)((union { float f; uint32_t u; }){ .f = __r }).u;\n}\n");
+                    else if (res_impl_c[rL - 1] == '*')
+                        buf_puts(ctx->file, "    return (int64_t)(intptr_t)__r;\n}\n");
+                    else if (strncmp(res_impl_c, "tur_adt_", 8) == 0)
+                        buf_printf(ctx->file,
+                            "    %s *__b = (%s *)malloc(sizeof(%s));\n"
+                            "    *__b = __r;\n"
+                            "    TUR_REGION_NOTE_WORDS(__b, sizeof *__b);\n"
+                            "    return (int64_t)(intptr_t)__b;\n}\n",
+                            res_impl_c, res_impl_c, res_impl_c);
+                    else
+                        buf_puts(ctx->file, "    return (int64_t)__r;\n}\n");
+                } else {
+                    buf_puts(ctx->file, ");\n}\n");
+                }
             }
 
             /* Emit the global singleton dictionary to file scope */
@@ -1142,10 +1300,12 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * the correct type-arg suffix (e.g. _option, _vec) as computed in
                  * elab_definstance, so we avoid a second, potentially wrong suffix. */
                 FnDef *method_impl_ref = inst->method_impls[i];
-                bool slot_wrapped = false;
-                if (method_impl_ref && method_impl_ref->param_types) {
+                bool slot_wrapped =
+                    dict_slot_result_is_word_scalar(tc, (int)i, method_impl_ref, NULL);
+                if (!slot_wrapped && method_impl_ref && method_impl_ref->param_types) {
                     for (uint32_t j = 0; j < method_impl_ref->n_params; j++)
-                        if (dict_slot_param_is_carrier(ctx, method_impl_ref, j)) {
+                        if (dict_slot_param_is_carrier(ctx, method_impl_ref, j) ||
+                            dict_slot_param_is_word_scalar(tc, (int)i, method_impl_ref, j)) {
                             slot_wrapped = true; break;
                         }
                 }
@@ -1328,10 +1488,25 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * value's BITS -- `(int64_t)` on a double was a value conversion
              * (7.25 -> 7); a pointer is cast, a bool widened.  The typed
              * `gen-unwrap` reinterprets the same way on the way out. */
-            indent_buf(body, ctx->indent);
-            char *ybits = emit_word_slot_bits(&e->as.yield_.value->type, yval);
-            buf_printf(body, "*__opt = %s;\n", ybits);
-            free(ybits);
+            /* Inside a spec the value is the clone's concrete `A`: take its
+             * bits at the RESOLVED type (a tyvar-typed double went in by value
+             * conversion), and box a by-value aggregate the way a container
+             * element is boxed -- `gen-unwrap` bridges the word back. */
+            Type yt = emit_resolve_type(ctx, e->as.yield_.value->type);
+            const char *ytc = emit_type_c_name(ctx, yt);
+            if (ytc && strncmp(ytc, "tur_adt_", 8) == 0 && !strchr(ytc, '*') &&
+                !type_is_heap_adt(yt) && !type_is_heap_struct(yt)) {
+                char *boxed = emit_carrier_bridge_escaping(ctx, body, strdup(yval),
+                                                           CK_CONCRETE, CK_CARRIER, yt);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*__opt = %s;\n", boxed);
+                free(boxed);
+            } else {
+                indent_buf(body, ctx->indent);
+                char *ybits = emit_word_slot_bits(&yt, yval);
+                buf_printf(body, "*__opt = %s;\n", ybits);
+                free(ybits);
+            }
             indent_buf(body, ctx->indent);
             buf_puts(body, "return (void *)__opt;\n");
             ctx->indent -= 4;

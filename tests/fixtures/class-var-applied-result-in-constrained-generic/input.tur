@@ -1,0 +1,57 @@
+;; A class method whose result mentions the class variable inside an
+;; application -- `(co [x : a] : (Option a))` -- called inside a constrained
+;; generic.  The call typed as a def-less `(? ?)`, which unified with anything:
+;; `(unwrap-or (co x) x)` was refused, `(match (co x) (Some q) q ...)` bound `q`
+;; as int, and a `: cstr` return of it was accepted.  Typed honestly, the
+;; generic's carrier and dict clones then read each instance's by-value
+;; monomorph through the representative's struct (another instance's payload,
+;; from the wrong register) or spilled it into an int64.  The dict slot now
+;; returns the carrier word (the aggregate, boxed), and the base clone boxes the
+;; representative's result where it is produced.
+
+(defclass Co [a] (co [x : a] : (Option a)))
+(definstance Co [float] (co [x : float] : (Option float) (some x)))
+(definstance Co [cstr] (co [x : cstr] : (Option cstr) (some x)))
+(definstance Co [bool] (co [x : bool] : (Option bool) (some x)))
+(defn g-unwrap [a] [(Co a)] [x : a] : a (unwrap-or (co x) x))
+(defn g-let [a] [(Co a)] [x : a] : a (let [o (co x)] (match o (Some q) q (None) x)))
+(defn g-match [a] [(Co a)] [x : a] : a (match (co x) (Some q) q (None) x))
+(defn g-tail [a] [(Co a)] [x : a] : (Option a) (co x))
+(defn g-via [a] [(Co a)] [v : a] : a (g-match v))
+(defn use-f [l (forall [a] [(Co a)] (-> a a)) v : float] : float (l v))
+(defn use-s [l (forall [a] [(Co a)] (-> a a)) v : cstr] : cstr (l v))
+(defn use-b [l (forall [a] [(Co a)] (-> a a)) v : bool] : bool (l v))
+
+(defstruct P [x : int y : float])
+(defclass Cr [a] (cr [x : a] : (Result a cstr)))
+(definstance Cr [float] (cr [x : float] : (Result float cstr) (ok x)))
+(definstance Cr [P] (cr [x : P] : (Result P cstr) (ok x)))
+(definstance Cr [float32] (cr [x : float32] : (Result float32 cstr) (ok x)))
+(defn gr [a] [(Cr a)] [x : a] : a (match (cr x) (Ok v) v (Err e) x))
+(defn use-r [l (forall [a] [(Cr a)] (-> a a)) v : float] : float (l v))
+(defn use-rp [l (forall [a] [(Cr a)] (-> a a)) v : P] : P (l v))
+
+(defclass Cp [a] (cp [x : a] : (Pair a int)))
+(definstance Cp [float] (cp [x : float] : (Pair float int) (pair x 3)))
+(definstance Cp [cstr] (cp [x : cstr] : (Pair cstr int) (pair x 4)))
+(defn gp [a] [(Cp a)] [x : a] : a (let [p (cp x)] (pair-fst p)))
+(defn use-p [l (forall [a] [(Cp a)] (-> a a)) v : cstr] : cstr (l v))
+
+(defn main [] : int
+  (println (g-unwrap 7.1))
+  (println (g-unwrap "s"))
+  (println (g-let 7.1))
+  (println (g-match "m"))
+  (println (unwrap-or (g-tail 7.1) 0.5))
+  (println (g-via 7.1))
+  (println (use-f g-match 7.1))
+  (println (use-s g-let "r2"))
+  (println (if (use-b g-unwrap false) "T" "F"))
+  (println (gr 7.1))
+  (println (.y (gr (P 1 2.5))))
+  (println (gr (:: 7.1 float32)))
+  (println (use-r gr 7.1))
+  (println (.y (use-rp gr (P 3 4.25))))
+  (println (gp 7.1))
+  (println (use-p gp "t"))
+  0)

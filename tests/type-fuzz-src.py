@@ -79,7 +79,8 @@ data structure and read back later by different emitted code:
     async/await            (future slot)
     perform/resume         (fiber slot)          -- correct; positive control
     any + cast             (tagged box)          -- correct; positive control
-    tvar write/cas         (transactional cell)  -- correct; positive control
+    tvar write/cas/read    (transactional cell)  -- was "correct" until the
+                                                    value oracle: floats truncated
 
 The runtime slot has ONE C type, so the payload is cast in and out, and a plain
 C cast of a `double` is a value conversion that TRUNCATES.  This axis exists
@@ -159,6 +160,9 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fuzz_arm  # noqa: E402  (tests/fuzz_arm.py)
+import fconv_lint  # noqa: E402  (tests/fconv_lint.py)
 
 TIMEOUT = 90
 
@@ -174,10 +178,13 @@ TIMEOUT = 90
 BYVALUE_WRAPPERS = {"box", "adt", "opt", "res", "opt_box", "res_box"}
 
 
+# --crossing NAME: offer only `x_NAME` wherever it applies (None: all).
+FORCE_CROSSING = None
+
 CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
                  "thin_hof", "class_thru", "tyvar_run",
                  "class_nested", "class_nullary_newtype",
-                 "gid_let", "class_let"}
+                 "gid_let", "class_let", "gbody", "rank2_class"}
 
 
 def known_bug_slug(tags):
@@ -482,12 +489,19 @@ class Gen:
 
     # -- scalars --------------------------------------------------------------
 
-    def pick_scalar(self):
-        t = self.force_scalar or \
-            self.rng.choice(["int", "int", "int", "float", "bool", "cstr"])
-        if t == "int":
+    def pick_scalar(self, narrow=False):
+        """`narrow` admits the non-word scalars (float32, int16) -- value legs
+        only.  No fuzzer had ever generated a float32: gen-unwrap at float32
+        read the low half of the yielded double, and a generic's float32
+        spec returned its carrier's bits, with nothing to notice
+        (docs/archive/generic-spec-carrier-crossings.md)."""
+        pool = ["int", "int", "int", "float", "bool", "cstr"]
+        if narrow:
+            pool += ["float32", "int16"]
+        t = self.force_scalar or self.rng.choice(pool)
+        if t in ("int", "int16"):
             return t, self.rng.randint(-20, 20)
-        if t == "float":
+        if t in ("float", "float32"):
             return t, self.rng.choice(FLOAT_LITS)
         if t == "bool":
             return t, self.rng.choice([True, False])
@@ -498,9 +512,17 @@ class Gen:
             return str(v)
         if ty == "float":
             return v
+        if ty in ("float32", "int16"):
+            return "(:: %s %s)" % (v, ty)
         if ty == "bool":
             return "true" if v else "false"
         return '"%s"' % v
+
+    def dflt(self, ty):
+        """A value of `ty` no leg ever carries -- the unwrap default."""
+        return {"int": "-9999", "float": "-999.5", "bool": "false",
+                "cstr": '"z-dflt"', "float32": "(:: -999.5 float32)",
+                "int16": "(:: -9999 int16)"}[ty]
 
     # -- wrappers -------------------------------------------------------------
     #
@@ -550,8 +572,7 @@ class Gen:
     def w_opt(self, leg, ty):
         tn = "(Option %s)" % ty
         w, u = self.name("ow"), self.name("ou")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (some x))" % (w, ty, tn))
         leg.defs.append("(defn %s [o : %s] : %s (unwrap-or o %s))"
                         % (u, tn, ty, dflt))
@@ -560,8 +581,7 @@ class Gen:
     def w_res(self, leg, ty):
         tn = "(Result %s int)" % ty
         w, u = self.name("rw"), self.name("ru")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (ok x))" % (w, ty, tn))
         leg.defs.append("(defn %s [r : %s] : %s (if (ok? r) (ok-val r) %s))"
                         % (u, tn, ty, dflt))
@@ -622,8 +642,7 @@ class Gen:
         leg.defs.append("(defstruct %s [a : %s])" % (bn, ty))
         tn = "(Option %s)" % bn
         w, u = self.name("pw"), self.name("pu")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (some (%s x)))" % (w, ty, tn, bn))
         leg.defs.append("(defn %s [o : %s] : %s (.a (unwrap-or o (%s %s))))"
                         % (u, tn, ty, bn, dflt))
@@ -636,8 +655,7 @@ class Gen:
         leg.defs.append("(defstruct %s [a : %s])" % (bn, ty))
         tn = "(Result %s int)" % bn
         w, u = self.name("qw"), self.name("qu")
-        dflt = {"int": "-9999", "float": "-999.5", "bool": "false",
-                "cstr": '"z-dflt"'}[ty]
+        dflt = self.dflt(ty)
         leg.defs.append("(defn %s [x : %s] : %s (ok (%s x)))" % (w, ty, tn, bn))
         leg.defs.append("(defn %s [r : %s] : %s\n"
                         "  (if (ok? r) (.a (ok-val r)) %s))"
@@ -736,6 +754,120 @@ class Gen:
         leg.defs.append("(defn %s [A] [x : A] : A (let [y (%s x)] y))" % (g, f))
         return "(%s %s)" % (g, e), "gid_let"
 
+    # Shapes a value typed as the generic's own `A` takes INSIDE a generic
+    # body, from tests/generic-spec-matrix.py's sink table (each one proven at
+    # every matrix type).  {E} is the A-typed input; each result is A.  The
+    # helper names are substituted per leg.
+    GBODY_SINKS = {
+        "let":     "(let [{L} {E}] {L})",
+        "ident":   "({ID} {E})",
+        "if":      "(if ({T}) {E} {E})",
+        "box":     "(.val ({BOX} {E}))",
+        "some":    "(match (some {E}) (Some {L}) {L} (None) {E})",
+        "vec":     "(let [{L} (vec-new)] (vec-push! {L} {E}) (vec-get {L} 0))",
+        "pair":    "(pair-fst (pair {E} 0))",
+        "lambda":  "((fn [{L} : A] : A {L}) {E})",
+        "capture": "(let [{L} {E}] ((fn [] {L})))",
+        "map":     "(map-get (map-assoc (map-new) 1 {E}) 1)",
+        "gen":     "(gen-unwrap (gen-next (gen [] (yield {E}))))",
+        "adt":     "(match ({WC} {E}) ({WC} {L}) {L})",
+        "fnret":   "(({MK} {E}))",
+        "hof":     "({APP} (fn [{L} : A] : A {L}) {E})",
+    }
+
+    def x_gbody(self, leg, tn, e):
+        """The value crosses a generic `[A] x:A -> A` whose BODY moves it:
+        through a vector, a map, a generic struct field, an Option match, a
+        lambda, a returned closure, a generator... 1-3 of them, composed.
+
+        Every other generic crossing hands `x` straight back.  The carrier
+        crossings of 2026-09-30 (docs/archive/generic-spec-carrier-crossings.md)
+        all lived in a generic body that did something with its `A`: nine
+        independent miscompiles, none of which any fuzzer could generate.
+        tests/generic-spec-matrix.py enumerates each shape once; this composes
+        them, at the fuzzer's wrapper types, along random chains.
+        """
+        g = self.name("gb")
+        names = {"ID": self.name("gbid"), "T": self.name("gbt"),
+                 "BOX": self.name("GbBox"), "WC": self.name("GbWc"),
+                 "W": self.name("GbW"), "MK": self.name("gbmk"),
+                 "APP": self.name("gbapp")}
+        leg.defs.append("(defn %s [A] [y : A] : A y)" % names["ID"])
+        leg.defs.append("(defn %s [] : bool true)" % names["T"])
+        leg.defs.append("(defstruct %s [A] [val : A])" % names["BOX"])
+        leg.defs.append("(defdata %s [A] (%s A))" % (names["W"], names["WC"]))
+        leg.defs.append("(defn %s [B] [v : B] : (fn [] B) (fn [] v))"
+                        % names["MK"])
+        leg.defs.append("(defn %s [B] [f : (fn [B] B) v : B] : B (f v))"
+                        % names["APP"])
+        body = "x"
+        chain = []
+        for _ in range(self.rng.randint(1, 3)):
+            pool = list(self.GBODY_SINKS)
+            # A generator inside a generator, and a yield inside a match arm,
+            # are v1 rejections (the matrix's EXCLUDE list).
+            if "gen" in chain:
+                pool = [k for k in pool if k not in ("gen", "some")]
+            k = self.rng.choice(pool)
+            chain.append(k)
+            loc = self.name("gbl")
+            tmpl = self.GBODY_SINKS[k]
+            for key, val in names.items():
+                tmpl = tmpl.replace("{%s}" % key, val)
+            body = tmpl.replace("{L}", loc).replace("{E}", body)
+        leg.defs.append("(defn %s [A] [x : A] : A\n  %s)" % (g, body))
+        return "(%s %s)" % (g, e), "gbody"
+
+    def x_rank2_class(self, leg, tn, e):
+        """The value crosses a RANK-2, dictionary-passing call: a constrained
+        generic passed where `(forall [a] [(C a)] (-> a a))` is expected, whose
+        body dispatches a class method through the runtime dictionary.
+
+        No crossing had ever generated one.  That path carried three silent
+        float wrong answers at once (docs/archive/
+        dict-classvar-float-param-value-converted.md and its result twin): the
+        carrier call value-converted the argument, the slot took a `double`
+        through an int64 cast, and the result came back through
+        `(int64_t)(intptr_t)` of a double.  Instance heads need a plain type
+        name, so this is offered for those only.
+        """
+        cls, m = self.name("FzR"), self.name("rm")
+        impl, use = self.name("ri"), self.name("ru")
+        # The method's shape: which positions hold the class variable.  Each
+        # is an identity on `x`, so the leg's oracle is unchanged.
+        shape = self.rng.choice(["id", "id", "two", "extra", "opt"])
+        sig, body, call = {
+            "id":    ("[x : a] : a", "x", "(%s x)" % m),
+            "two":   ("[x : a y : a] : a", "x", "(%s x x)" % m),
+            "extra": ("[x : a n : int] : a", "x", "(%s x 3)" % m),
+            "opt":   ("[x : a] : (Option a)", "(some x)",
+                      "(match (%s x) (Some q) q (None) x)" % m),
+        }[shape]
+        isig = sig.replace(": a", ": %s" % tn).replace("(Option a)",
+                                                       "(Option %s)" % tn)
+        leg.defs.append("(defclass %s [a] (%s %s))" % (cls, m, sig))
+        # A second instance declared BEFORE the leg's own changes which
+        # instance the dispatch site's cast follows (the "representative").
+        other = self.rng.choice([None, None, "int", "cstr", "float"])
+        if other and other != tn:
+            osig = sig.replace(": a", ": %s" % other).replace(
+                "(Option a)", "(Option %s)" % other)
+            leg.defs.append("(definstance %s [%s] (%s %s %s))"
+                            % (cls, other, m, osig, body))
+        leg.defs.append("(definstance %s [%s] (%s %s %s))"
+                        % (cls, tn, m, isig, body))
+        leg.defs.append("(defn %s [a] [(%s a)] [x : a] : a %s)" % (impl, cls, call))
+        route = self.rng.choice(["rank2", "rank2", "direct", "generic"])
+        if route == "direct":
+            return "(%s %s)" % (impl, e), "rank2_class"
+        if route == "generic":
+            leg.defs.append("(defn %s [a] [(%s a)] [v : a] : a (%s v))"
+                            % (use, cls, impl))
+            return "(%s %s)" % (use, e), "rank2_class"
+        leg.defs.append("(defn %s [l (forall [a] [(%s a)] (-> a a)) v : %s] : %s (l v))"
+                        % (use, cls, tn, tn))
+        return "(%s %s %s)" % (use, impl, e), "rank2_class"
+
     def x_fat_hof(self, leg, tn, e):
         f = self.name("h")
         leg.defs.append("(defn %s [^fat f : (fn [] %s)] : %s (f))" % (f, tn, tn))
@@ -748,6 +880,40 @@ class Gen:
         leg.defs.append("(defn %s [f : (fn [] %s)] : %s (f))" % (f, tn, tn))
         v = self.name("c")
         return "(let [%s %s] (%s (fn [] %s)))" % (v, e, f, v), "thin_hof"
+
+    def x_fn_field(self, leg, tn, e):
+        """The value passes through a function stored in a TYPED fn field.
+
+        No crossing had ever stored a function in a struct field.  That is
+        where a bare `fn` field returned a float's BITS
+        (4619004367821864960 for 6.5) and an effectful typed field aborted
+        -- both 2026-09-30.  Half the time the stored function is a
+        capturing lambda, which a typed field boxes fat.
+        """
+        st, f = self.name("FzFF"), self.name("ff")
+        leg.defs.append("(defstruct %s :copy [app : (fn [%s] %s)])" % (st, tn, tn))
+        if self.rng.random() < 0.5:
+            leg.defs.append("(defn %s [v : %s] : %s v)" % (f, tn, tn))
+            fnv = f
+        else:
+            k = self.name("fk")
+            leg.defs.append("(def %s 1)" % k)
+            fnv = "(fn [v : %s] : %s (if (= %s 1) v v))" % (tn, tn, k)
+        return "(.app (make-struct %s %s) %s)" % (st, fnv, e), "fn_field"
+
+    def x_fn_field_eff(self, leg, tn, e):
+        """The same through an EFFECTFUL typed fn field: the stored function
+        performs, and the handler resumes with the payload.  The E2a call
+        into it spelled every argument `int64_t` (a float became its
+        truncation in the wrong register) and looked the registry up by the
+        field's fat box."""
+        ef, st, f = self.name("FzEf"), self.name("FzFE"), self.name("fe")
+        leg.defs.append("(defeffect %s [x :%s] :%s)" % (ef, tn, tn))
+        leg.defs.append("(defstruct %s :copy [run : (fn [%s] %s) #fx{%s}])"
+                        % (st, tn, tn, ef))
+        leg.defs.append("(defn %s [v : %s] : %s (perform (%s v)))" % (f, tn, tn, ef))
+        return ("(handle (.run (make-struct %s %s) %s)\n    (%s [x] k) (resume k x))"
+                % (st, f, e, ef)), "fn_field_eff"
 
     def x_tyvar_run(self, leg, tn, e):
         # KNOWN shape (crashes with a capturing closure); --emit-known only.
@@ -852,15 +1018,19 @@ class Gen:
         # included).
         if "thunk" in tags:
             return [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-                    self.x_fat_hof, self.x_thin_hof]
+                    self.x_fat_hof, self.x_thin_hof, self.x_gbody]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-              self.x_fat_hof, self.x_thin_hof, self.x_gid_let]
+              self.x_fat_hof, self.x_thin_hof, self.x_gid_let,
+              self.x_fn_field, self.x_gbody]
+        if tn in ("int", "float", "bool", "cstr"):
+            xs.append(self.x_fn_field_eff)
         # Thin HOF over every wrapper: scalars ride the poly carrier;
         # concrete by-value/heap signatures are fat-normalized as of
         # fn-value-fat-normalization stage 1 (2026-07-30).
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)
+            xs.append(self.x_rank2_class)
             # Both F1 shapes are in the default pool: their reports were
             # resolved and archived (2026-09-11).  class_nested is also the
             # only shape that gives a class a SECOND instance declared before
@@ -872,6 +1042,10 @@ class Gen:
                 xs.append(self.x_class_nullary_newtype)
         if self.emit_known:
             xs.append(self.x_tyvar_run)
+        if FORCE_CROSSING:
+            # --crossing: concentrate a run on one crossing where it applies.
+            only = [x for x in xs if x.__name__ == "x_" + FORCE_CROSSING]
+            return only or xs
         return xs
 
     # -- int mutation steps (bare int legs get arithmetic through defns) -------
@@ -890,7 +1064,7 @@ class Gen:
 
     def leg(self):
         leg = Leg()
-        ty, val = self.pick_scalar()
+        ty, val = self.pick_scalar(narrow=True)
         tn, wrap, unwrap, tags = self.pick_wrapper(leg, ty)
         leg.tags |= tags
         leg.tags.add("scalar_" + ty)
@@ -909,7 +1083,7 @@ class Gen:
                 leg.tags.add(tag)
         e = unwrap(e)
 
-        if ty == "float":
+        if ty in ("float", "float32"):
             leg.body.append("(println (= %s %s))" % (e, self.lit(ty, val)))
             leg.expected.append("true")
         elif ty == "bool":
@@ -1117,18 +1291,27 @@ class Gen:
         return leg
 
     def seam_tvar(self, leg):
-        """STM transactional cell.  CORRECT for round-trip: the payload is
-        ptr-carried and survives bit-exact, which `tvar/cas` observes.  Note
-        the oracle differs -- it asserts the round trip, not the value, because
-        `tvar/read` hands back `ptr<void>` and the payload's type is GONE
-        (a typing hole, but not a wrong answer)."""
+        """STM transactional cell.  `tvar/read` hands back `ptr<void>` (the
+        payload's type is GONE -- a typing hole), so the value is read back
+        through an ascription to the payload type and PRINTED, after the CAS
+        round trip.
+
+        This seam was listed as a correct positive control, and asserted only
+        the CAS.  That hid tvar-float-payload-value-converted: every payload
+        crossed into the slot through `(void*)(intptr_t)v`, so a float was
+        stored as its truncation -- consistently on every side, so the CAS
+        still matched.  `(tvar/cas t 7.4 ...)` against 7.1 succeeded, and the
+        read-back printed 3.45846e-323.  The emitted-C lint is what caught
+        it; the printed read-back makes the same defect a wrong ANSWER."""
         tn, mk, read, exp = self.payload(leg, "scalar")
         tv = self.name("tv")
         leg.body.append("(let [%s (tvar/new %s)]\n"
                         "    (println (atomically (stm (tvar/write %s %s)\n"
-                        "                              (tvar/cas %s %s %s)))))"
-                        % (tv, mk, tv, mk, tv, mk, mk))
+                        "                              (tvar/cas %s %s %s))))\n"
+                        "    (println (:: (atomically (stm (tvar/read %s))) %s)))"
+                        % (tv, mk, tv, mk, tv, mk, mk, tv, tn))
         leg.expected.append("true")
+        leg.expected.append(exp)
         leg.tags.add("oracle_roundtrip")
         return leg
 
@@ -1204,6 +1387,33 @@ def assemble(legs):
 # Running one case
 # ---------------------------------------------------------------------------
 
+# The shape-independent value-conversion check (tests/fconv_lint.py): a clean,
+# correct run whose emitted C still converts a float<->int VALUE where no `as`
+# asked for it is a finding the output oracle cannot see -- the value may
+# happen to round-trip (7.0) or the conversion may sit on a path this program
+# does not print.  The corpus is at zero, so this class fails the run.
+_FCONV_CLANG = fconv_lint.find_clang()
+
+
+def value_conversions(tur, path, env):
+    if not _FCONV_CLANG or os.environ.get("TUR_FUZZ_FCONV", "1") == "0":
+        return []
+    r = subprocess.run([tur, "emit-c", path], capture_output=True, text=True,
+                       timeout=TIMEOUT, cwd=REPO, env=env)
+    if r.returncode != 0 or fconv_lint.MARK not in r.stdout:
+        return []
+    cpath = path + ".fconv.c"
+    with open(cpath, "w") as f:
+        f.write(r.stdout)
+    try:
+        return fconv_lint.lint_c(cpath, _FCONV_CLANG)
+    finally:
+        try:
+            os.unlink(cpath)
+        except OSError:
+            pass
+
+
 class Outcome:
     def __init__(self, kind, stdout="", stderr=""):
         self.kind = kind        # clean/crash/invalid_c/link/reject/timeout/other
@@ -1236,6 +1446,10 @@ def run_case(tur, path, src):
     # docs/archive/type-fuzz-src-red-on-clang-21.md.
     env.pop("TUR_STDLIB_DIR", None)
     env["ASAN_OPTIONS"] = env.get("ASAN_OPTIONS", "") or "detect_leaks=0"
+    # Arm clang's function-pointer detector (tests/fuzz_arm.py): it sees a
+    # mismatched indirect call whatever shape produced it, which no shape
+    # list can promise.
+    env, _ = fuzz_arm.armed_env(env)
     try:
         chk = subprocess.run([tur, "check", path], capture_output=True,
                              text=True, timeout=TIMEOUT, cwd=REPO, env=env)
@@ -1249,7 +1463,15 @@ def run_case(tur, path, src):
     except subprocess.TimeoutExpired:
         return Outcome("timeout")
     if p.returncode == 0:
+        conv = value_conversions(tur, path, env)
+        if conv:
+            ln, kind, how, text = conv[0]
+            return Outcome("value_conv", p.stdout,
+                           "emitted C line %d: %s %s value conversion: %s"
+                           % (ln, how, kind, text))
         return Outcome("clean", p.stdout, p.stderr)
+    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+        return Outcome("fnptr_trap", p.stdout, p.stderr)
     if p.returncode in (134, 138, 139) or p.returncode < 0:
         return Outcome("crash", p.stdout, p.stderr)
     blob = p.stderr + p.stdout
@@ -1261,10 +1483,14 @@ def run_case(tur, path, src):
 
 
 BUG_OF = {"crash": "BUG_crash", "invalid_c": "BUG_invalid_c",
-          "link": "BUG_link", "other": "BUG_toolchain_other"}
+          "link": "BUG_link", "other": "BUG_toolchain_other",
+          "fnptr_trap": fuzz_arm.TRAP_CLASS,
+          "value_conv": "BUG_value_conversion"}
 
 SEAM_BUG_OF = {"crash": "BUG_seam_crash", "invalid_c": "BUG_seam_invalid_c",
-               "link": "BUG_seam_link", "other": "BUG_toolchain_other"}
+               "link": "BUG_seam_link", "other": "BUG_toolchain_other",
+               "fnptr_trap": fuzz_arm.TRAP_CLASS,
+               "value_conv": "BUG_value_conversion"}
 
 
 def classify(out, expected, is_seam=False):
@@ -1306,7 +1532,8 @@ def one_case(tur, workdir, idx, seed, max_legs, emit_known,
     kind = classify(out, expected, is_seam)
 
     detail = None
-    if kind.startswith("BUG") or kind in ("GEN_REJECT", "SEAM_REJECT"):
+    if kind.startswith("BUG") or kind in ("GEN_REJECT", "SEAM_REJECT",
+                                          "FNPTR_TRAP"):
         # Bisect: which leg(s) fail alone?
         failing = []
         for j, leg in enumerate(legs):
@@ -1342,6 +1569,19 @@ def one_case(tur, workdir, idx, seed, max_legs, emit_known,
 # ---------------------------------------------------------------------------
 # Self-test: prove the classifier sees each failure class.
 # ---------------------------------------------------------------------------
+
+# A program whose emitted C makes one indirect call through a function
+# pointer of the wrong type.  With fnsan armed it must classify as
+# its trap class (FNPTR_TRAP, or BUG_fnptr_trap under strict); unarmed, the self-test says it cannot check this arm rather
+# than passing it.
+FNPTR_SELF_TEST = (
+    "fn-pointer mismatch trapped",
+    '(defn twice [x : int] : int (* 2 x))\n'
+    '(defn boom [] : int\n'
+    '  ```c\n  double (*d)(double) = (double (*)(double))(void *)twice;\n'
+    '  return (int64_t)d(1.5);\n  ```)\n'
+    '(defn main [] : int (println (twice 1)) (println (boom)) 0)\n',
+    "2\n3\n", fuzz_arm.TRAP_CLASS)
 
 SELF_TESTS = [
     ("clean pass",
@@ -1397,7 +1637,13 @@ SELF_TESTS = [
 
 def self_test(tur, workdir):
     ok = True
-    for i, row in enumerate(SELF_TESTS):
+    status = fuzz_arm.armed_env(dict(os.environ))[1]
+    rows = list(SELF_TESTS)
+    if "ARMED" in status:
+        rows.append(FNPTR_SELF_TEST)
+    else:
+        print("  SKIP %-28s (%s)" % (FNPTR_SELF_TEST[0], status))
+    for i, row in enumerate(rows):
         label, src, expected, want = row[0], row[1], row[2], row[3]
         is_seam = row[4] if len(row) > 4 else False
         path = os.path.join(workdir, "selftest%d.tur" % i)
@@ -1466,7 +1712,8 @@ def known_probes(tur, workdir):
         expected = row[2] if len(row) > 2 else None
         path = os.path.join(workdir, "known%d.tur" % i)
         out = run_case(tur, path, src)
-        fired = out.kind in ("crash", "invalid_c", "link", "reject", "other")
+        fired = out.kind in ("crash", "invalid_c", "link", "reject", "other",
+                            "fnptr_trap")
         how = out.kind
         # A wrong-ANSWER defect builds and runs cleanly, so out.kind is
         # "clean" and the loop above would call it FIXED on a still-broken
@@ -1514,12 +1761,17 @@ def main():
     ap.add_argument("--seam", default=None, choices=sorted(Gen.SEAMS),
                     help="generate ONLY this seam (implies every case is a "
                          "seam case); for triaging one feature")
+    ap.add_argument("--crossing", default=None,
+                    help="offer only the crossing x_NAME wherever it applies "
+                         "(e.g. rank2_class, gbody, fn_field)")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--known-probes", action="store_true")
     ap.add_argument("--seam-matrix", action="store_true",
                     help="print the seam x payload verdict table and exit "
                          "(deterministic; the one-command view of the axis)")
     args = ap.parse_args()
+    global FORCE_CROSSING
+    FORCE_CROSSING = args.crossing
     if args.seam:
         args.seam_frac = 1.0
 
@@ -1559,6 +1811,7 @@ def main():
                  (", seam=%s only" % args.seam) if args.seam
                  else (", seam-frac %.2f" % args.seam_frac
                        if args.seam_frac else ", seams off")))
+        print("type_fuzz_src: " + fuzz_arm.armed_env(dict(os.environ))[1])
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             futs = {pool.submit(job, i): i for i in range(args.n)}
             done = 0
@@ -1613,6 +1866,10 @@ def main():
         n_hang = counts.get("SEAM_HANG", 0)
         print("\n  BUG classes (fail)          : %d" % n_bugs)
         print("  generator rejects (report)  : %d" % n_rej)
+        n_trap = counts.get("FNPTR_TRAP", 0)
+        if n_trap:
+            print("  fn-pointer traps (report)   : %d   "
+                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
         print("  known open reports (report) : %d" % n_known)
         # A seam reject is the elaborator refusing a payload it cannot carry --
         # the outcome the session report asks for -- so it is reported, not

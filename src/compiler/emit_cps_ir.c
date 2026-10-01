@@ -930,6 +930,12 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             return has_capture_rec(t->as.letcall.body, exclude, bound, nb + 1);
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) CC_ATOM(&t->as.tailcall.args[i]);
+            /* E2c field-load callee (fn == NULL): its atom is read like an
+             * argument -- a join continuation that calls it must capture it
+             * (`(.run (make-struct FE fe) <arg with a CPS call>)` read an
+             * uncaptured `__t2` in the join). */
+            if (t->as.tailcall.via_registry && !t->as.tailcall.fn)
+                CC_ATOM(&t->as.tailcall.fn_atom);
             /* E2c: a `via_registry` tailcall's fn-value callee is a capture when it
              * is an enclosing (non-local, non-global) param -- mirrors the
              * collect_caps_rec CT_TAILCALL case. */
@@ -1344,6 +1350,8 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
+            if (t->as.tailcall.via_registry && !t->as.tailcall.fn)
+                COL_ATOM(&t->as.tailcall.fn_atom);   /* E2c field-load callee */
             /* E2c: a `via_registry` tailcall threads its fn-value CALLEE through
              * `__tur_cps_lookup(f)`; when that callee is an enclosing param (not a
              * local of this lifted body), carry it on the frame env as an int64
@@ -3320,6 +3328,7 @@ static bool expr_has_handle(const Expr *e) {
         case EX_IF:
             return expr_has_handle(e->as.if_.cond) || expr_has_handle(e->as.if_.then_)
                 || expr_has_handle(e->as.if_.else_or_null);
+        case EX_REINTERPRET: return expr_has_handle(e->as.reinterpret_.expr);
         case EX_ASCRIBE: return expr_has_handle(e->as.ascribe_.inner);
         case EX_RETURN:  return expr_has_handle(e->as.return_.value);
         /* A `(with-handler hv body)` is a delimited handler install just like
@@ -4246,6 +4255,7 @@ static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
                     NESC(h->cases[i].body);
             }
             return;
+        case EX_REINTERPRET: NESC(e->as.reinterpret_.expr); return;
         case EX_ASCRIBE: NESC(e->as.ascribe_.inner); return;
         case EX_RETURN:  NESC(e->as.return_.value);  return;
         case EX_DO:
@@ -4692,6 +4702,32 @@ static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
                 if (expr_stores_fnval_in_struct(h->cases[i].body, fv)) return true;
             return false;
         }
+        /* handle-over-effectful-fn-field-in-arg-let-evicted: a builtin's
+         * arguments (`println`'s), a match, a letrec.  The walker returned
+         * false at these, so `(println (let [s (make-struct FE fe)] (handle
+         * (.run s 3) ...)))` never registered `fe`; unregistered, an escaping
+         * effectful fn-value is a permanent fiber source, and the handler and
+         * performer were evicted from the CPS backend ("this effect operation
+         * has no lowering here").  The same `let` outside the `println`
+         * worked. */
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.builtin.args[i], fv)) return true;
+            return false;
+        /* `(.run (make-struct FE fe) 3)`: the store is the field read's
+         * receiver. */
+        case EX_GET_FIELD:
+            return expr_stores_fnval_in_struct(e->as.get_field_.struct_expr, fv);
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, fv)) return true;
+            return expr_stores_fnval_in_struct(e->as.let_.body, fv);
+        case EX_MATCH:
+            if (expr_stores_fnval_in_struct(e->as.match_.scrutinee, fv)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (expr_stores_fnval_in_struct(e->as.match_.arms[i].body, fv)) return true;
+            return false;
+        case EX_REINTERPRET: return expr_stores_fnval_in_struct(e->as.reinterpret_.expr, fv);
         case EX_ASCRIBE: return expr_stores_fnval_in_struct(e->as.ascribe_.inner, fv);
         case EX_RETURN:  return expr_stores_fnval_in_struct(e->as.return_.value, fv);
         case EX_SET:     return expr_stores_fnval_in_struct(e->as.set_.value, fv);
@@ -4794,6 +4830,9 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
                     break;
                 case EX_IF:
                     if (sp < 509) { stack[sp++] = e->as.if_.cond; stack[sp++] = e->as.if_.then_; stack[sp++] = e->as.if_.else_or_null; }
+                    break;
+                case EX_REINTERPRET:
+                    if (sp < 511) stack[sp++] = e->as.reinterpret_.expr;
                     break;
                 case EX_ASCRIBE:
                     if (sp < 511) stack[sp++] = e->as.ascribe_.inner;
@@ -5377,6 +5416,26 @@ static const Type *cps_call_result_discriminator(EmitCtx *ctx,
                                                  Type *store) {
     if (!ctx || !call_expr || !store) return NULL;
     Type rt = emit_resolve_type(ctx, call_expr->type);
+    /* generic-call-result-in-generic-collapses-to-int: a call whose callee
+     * declares a bare tyvar result is typed with the carrier `int` under its
+     * tyvar wrapper, which named no spec (every by-value clone's result
+     * mismatched it) and dropped `(mx-app f (mx-id x))` to the carrier base.
+     * Its real result is the callee's result tyvar under the call's own
+     * binding, resolved in this clone. */
+    if (rt.kind == TY_INT && call_expr->kind == EX_CALL &&
+        call_expr->as.call_.fn_binding &&
+        call_expr->as.call_.fn_binding->type.kind == TY_FN) {
+        const Type *rft = call_expr->as.call_.fn_binding->type.as.fn.result_full_type;
+        if (rft && rft->kind == TY_TYVAR && rft->as.tyvar_.name) {
+            for (uint8_t k = 0; k < call_expr->as.call_.n_abi_bindings; k++) {
+                const AbiTypeBinding *ab = &call_expr->as.call_.abi_bindings[k];
+                if (!ab->name || strcmp(ab->name, rft->as.tyvar_.name) != 0) continue;
+                Type bt = emit_resolve_type(ctx, ab->type);
+                if (bt.kind != TY_TYVAR && bt.kind != TY_UNKNOWN) rt = bt;
+                break;
+            }
+        }
+    }
     switch (rt.kind) {
         case TY_TYVAR:
             return NULL;
@@ -6190,6 +6249,55 @@ static bool e2a_callee_is_fat(const Binding *fn) {
            fn_param_type_is_fat_normalized(&fn->type);
 }
 
+/* The same question for either callee spelling.  An E2c struct-field LOAD
+ * (fn == NULL) is fat exactly when its field is a TYPED fn field: those store
+ * a fat box `{ fatshim, entry }` (the ctor's boxed-field path), and a lookup
+ * keyed on the box itself found nothing -- "no CPS entry registered for
+ * effectful fn-value" on every typed effectful field.  A bare `fn` field
+ * keeps the thin store and the raw atom key. */
+static bool e2a_call_is_fat(const Binding *fn, const CAtom *fn_atom) {
+    if (fn) return e2a_callee_is_fat(fn);
+    return fn_atom && fn_atom->type && fn_atom->type->kind == TY_FN &&
+           fn_atom->type->as.fn.boxed;
+}
+
+/* The C type an E2a call spells for parameter `i`.  The registered `__cps`
+ * twin keeps its REAL parameter types (`put__cps(double v, DK *k)`), so
+ * spelling every slot `int64_t` value-converted a float argument (2.5 -> 2)
+ * into the wrong register class, and the callee then read its continuation
+ * from the register holding the int -- a segfault, or with a pure callee a
+ * wrong answer.  When the callee has a signature, a float-class parameter
+ * takes its own spelling; the word-class kinds keep the int64 carrier the
+ * args are cast to (atoms_csv_call_cps), which shares their register class.
+ * A signature-less callee (bare `fn` field, bare `:fn` parameter) cannot
+ * carry a float at all: the elaborator rejects that at the store and the
+ * call. */
+static const Type *e2a_callee_sig(const Binding *fn, const CAtom *fn_atom,
+                                  uint32_t n) {
+    const Type *t = NULL;
+    if (fn && fn->type.kind == TY_FN) t = &fn->type;
+    else if (!fn && fn_atom && fn_atom->type && fn_atom->type->kind == TY_FN)
+        t = fn_atom->type;
+    if (!t || t->as.fn.arity != n || (n && !t->as.fn.arg_kinds)) return NULL;
+    return t;
+}
+static const char *e2a_param_ctype(const Type *sig, uint32_t i) {
+    if (!sig || i >= sig->as.fn.arity) return "int64_t";
+    switch ((TypeKind)sig->as.fn.arg_kinds[i]) {
+        case TY_FLOAT: case TY_FLOAT64: return "double";
+        case TY_FLOAT32:                return "float";
+        default:                        return "int64_t";
+    }
+}
+/* "int64_t (*)(<lead>T0, T1, ..., DK *)" into `out`. */
+static void e2a_cast(char *out, size_t cap, const char *lead, const Type *sig,
+                     uint32_t n) {
+    int off = snprintf(out, cap, "int64_t (*)(%s", lead);
+    for (uint32_t i = 0; i < n && off < (int)cap - 64; i++)
+        off += snprintf(out + off, cap - (size_t)off, "%s, ", e2a_param_ctype(sig, i));
+    snprintf(out + off, cap - (size_t)off, "DK *)");
+}
+
 /* Emit the via_registry dispatch for a FAT callee.  Two box species reach an
  * effectful fn slot, distinguishable by which slot the registry knows:
  *
@@ -6207,16 +6315,12 @@ static bool e2a_callee_is_fat(const Binding *fn) {
  * `thread` the continuation expression. */
 static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
                                   const char *argv, uint32_t n,
-                                  const char *thread, const char *tag) {
-    char env_cast[512]; int off = snprintf(env_cast, sizeof env_cast,
-                                           "int64_t (*)(void *, ");
-    for (uint32_t i = 0; i < n && off < 400; i++)
-        off += snprintf(env_cast + off, sizeof env_cast - (size_t)off, "int64_t, ");
-    snprintf(env_cast + off, sizeof env_cast - (size_t)off, "DK *)");
-    char thin_cast[512]; off = snprintf(thin_cast, sizeof thin_cast, "int64_t (*)(");
-    for (uint32_t i = 0; i < n && off < 400; i++)
-        off += snprintf(thin_cast + off, sizeof thin_cast - (size_t)off, "int64_t, ");
-    snprintf(thin_cast + off, sizeof thin_cast - (size_t)off, "DK *)");
+                                  const char *thread, const char *tag,
+                                  const Type *sig) {
+    char env_cast[512];
+    e2a_cast(env_cast, sizeof env_cast, "void *, ", sig, n);
+    char thin_cast[512];
+    e2a_cast(thin_cast, sizeof thin_cast, "", sig, n);
     ce_line(ce, "{ int64_t *__e2ab = (int64_t *)(intptr_t)(%s); /* %s (fat callee) */", callee, tag);
     ce_line(ce, "  __tur_cps_fn __e2af = __tur_cps_lookup(__e2ab[0]);");
     if (n) {
@@ -6280,8 +6384,9 @@ static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
  * natural C type to a real callee), here a pointer-like arg -- a cstr literal, a
  * `ptr<void>`, an rc/weak/ref handle, a fn value, a continuation -- must be cast
  * to `(int64_t)(intptr_t)`, else it "makes integer from pointer" at the call, a
- * hard error under GCC >= 14.  int/bool pass through as int64 already; float args
- * do not occur on this carrier path. */
+ * hard error under GCC >= 14.  int/bool pass through as int64 already.  A float
+ * arg passes bare, and the E2a cast spells its slot `double` (e2a_param_ctype);
+ * "float args do not occur on this carrier path" was never true. */
 static bool atom_ty_is_ptr_carrier(TypeKind k) {
     return k == TY_FN || k == TY_PTR_VOID || k == TY_CSTR || k == TY_RC ||
            k == TY_WEAK || k == TY_REF || k == TY_REF_IMMUT || k == TY_REF_MUT ||
@@ -6350,6 +6455,13 @@ static const char *cps_call_param_ctype(CE *ce, const Binding *fn, uint32_t i) {
 /* `offs`, when non-NULL, receives each argument's start offset in the
  * returned string (n entries; ", " separates them), so a caller can take the
  * arguments one at a time -- the self tail call's backedge does. */
+/* Is `a` a bare C identifier whose recorded C type is a pointer? */
+static bool cps_atom_recorded_ptr(const char *a) {
+    if (!a || !emit_str_is_bare_ident(a)) return false;
+    const char *c = emit_localvar_lookup_ctype(a);
+    size_t L = c ? strlen(c) : 0;
+    return L >= 1 && c[L - 1] == '*';
+}
 static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
                                        const Binding *fn,
                                        const EmitAbiSpecialization *spec,
@@ -6370,6 +6482,26 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             size_t sL = sty ? strlen(sty) : 0;
             if (sty && sL >= 1 && sty[sL - 1] == '*')
                 pty = sty;
+            /* The clone's recorded signature, when it has one: a by-value
+             * aggregate or float parameter of the clone is exactly that, not
+             * the generic binding's carrier word (the boxing and bit rules
+             * below key on an int64 parameter). */
+            const char *sp = spec->clone_name
+                ? emit_sig_lookup_param_ctype(spec->clone_name, i) : NULL;
+            if (sp) pty = sp;
+        } else if (fn) {
+            /* cps-direct-arg-follows-emitted-signature: an unspecialized callee
+             * (a carrier base, an inline-C primitive) is emitted with its
+             * carrier parameters, while cps_call_param_ctype resolves the
+             * GENERIC annotation through the ACTIVE spec -- `vec-push-ex`'s
+             * `(Vec A)` came back `tur_adt_Vec__Result__int__int *` inside a
+             * `(Result int int)` clone, and the receiver was cast to it for an
+             * `int64_t` parameter (an int-conversion error under clang and gcc
+             * 14).  The recorded emitted signature is the callee's truth. */
+            char *fcn = raw_name_for_binding(fn);
+            const char *sp = fcn ? emit_sig_lookup_param_ctype(fcn, i) : NULL;
+            if (sp) pty = sp;
+            free(fcn);
         }
         size_t L = pty ? strlen(pty) : 0;
         bool param_is_ptr = pty && L >= 1 && pty[L - 1] == '*';
@@ -6455,6 +6587,42 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             ce_line(ce, "tur_tagged_t *__anybox_%d = (tur_tagged_t *)malloc(sizeof(tur_tagged_t));", abx);
             ce_line(ce, "*__anybox_%d = %s;", abx, a);
             buf_printf(&b, "(int64_t)(intptr_t)__anybox_%d", abx);
+        }
+        else if (arg_is_byval_agg && param_is_i64 && arg_cty &&
+                 strncmp(arg_cty, "tur_adt_", 8) == 0) {
+            /* cps-direct-arg-follows-emitted-signature: the same bridge for any
+             * by-value aggregate into an int64 carrier slot -- the direct
+             * emitter's argument chain heap-boxes it for a carrier parameter
+             * (`(vec-push! w (app f x))` at `A := (Result int int)` passed the
+             * struct bare: invalid C).  Not reaped, for the reason above: a
+             * container that keeps the word owns the box. */
+            int abx = ce->ctx->tmp_n++;
+            ce_line(ce, "%s *__aggbox_%d = (%s *)malloc(sizeof(%s));",
+                    arg_cty, abx, arg_cty, arg_cty);
+            ce_line(ce, "*__aggbox_%d = %s;", abx, a);
+            ce_line(ce, "TUR_REGION_NOTE_WORDS(__aggbox_%d, sizeof *__aggbox_%d);", abx, abx);
+            buf_printf(&b, "(int64_t)(intptr_t)__aggbox_%d", abx);
+        }
+        else if (param_is_i64 && arg_cty &&
+                 (strcmp(arg_cty, "double") == 0 || strcmp(arg_cty, "float") == 0)) {
+            /* A float into an int64 carrier slot crosses as its BITS; the
+             * intptr_t cast below would value-convert it. */
+            Type ft = emit_type_from_kind(strcmp(arg_cty, "float") == 0 ? TY_FLOAT32
+                                                                        : TY_FLOAT);
+            char *w = emit_word_slot_bits(&ft, a);
+            buf_puts(&b, w);
+            free(w);
+        }
+        else if (param_is_i64 && !arg_is_byval_agg && !atom_is_fat_fn(&args[i]) &&
+                 (arg_is_c_ptr || cps_atom_recorded_ptr(a))) {
+            /* cps-typed-pointer-into-carrier-slot: the atom's elaborated kind
+             * can be the int carrier while its C binder is a typed pointer --
+             * `(let [v (vec-new)] ...)` at A := float binds
+             * `tur_adt_Vec__float * v`, then `vec-push-ex`'s `int64_t v` got
+             * it bare (arg_is_plain_int said "no cast"): a hard
+             * -Wint-conversion error under clang and gcc 14.  The C type
+             * decides, as in the direct emitter's argument chain. */
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         }
         else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
@@ -6874,7 +7042,31 @@ static void emit_term(CE *ce, const CTerm *t) {
                 size_t bL = bct ? strlen(bct) : 0;
                 bool bct_bridgeable = bct && (strcmp(bct, "int64_t") == 0 ||
                                               (bL >= 1 && bct[bL - 1] == '*'));
-                if (bct_bridgeable)
+                /* cps-direct-mono-clone-aggregate-result: the resolved clone
+                 * of a generic whose result is a by-value aggregate (`id` at
+                 * `A := B1`) returns the struct, and an int64 binder cannot
+                 * take it through intptr_t -- invalid C (found by the type
+                 * fuzzer's gbody crossing).  Pack it the way emit_letraw
+                 * does: a reaped heap box, and a float's bits. */
+                const char *rct_mc = emit_sig_lookup_ret_ctype(fn);
+                bool bct_i64 = bct && strcmp(bct, "int64_t") == 0;
+                if (bct_i64 && rct_mc && strncmp(rct_mc, "tur_adt_", 8) == 0 &&
+                    !strchr(rct_mc, '*'))
+                    ce_line(ce, "%s = __dk_reap_ptr((intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = %s(%s); __bx; })); /* cps->direct */",
+                            bn, rct_mc, rct_mc, rct_mc, fn, argv);
+                else if (bct_i64 && rct_mc &&
+                         (strcmp(rct_mc, "double") == 0 || strcmp(rct_mc, "float") == 0)) {
+                    Buf cb; buf_init(&cb);
+                    buf_printf(&cb, "%s(%s)", fn, argv);
+                    buf_putc(&cb, '\0');
+                    char *br = emit_carrier_bridge(ce->ctx, ce->out, strdup(cb.data),
+                        CK_CONCRETE, CK_CARRIER,
+                        emit_type_from_kind(strcmp(rct_mc, "float") == 0 ? TY_FLOAT32
+                                                                         : TY_FLOAT));
+                    buf_free(&cb);
+                    ce_line(ce, "%s = %s; /* cps->direct */", bn, br);
+                    free(br);
+                } else if (bct_bridgeable)
                     ce_line(ce, "%s = (%s)(intptr_t)%s(%s); /* cps->direct */", bn, bct, fn, argv);
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
@@ -6953,17 +7145,18 @@ static void emit_term(CE *ce, const CTerm *t) {
                 char *argv = atoms_csv_call_cps(ce, t->as.tailcall.args, t->as.tailcall.n);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
-                if (e2a_callee_is_fat(t->as.tailcall.fn)) {
+                const Type *e2sig = e2a_callee_sig(t->as.tailcall.fn,
+                                                   &t->as.tailcall.fn_atom,
+                                                   t->as.tailcall.n);
+                if (e2a_call_is_fat(t->as.tailcall.fn, &t->as.tailcall.fn_atom)) {
                     emit_e2a_fat_dispatch(ce, pf, pf, argv, t->as.tailcall.n,
-                                          thread, "E2a threaded fn-value");
+                                          thread, "E2a threaded fn-value", e2sig);
                     free(pf); free(argv);
                     break;
                 }
-                /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
-                char cast[512]; int off = snprintf(cast, sizeof cast, "int64_t (*)(");
-                for (uint32_t i = 0; i < t->as.tailcall.n && off < 400; i++)
-                    off += snprintf(cast + off, sizeof cast - (size_t)off, "int64_t, ");
-                snprintf(cast + off, sizeof cast - (size_t)off, "DK *)");
+                /* cast to the __cps ABI, float parameters at their own type */
+                char cast[512];
+                e2a_cast(cast, sizeof cast, "", e2sig, t->as.tailcall.n);
                 char key[640];
                 e2a_lookup_key(key, sizeof key, t->as.tailcall.fn, pf);
                 if (t->as.tailcall.n)
@@ -7640,20 +7833,52 @@ static void emit_letraw(CE *ce, const CTerm *t) {
                 bridged_ok = true;
             }
         }
-        /* The other direction: a binder the lowering typed from an erasing
-         * `(:: x :int)` it then PEELED off the value (cps_bind), so a typed
-         * pointer -- `tur_adt_Cons__int *` from a spec'd call -- lands in an
-         * `int64_t`.  The direct emitter's EX_ASCRIBE casts it; this delegated
-         * path assigned it raw, a -Wint-conversion under -Werror.  An explicit
-         * `(:: node :int)` argument to a CPS callee hit it, and the implicit
-         * erasure a `:heap` node takes into any `:int` parameter (elab_call.c,
-         * security-audit WP5) made it common.  Keyed on the RECORDED C type of
-         * the value in hand, so it fires only for a pointer. */
+        /* generic-call-result-in-generic-collapses-to-int, the CPS half: the
+         * binder is the int64 carrier word (typed from a wrapped tyvar-result
+         * call's `int`) but the delegated value is a temp the direct emitter
+         * RECORDED as a concrete `double` / `float` / by-value aggregate -- a
+         * concrete spec's result.  Assigning it raw value-converted the double
+         * (3.45846e-323) or was invalid C for the aggregate.  Pack it the way
+         * the DK slot carries such a value: float bits, or a reaped heap box
+         * (the same box `dk_run` hands an aggregate result through). */
         if (!bridged_ok && rhs && bct && strcmp(bct, "int64_t") == 0 &&
             emit_str_is_bare_ident(rhs)) {
-            const char *rct = emit_localvar_lookup_ctype(rhs);
-            if (rct && strchr(rct, '*')) {
+            const char *rc = emit_localvar_lookup_ctype(rhs);
+            if (rc && (strcmp(rc, "double") == 0 || strcmp(rc, "float") == 0)) {
+                char *br = emit_carrier_bridge(ce->ctx, ce->out, strdup(rhs),
+                    CK_CONCRETE, CK_CARRIER,
+                    emit_type_from_kind(strcmp(rc, "float") == 0 ? TY_FLOAT32
+                                                                : TY_FLOAT));
+                ce_line(ce, "%s = %s;", bn, br);
+                free(br);
+                bridged_ok = true;
+            } else if (rc && strncmp(rc, "tur_adt_", 8) == 0 && !strchr(rc, '*')) {
+                ce_line(ce, "%s = __dk_reap_ptr((intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; }));",
+                        bn, rc, rc, rc, rhs);
+                bridged_ok = true;
+            } else if (rc && strlen(rc) >= 1 && rc[strlen(rc) - 1] == '*') {
+                /* A pointer into the carrier word: the word IS the pointer.
+                 * Two routes reach it -- a cstr spec's `const char *` result
+                 * (thunk/ident/cstr under clang), and a binder the lowering
+                 * typed from an erasing `(:: x :int)` it then PEELED off the
+                 * value (cps_bind), so a typed pointer -- `tur_adt_Cons__int *`
+                 * from a spec'd call -- lands in an `int64_t`; the implicit
+                 * erasure a `:heap` node takes into any `:int` parameter
+                 * (elab_call.c, security-audit WP5) made that common. */
                 ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs);
+                bridged_ok = true;
+            }
+        }
+        /* cps-letraw-pointer-binder-from-carrier: the binder is a concrete
+         * POINTER (a spec clone's `tur_adt_Vec__float *` local) and the value is
+         * a temp recorded as the int64 carrier word (`vec_hynew()`'s result).
+         * The word IS the pointer; assigning it raw was an int-conversion error
+         * under clang and gcc 14 (gcc 13 only warns). */
+        if (!bridged_ok && rhs && bct && emit_str_is_bare_ident(rhs)) {
+            size_t bL = strlen(bct);
+            const char *rc = emit_localvar_lookup_ctype(rhs);
+            if (bL >= 1 && bct[bL - 1] == '*' && rc && strcmp(rc, "int64_t") == 0) {
+                ce_line(ce, "%s = (%s)(intptr_t)(%s);", bn, bct, rhs);
                 bridged_ok = true;
             }
         }
@@ -7713,21 +7938,21 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             if (is_byref_mut(t->as.letval.x.bind))
                 ce_line(ce, "%s%s;", byref_cell_ptr_ctype(ce->ctx, t->as.letval.x.bind), bn);
             else
-                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
+                { const char *__bct = binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letval.body);
             break;
         }
         case CT_LETPRIM: {
             char *bn = cvar_cname(ce, t->as.letprim.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letprim.x.ty, t->as.letprim.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.letprim.x.ty, t->as.letprim.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letprim.body);
             break;
         }
         case CT_LETCALL: {
             char *bn = cvar_cname(ce, t->as.letcall.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcall.x.ty, t->as.letcall.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.letcall.x.ty, t->as.letcall.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letcall.body);
             break;
@@ -7741,7 +7966,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             if (letraw_emits_poly_fn(t))
                 ce_line(ce, "tur_poly_fn_t %s;", bn);
             else
-                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
+                { const char *__bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letraw.body);
             break;
@@ -7759,7 +7984,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
              * the CT_LETCONT emit in emit_term); the raw param.name would be an
              * invalid C identifier for a kebab-case `let` binder. */
             char *pn = cvar_cname(ce, t->as.letcont.param);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type), pn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type); ce_line(ce, "%s %s;", __bct, pn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(pn, __bct); }
             free(pn);
             emit_binder_decls(ce, t->as.letcont.body);
             emit_binder_decls(ce, t->as.letcont.jbody);
@@ -7792,21 +8017,21 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_AWAIT:   break;   /* F3: terminal; the continuation is lifted */
         case CT_RESUME: {
             char *bn = cvar_cname(ce, t->as.resume.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.resume.body);
             break;
         }
         case CT_CLONEABLE: {
             char *bn = cvar_cname(ce, t->as.cloneable.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.cloneable.body);
             break;
         }
         case CT_CALLCC: {
             char *bn = cvar_cname(ce, t->as.callcc.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.callcc.body);
             break;
@@ -7927,6 +8152,11 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "%s %s = __cap->f%d;\n", cap_ctype(ce->ctx, caps, i), cn, i);
+            /* The direct emitter, which renders this helper's delegated
+             * expressions, keys its bridges on a local's RECORDED spelling;
+             * without it a capture declared `tur_adt_Vec__float *` here was
+             * passed bare into an inline-C callee's int64 parameter. */
+            emit_localvar_record_ctype(cn, cap_ctype(ce->ctx, caps, i));
             /* E1 (Option A): an owning capture admitted into a multi-shot
              * continuation is CLONED (increfed) on read-out, so each invocation of
              * this helper owns its own +1 that the body's drop balances.  The env's
@@ -8200,15 +8430,16 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
          * join `frame` to its CPS entry recovered from the registry. */
         /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
         char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
-        if (e2a_callee_is_fat(call->as.tailcall.fn)) {
+        const Type *e2sig = e2a_callee_sig(call->as.tailcall.fn,
+                                           &call->as.tailcall.fn_atom,
+                                           call->as.tailcall.n);
+        if (e2a_call_is_fat(call->as.tailcall.fn, &call->as.tailcall.fn_atom)) {
             emit_e2a_fat_dispatch(ce, fn, fn, argv_cps, call->as.tailcall.n,
-                                  frame, "E2a threaded fn-value heap join");
+                                  frame, "E2a threaded fn-value heap join", e2sig);
             free(argv_cps);
         } else {
-        char cast[512]; int coff = snprintf(cast, sizeof cast, "int64_t (*)(");
-        for (uint32_t i = 0; i < call->as.tailcall.n && coff < 400; i++)
-            coff += snprintf(cast + coff, sizeof cast - (size_t)coff, "int64_t, ");
-        snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
+        char cast[512];
+        e2a_cast(cast, sizeof cast, "", e2sig, call->as.tailcall.n);
         char key[640];
         e2a_lookup_key(key, sizeof key, call->as.tailcall.fn, fn);
         if (call->as.tailcall.n)
@@ -10376,6 +10607,16 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         mono_emit = ok && (island_mono || se->mono_template);
     }
 
+    /* A spec clone of an in-S template that is NOT mono-emittable -- its
+     * concrete signature is refused by mono_sig_ok (a heap handle result, say:
+     * `(defn mx [A] [f : (fn [] A)] : A ...)` at `A := MxH`) -- is a SIG
+     * rejection of that clone, and the clone keeps the direct path under its
+     * own clone name, which is what its callers call.  Falling through here
+     * rendered the TEMPLATE a second time under the BASE name: `redefinition of
+     * mx__cps` / `mx`, found by tests/generic-spec-matrix.py (thunk/map/heap). */
+    if (!mono_emit && spec && spec->fn == fd && spec->clone_name && se && se->in_s)
+        return false;
+
     if (!mono_emit && (!se || !se->in_s)) {
         /* N6.5 gate: a COLORED function that falls back to the direct emitter must
          * be doing so for a PERMANENT signature reason (SIG-*) -- exported symbol,
@@ -10905,10 +11146,62 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
     if (threadable_has(fd->binding)) {
+        /* fnsan-e2a-registry-typed-entry: the E2a call site casts a looked-up
+         * entry to `int64_t (*)([void *,] W0.., DK *)` with every Wi the word
+         * except a float kind, which travels at its own type (e2a_cast).  An
+         * entry declared with a POINTER (or narrow) parameter --
+         * `__fn_7__cps(const char *msg, DK *)` -- was called through that
+         * cast: an indirect call through the wrong function type (a
+         * -fsanitize=function trap, a call_indirect trap on WASM).  Register
+         * an adapter in the call site's convention instead. */
+        bool e2_adapt = false, e2_ok = true;
+        const char *e2pc[MAX_FN_ARITY];
+        uint32_t e2n = fd->n_params;
+        if (e2n > MAX_FN_ARITY) e2_ok = false;
+        for (uint32_t i = 0; e2_ok && i < e2n; i++) {
+            const char *pc = emit_param_ctype(ctx, fd, i);
+            e2pc[i] = pc;
+            if (!pc) { e2_ok = false; break; }
+            size_t pL = strlen(pc);
+            bool env = fd->closure && i == 0;
+            bool flt = strcmp(pc, "double") == 0 || strcmp(pc, "float") == 0;
+            bool word = strcmp(pc, "int64_t") == 0;
+            bool ptr = pL >= 1 && pc[pL - 1] == '*';
+            bool narrow = strcmp(pc, "bool") == 0 || strcmp(pc, "int8_t") == 0 ||
+                          strcmp(pc, "int16_t") == 0 || strcmp(pc, "int32_t") == 0 ||
+                          strcmp(pc, "uint8_t") == 0 || strcmp(pc, "uint16_t") == 0 ||
+                          strcmp(pc, "uint32_t") == 0;
+            if (env || flt || word) continue;
+            if (ptr || narrow) { e2_adapt = true; continue; }
+            e2_ok = false;              /* an aggregate: keep the direct entry */
+        }
+        if (e2_ok && e2_adapt) {
+            buf_printf(file, "static int64_t %s__e2w(", cn);
+            for (uint32_t i = 0; i < e2n; i++) {
+                const char *pc = e2pc[i];
+                bool keep = (fd->closure && i == 0) || strcmp(pc, "double") == 0 ||
+                            strcmp(pc, "float") == 0 || strcmp(pc, "int64_t") == 0;
+                buf_printf(file, "%s a%u, ", keep ? pc : "int64_t", i);
+            }
+            buf_printf(file, "DK *__k) {\n    return %s__cps(", cn);
+            for (uint32_t i = 0; i < e2n; i++) {
+                const char *pc = e2pc[i];
+                size_t pL = strlen(pc);
+                bool keep = (fd->closure && i == 0) || strcmp(pc, "double") == 0 ||
+                            strcmp(pc, "float") == 0 || strcmp(pc, "int64_t") == 0;
+                if (keep)
+                    buf_printf(file, "a%u, ", i);
+                else if (pc[pL - 1] == '*')
+                    buf_printf(file, "(%s)(intptr_t)a%u, ", pc, i);
+                else
+                    buf_printf(file, "(%s)a%u, ", pc, i);
+            }
+            buf_puts(file, "__k);\n}\n");
+        }
         buf_printf(file,
             "static void __tur_e2reg_%s(void) {\n"
-            "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s__cps);\n"
-            "}\n", cn, cn, cn);
+            "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s%s);\n"
+            "}\n", cn, cn, cn, (e2_ok && e2_adapt) ? "__e2w" : "__cps");
         /* S1b: the direct->CPS registry must be populated before a threaded
          * call site looks up its CPS variant.  A dropped constructor here was
          * the SIGSEGV in findings 3.1. */

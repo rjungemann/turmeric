@@ -1055,6 +1055,7 @@ bool type_is_transparent_int_newtype(Type t) {
          * keeps treating it as the int64 carrier it still is at runtime. */
         AdtDef *adef = t.as.adt_.def;
         if (!adef || adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+        if (adef->is_heap) return false;   /* see the TY_APP arm */
         return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     } else if (t.kind == TY_APP) {
         /* structdef-retirement DS-D: no struct-headed app forms, so an applied
@@ -1065,6 +1066,15 @@ bool type_is_transparent_int_newtype(Type t) {
         if (!type_extract_adt_app(&t, &adef, args, &n_args) || !adef)
             return false;
         if (adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+        /* phantom-parametric-heap-let-binding-repr-ice: `:heap` asks for
+         * REFERENCE semantics -- a node mutated through one handle is seen
+         * through every other -- and an int64 identity cannot give it that.
+         * repr_of already ranks :heap first (heap-ptr in every position), so
+         * collapsing `(defstruct Holder :heap [V] [payload : int])` to int64
+         * here made every site this predicate steers disagree with it: the
+         * binding ICE'd, and a `set!` through a generic callee would have
+         * written a copy.  A :heap record stays a heap record. */
+        if (adef->is_heap) return false;
         return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     }
     return false;
@@ -2457,6 +2467,32 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "struct %s {\n", adt_inst_name);
     if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
+    /* subword-payload-box-read-at-wrong-offset: the float32 word pad below
+     * fixes the payload's SIZE but not its OFFSET.  After `int tag` a union
+     * whose widest member is 4-aligned starts at offset 4, while the carrier
+     * monomorph (`int64_t _0`) starts at 8 -- so a carrier read of a boxed
+     * `(Option float32)` (a dict slot's word, an open-typed result boxed at
+     * production) landed on the pad and answered 0 for 3.25.  An int64 union
+     * member aligns the union like the carrier's. */
+    {
+        bool has_f32_pad = false;
+        for (uint32_t ci = 0; ci < def->n_ctors && !has_f32_pad; ci++) {
+            CtorDef *ctor = def->ctors[ci];
+            for (uint32_t fi = 0; fi < ctor->n_fields && !has_f32_pad; fi++) {
+                const CtorField *fld = &ctor->fields[fi];
+                if (!fld->full_type || fld->full_type->kind != TY_TYVAR) continue;
+                Type fres = def ? substitute_adt_app_type_owned(fld->full_type, def, args)
+                                : type_simple(TY_UNKNOWN, CK_COPY);
+                const char *ctype = (type_is_wide_byval_adt(fres) &&
+                                     !adt_field_is_ros_pointer_box(def, &fres))
+                    ? "int64_t"
+                    : adt_field_c_type(def, fld, args);
+                free_struct_app_type(fres);
+                if (ctype && strcmp(ctype, "float") == 0) has_f32_pad = true;
+            }
+        }
+        if (has_f32_pad && !flat) buf_printf(out, "        int64_t __tur_align;\n");
+    }
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
         /* adt-ctor-underscore-mangles-twice: the member name must be the SAME
@@ -2571,6 +2607,8 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
             if (ctor->n_fields == 1)
                 buf_printf(out, "%s _0", niche_ctype);
+            else
+                buf_puts(out, "void");   /* prototyped, not `()` */
             buf_printf(out, ") {\n");
             if (ctor->n_fields == 1) {
                 /* option-niche: the eligibility claim ("this payload's valid
@@ -2600,6 +2638,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             if (fi > 0) buf_puts(out, ", ");
             buf_printf(out, "%s _%u", val_ctype[fi], fi);
         }
+        if (ctor->n_fields == 0) buf_puts(out, "void");   /* prototyped, not `()` */
         buf_printf(out, ") {\n");
         /* CONV-S1 seam 4 (keystone): route every field store through
          * adt_field_member_path so a named-layout monomorph writes `__r->len`

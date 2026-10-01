@@ -353,7 +353,15 @@ static CKont kont_ret(TypeKind ty) {
 /* Type ascription `(:: e T)` is erased at codegen (its value is the inner
  * expression's value), so peel it everywhere the translator inspects a form. */
 static const Expr *ascribe_peel(const Expr *e) {
-    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    /* generic-call-result-in-generic-collapses-to-int: a generic call whose
+     * result is the enclosing signature's own tyvar is wrapped in a reinterpret
+     * typed `A` (elab_call.c).  The direct emitter lowers it per clone; to this
+     * pass it is the call it wraps, exactly what it saw before the wrap. */
+    while (e && (e->kind == EX_ASCRIBE ||
+                 (e->kind == EX_REINTERPRET &&
+                  e->as.reinterpret_.target_kind == TY_TYVAR)))
+        e = e->kind == EX_ASCRIBE ? e->as.ascribe_.inner
+                                  : e->as.reinterpret_.expr;
     return e;
 }
 
@@ -931,10 +939,18 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
 
 /* True if every argument of an EX_CALL is atomic (so the whole call can be
  * delegated to the direct emitter without control ops hiding in an arg). */
-static bool call_args_atomic(const Expr *e) {
+/* handle-over-effectful-fn-field-in-arg-let-evicted: the registry-threaded
+ * effectful fn-value calls (E2a / E2c) ATOMIZE their arguments -- a non-atomic
+ * one becomes a pending CPS binding folded around the call -- so they never
+ * needed atomic arguments, only room in the Pending array (32, and atomize
+ * silently drops past it; one slot is the E2c field-load callee).  Requiring
+ * call_args_atomic evicted `(.run s (let [v 1.25] v))` -- and with it every
+ * handler and performer of the effect. */
+static bool call_args_pendable(const Expr *e) {
+    uint32_t non_atomic = 0;
     for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-        if (!is_atomic(e->as.call_.args[i])) return false;
-    return true;
+        if (!is_atomic(e->as.call_.args[i])) non_atomic++;
+    return non_atomic + 1 < 32;
 }
 
 /* mutual-tail-call-through-guard-grows-the-stack: an argument the direct
@@ -2811,6 +2827,8 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
             for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++)
                 if (!pap_calls_saturated(e->as.perform_.perform->args[i], var, rem_arity)) return false;
             return true;
+        case EX_REINTERPRET:
+            return pap_calls_saturated(e->as.reinterpret_.expr, var, rem_arity);
         case EX_ASCRIBE:
             return pap_calls_saturated(e->as.ascribe_.inner, var, rem_arity);
         default:
@@ -3537,7 +3555,32 @@ static CTerm *cps_tail_unit(CpsB *b, CKont kont) {
     return t;
 }
 
+/* generic-call-result-in-generic-collapses-to-int: the outermost reinterpret
+ * typed as the enclosing generic's own tyvar in `e`'s ascription chain, or NULL.
+ * Its VALUE is the clone's concrete `A` (the direct emitter's tyvar arm), while
+ * the call it wraps is typed with the carrier `int`; a delegated binding of the
+ * wrapped call must therefore delegate the WRAPPER and take ITS type, or the
+ * result variable is declared `int64_t` and a spec returning `double` lands in
+ * it by value conversion. */
+static const Expr *tyvar_reinterp_wrapper(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return (e && e->kind == EX_REINTERPRET &&
+            e->as.reinterpret_.target_kind == TY_TYVAR &&
+            e->as.reinterpret_.expr) ? e : NULL;
+}
+
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
+    {
+        const Expr *w = tyvar_reinterp_wrapper(e);
+        const Expr *in = w ? ascribe_peel(w) : NULL;
+        if (w && in && kont.kind != KK_LOOP && !is_atomic(in) &&
+            safe_to_delegate(b, in)) {
+            CVar x = fresh_cvar(b, &w->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return build_letraw(b, (Expr *)w, x, ac);
+        }
+    }
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
     if (!e) {
@@ -3618,7 +3661,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             if (call_is_effectful_fnvalue(e)) {
                 /* E2a: a tier-`now` thread-param call THREADS the DK via the registry. */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && cps_ir_thread_param_has(pf) && call_args_atomic(e)) {
+                if (pf && cps_ir_thread_param_has(pf) && call_args_pendable(e)) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -3638,7 +3681,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                  * force-registered (emit_cps_ir.c registration loop). */
                 if (!pf && e->as.call_.fn_expr
                     && e->as.call_.fn_expr->kind == EX_GET_FIELD
-                    && call_args_atomic(e)) {
+                    && call_args_pendable(e)) {
                     Pending pp = {0};
                     CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
                     uint32_t n = e->as.call_.n_args;
@@ -4089,6 +4132,12 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
 /* ---- cps_bind: bind e's value to x, then run rest --------------------- */
 
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    {
+        const Expr *w = tyvar_reinterp_wrapper(e);
+        const Expr *in = w ? ascribe_peel(w) : NULL;
+        if (w && in && !is_atomic(in) && safe_to_delegate(b, in))
+            return build_letraw(b, (Expr *)w, x, rest);
+    }
     e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     e = pap_maybe_rewrite(b, e);
@@ -4126,7 +4175,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                  * threading it to the fn-value's __cps (via the registry).  Same shape
                  * as a colored-callee non-tail call (below), but via_registry. */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && cps_ir_thread_param_has(pf) && call_args_atomic(e)) {
+                if (pf && cps_ir_thread_param_has(pf) && call_args_pendable(e)) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -4148,7 +4197,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                  * the field-load callee via the registry (fn_atom key). */
                 if (!pf && e->as.call_.fn_expr
                     && e->as.call_.fn_expr->kind == EX_GET_FIELD
-                    && call_args_atomic(e)) {
+                    && call_args_pendable(e)) {
                     Pending pp = {0};
                     CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
                     uint32_t n = e->as.call_.n_args;

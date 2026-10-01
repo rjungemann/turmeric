@@ -1,0 +1,16 @@
+;; gen-yield-float32-interp -- a float32 yielded from a generator reads back
+;; as itself on BOTH paths.  The interpreter holds every float kind as a
+;; double (turi_float), so `yield` boxed the double's bits; `gen-unwrap` at
+;; float32 read the box's low 32 bits as a float32 pattern and printed 0 for
+;; 2.5 (and 2.72008e+23 for 7.1) under `tur --interpret`, while the compiled
+;; path was right.  A double yield was never affected.
+
+(defn main [] : int
+  (let [g (gen [] (do (yield (:: 2.5 float32)) (yield (:: 7.1 float32))))]
+    (let [r (gen-next g)]
+      (println (gen-unwrap r)))
+    (let [r (gen-next g)]
+      (println (gen-unwrap r))))
+  (let [h (gen [] (yield 3.25))]
+    (println (gen-unwrap (gen-next h))))
+  0)

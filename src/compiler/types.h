@@ -996,6 +996,10 @@ typedef struct Type {
         /* GF1: Generator type -- heap pointer to C state-machine struct */
         struct {
             TypeKind element_kind; /* the TypeKind of values yielded by this generator */
+            /* generator-in-generic: the enclosing signature's type variable
+             * when the yielded value is typed with one (element_kind is then
+             * TY_TYVAR), so gen-unwrap can type its read `A`. */
+            const char *element_tyvar;
         } generator_;
     } as;
 } Type;

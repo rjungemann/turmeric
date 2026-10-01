@@ -1,0 +1,26 @@
+;; generic-map-assoc-sig-tyvar-value -- `(map-assoc (map-new) k x)` with
+;; `x : A` inside a generic defn.  `(map-new)` leaves its value slot bound to
+;; its own V, and the argument check accepted a later CONCRETE value against
+;; that self-binding but refused the enclosing signature's A:
+;;   function 'map-assoc-eq-o' arg 4: expected V, got A
+;; Found by tests/generic-spec-matrix.py (its map sink, every producer/type).
+
+(defstruct Pt [x : int y : float])
+
+(defn keep [A] [x : A] : A
+  (map-get (map-assoc (map-new) 1 x) 1))
+
+(defn keep2 [A] [x : A y : A] : A
+  (let [m (map-assoc (map-assoc (map-new) 1 x) 2 y)]
+    (map-get m 2)))
+
+(defn main [] : int
+  (println (keep 7.1))                        ; 7.1
+  (println (keep "hi"))                       ; hi
+  (println (keep 42))                         ; 42
+  (println (.y (keep (Pt 3 2.5))))            ; 2.5
+  (println (match (keep (some 4.5))
+             (Some v) v
+             None 0.0))                       ; 4.5
+  (println (keep2 1.25 3.75))                 ; 3.75
+  0)

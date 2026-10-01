@@ -548,6 +548,7 @@ static bool saffron_operand_has_call(const Expr *op) {
                 return false;
             }
             return true;
+        case EX_REINTERPRET:      return saffron_operand_has_call(op->as.reinterpret_.expr);
         case EX_ASCRIBE:      return saffron_operand_has_call(op->as.ascribe_.inner);
         case EX_UNION_INJECT: return saffron_operand_has_call(op->as.union_inject_.value);
         case EX_ANY_CAST:     return saffron_operand_has_call(op->as.any_cast_.value);
@@ -630,7 +631,9 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
          * call one level down, and a `let` operand is no more delegatable than
          * the call was.  Bound out, the field read is over a plain local. */
         case EX_CALL:
-            if (!node->as.call_.ctor) return node;
+            /* ...and a dict-dispatched method call, the same indirect-callee
+             * arm for the same reason (method-call-control-operand-evicted). */
+            if (!node->as.call_.ctor && !node->as.call_.dict_arg) return node;
             for (uint32_t i = 0; i < node->as.call_.n_args && n_slots < 32; i++)
                 slots[n_slots++] = &node->as.call_.args[i];
             break;
@@ -1429,6 +1432,24 @@ static bool call_ground_open_app_args_to_any(Arena *a, Type *t) {
     return changed;
 }
 
+static void call_collect_tyvar_names(const Type *t, const char **names, uint8_t *n, uint8_t cap);
+/* Does `t` name type variables, every one of them quantified by the
+ * enclosing signature?  (A type naming none answers false.) */
+static bool call_type_tyvars_all_in_sig(const Elab *e, const Type *t) {
+    const char *names[16];
+    uint8_t n = 0;
+    call_collect_tyvar_names(t, names, &n, 16);
+    if (n == 0) return false;
+    for (uint8_t i = 0; i < n; i++)
+        if (!ng_tyvar_in_sig(e, names[i])) return false;
+    return true;
+}
+
+/* The elaborator whose enclosing signature call_collect_type_bindings may
+ * consult (generic-map-assoc-rejects-sig-tyvar-value); set only around the
+ * argument check, NULL everywhere else. */
+static const Elab *g_call_cb_elab = NULL;
+
 static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
@@ -1490,6 +1511,26 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                 if (bindings[idx].type.kind == TY_TYVAR &&
                     bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
                     actual.kind != TY_TYVAR) {
+                    return true;
+                }
+                /* generic-map-assoc-rejects-sig-tyvar-value: the same
+                 * self-binding (V := V, from `(map-new) : (Map K V)`, whose
+                 * slots nothing fixed) against a later argument typed with
+                 * the ENCLOSING signature's own variable -- `(map-assoc
+                 * (map-new) 1 x)` with `x : A` inside `[A]`.  That variable is
+                 * as fixed as a concrete type is in each instantiation, and it
+                 * becomes the binding: the call's result then says `(Map K A)`,
+                 * as the ascribed `(:: (map-new) (Map int A))` spelling does.
+                 * Left as the self-binding, `(map-get ...)` of the result read
+                 * back the unfixed V, which collapsed to `int` and retyped the
+                 * enclosing generic's declared `A` result -- so at `A := (fn
+                 * ...)` its caller thin-called the fat handle it returned. */
+                if (bindings[idx].type.kind == TY_TYVAR &&
+                    bindings[idx].type.as.tyvar_.name == expected->as.tyvar_.name &&
+                    actual.kind == TY_TYVAR && actual.as.tyvar_.name &&
+                    actual.as.tyvar_.name != expected->as.tyvar_.name &&
+                    g_call_cb_elab && ng_tyvar_in_sig(g_call_cb_elab, actual.as.tyvar_.name)) {
+                    bindings[idx].type = actual;
                     return true;
                 }
                 /* fmap-over-underdetermined-constructor-is-a-defless-shell: an
@@ -5275,6 +5316,28 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                     if (!thin_fn_field) continue;
                     const Expr *fa = call_expr->as.call_.args[fi];
                     while (fa && fa->kind == EX_ASCRIBE) fa = fa->as.ascribe_.inner;
+                    /* The same field, the other way to miscompile it: a bare
+                     * `fn` field carries no signature, so every call through
+                     * it spells an int64 result -- a function with a float
+                     * argument or result stored here came back as its bits
+                     * (`(.app b 3.25)` of a doubling fn printed
+                     * 4619004367821864960).  The `:fn` parameter carrier has
+                     * rejected exactly this since Phase CCL; the field form of
+                     * the same erasure never did. */
+                    if (!ft && fa && fn_sig_has_float_class(&fa->type)) {
+                        diag_emit(DIAG_ERROR, fa->span,
+                                  "constructor '%s': a function with a "
+                                  "floating-point argument or result cannot be "
+                                  "stored in field %u, which is declared bare "
+                                  "`fn` (no signature)\n"
+                                  "  = note: every call through a signature-less "
+                                  "`fn` field uses the int64 register class, so "
+                                  "the float would be a silent miscompile\n"
+                                  "  = help: declare the field's function type, "
+                                  "e.g. (fn [float] float)",
+                                  ctor->name, fi);
+                        return NULL;
+                    }
                     if (fa && fa->kind == EX_CLOSURE && fa->as.closure_.closure &&
                         fa->as.closure_.closure->n_captures > 0) {
                         diag_emit(DIAG_ERROR, fa->span,
@@ -5429,6 +5492,28 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                      * nullary constructors already are.  Only when a field
                      * fixed a parameter to a concrete type: with nothing
                      * concrete there is nothing to say, and the bare ADT stays. */
+                    /* generic-ctor-over-sig-tyvar-erased: every parameter
+                     * bound, some to the ENCLOSING signature's own type
+                     * variable -- `(Box x)` with `x : A` inside
+                     * `(defn f [A] ...)`.  That is as determined as a concrete
+                     * argument: the value is `(Box A)`, and each clone knows
+                     * what `A` is.  The bare-ADT fallback erased it, so in the
+                     * float spec `(.val (Box x))` read the erased layout's
+                     * int64 field and returned it by VALUE conversion (7.1's
+                     * bits printed as 4.61968e+18).  An unbound or foreign
+                     * tyvar still falls back, as before. */
+                    if (!all_bound && !e->in_construct_template) {
+                        bool sig_bound = true;
+                        for (uint8_t pi = 0; pi < ntp && sig_bound; pi++) {
+                            if (!have[pi] || targs[pi].kind == TY_UNKNOWN)
+                                sig_bound = false;
+                            else if (targs[pi].kind == TY_TYVAR &&
+                                     !(targs[pi].as.tyvar_.name &&
+                                       ng_tyvar_in_sig(e, targs[pi].as.tyvar_.name)))
+                                sig_bound = false;
+                        }
+                        if (sig_bound) all_bound = true;
+                    }
                     bool any_concrete = false;
                     for (uint8_t pi = 0; pi < ntp; pi++)
                         if (have[pi] && targs[pi].kind != TY_TYVAR &&
@@ -6797,11 +6882,19 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * result refines the thunk's tyvar-bearing result, unify the two result
          * types (`(PRes A)` vs `(PRes int)` -> `A = int`) and substitute so the
          * call's result type grounds. */
+        /* ...and when that result names only the ENCLOSING signature's own
+         * variables (`f : (fn [] A)` from `(mk x)`, `x : A`, where the thunk
+         * says `(fn [] B)`): those are as fixed as a concrete type in each
+         * instantiation.  Left as `B`, a callee tyvar the enclosing body
+         * cannot resolve, `(f)` fell back to the carrier `int`, and `(pair (f)
+         * 0)` minted `(Pair int int)` in every spec -- invalid C at a float
+         * (found by the type fuzzer's gbody crossing). */
         if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type &&
             call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
             fn_binding->type.kind == TY_FN &&
             fn_binding->type.as.fn.result_full_type &&
-            !call_type_has_named_tyvar(fn_binding->type.as.fn.result_full_type)) {
+            (!call_type_has_named_tyvar(fn_binding->type.as.fn.result_full_type) ||
+             call_type_tyvars_all_in_sig(e, fn_binding->type.as.fn.result_full_type))) {
             CallTypeBinding cbind[16];
             uint8_t n_cbind = 0;
             if (call_collect_type_bindings(fn_type.as.fn.result_full_type,
@@ -7911,6 +8004,22 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             /* Phase HKT §3: Allow passing a partially-applied type (TY_APP) where int64_t
              * is expected.  Partial type application values are opaque int64_t at runtime. */
             arg_ok = true;
+            /* committed-applied-arg-into-int: but not a GROUND by-value app
+             * (`(Option float)`, `(Pair float int)`) into a Turmeric-bodied
+             * callee whose parameter is a declared `int`.  That value is a real
+             * C aggregate, not an int64 word; the call boxed it and the callee
+             * read the box's ADDRESS as its integer -- `(f (some 7.1))` on
+             * `[o : int]` printed 140721223092080, in both engines.  An inline-C
+             * callee's `:int` is a deliberate erasure (noted below), and a
+             * forward-declared callee's `int` may be a placeholder for a compound
+             * parameter (no elaborated param yet), so both stay accepted. */
+            uint32_t fpi = fn_binding->closure_fn_binding ? i + 1 : i;
+            const FnDef *sfd = fn_binding->source_fn_def;
+            if (!fn_binding->body_is_inline_c && sfd && sfd->params &&
+                fpi < sfd->n_params && sfd->params[fpi] &&
+                sfd->params[fpi]->type.kind == TY_INT &&
+                return_type_applied_scalar_conflict(NULL, TY_INT, args[i]->type))
+                arg_ok = false;
         }
         /* stdlib-region-store-hooks-unswept: a typed node handed to an inline-C
          * callee's erased `:int` parameter is an ERASURE, exactly as `(:: x :int)`
@@ -7999,8 +8108,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 call_collect_forall_outer_bindings(
                     expected_full, args[i]->type, type_bindings, &n_type_bindings);
             } else if (expected_full && call_type_has_named_tyvar(expected_full)) {
-                arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
-                                                    type_bindings, &n_type_bindings);
+                {
+                    const Elab *saved_cb_elab = g_call_cb_elab;
+                    g_call_cb_elab = e;
+                    arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
+                                                        type_bindings, &n_type_bindings);
+                    g_call_cb_elab = saved_cb_elab;
+                }
                 /* nullary-generic-call-under-tyvar-expectation: `(wrap 3
                  * (box-nil))` against `[v : A b : (Box A)]`, or `(make-struct
                  * W 8 (none))` against `(opt (Option A))`.  Arg 1 bound
@@ -9746,8 +9860,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * forwarded element type is the TRUE pushed type (float/bool/cstr),
              * not the int64 carrier -- otherwise `(Vec float)` is mis-resolved to
              * `(Vec int)` and the next element conflicts. */
+            /* Not through the TYVAR wrapper (generic-spec-carrier-crossings):
+             * its TYPE is the true one -- the enclosing signature's `A` -- and
+             * the call under it is the carrier `int`.  Peeling it pinned
+             * `(let [w (vec-new)] (vec-push! w (vec-get v 0)) ...)` to
+             * `(Vec int)`, which retyped the generic's result `int` and lost
+             * the function-value dispatch at `A := (fn ...)` (a thin call of
+             * a fat handle: SIGSEGV). */
             Expr *ae = args[i];
-            while (ae && ae->kind == EX_REINTERPRET) ae = ae->as.reinterpret_.expr;
+            while (ae && ae->kind == EX_REINTERPRET &&
+                   ae->as.reinterpret_.target_kind != TY_TYVAR)
+                ae = ae->as.reinterpret_.expr;
             Type at = ae ? ae->type : args[i]->type;
             if (at.kind != TY_UNKNOWN && !call_type_has_named_tyvar(&at)) {
                 uint8_t dummy;
@@ -10353,6 +10476,34 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         Expr *asc = expr_new(e->arena, EX_ASCRIBE, call_result_type, call->span);
         asc->as.ascribe_.inner = out;
         return asc;
+    }
+    if (wrap_generic_result && result_type.kind == TY_TYVAR &&
+        result_type.as.tyvar_.name &&
+        ng_tyvar_in_sig(e, result_type.as.tyvar_.name)) {
+        /* generic-call-result-in-generic-collapses-to-int: the result is the
+         * ENCLOSING signature's own type variable -- `(vec-get v 0)` inside
+         * `(defn first-of [A] [v : (Vec A)] : A ...)`.  The size-keyed wrap
+         * below cannot size a tyvar and silently dropped itself, so the call
+         * stayed typed `int` in EVERY position, and everything downstream
+         * inferred from that `int`: `(Box (vec-get v 0))` minted `Box__int`
+         * in the float spec (7.1's bits printed as 4.61968e+18), `(some ...)`
+         * matched as `Option__int` (invalid C), and a bare tail returned the
+         * carrier word into a `double` return by VALUE conversion.
+         *
+         * Wrap it in the reinterpret typed `A` that the `let` position has
+         * used since let-bound-generic-call-result-in-generic-truncates
+         * (`let_bridge_sig_tyvar_result`): the call node keeps its carrier
+         * `int`, the value it hands every consumer is typed `A`, and emit
+         * lowers that per clone (the EX_REINTERPRET tyvar arm: identity in
+         * the base, carrier->concrete in a spec when the call returned the
+         * carrier word).  One decision at the producer instead of one per
+         * consumer. */
+        Expr *r = expr_new(e->arena, EX_REINTERPRET, result_type, call->span);
+        r->as.reinterpret_.expr = out;
+        r->as.reinterpret_.source_kind = TY_INT;
+        r->as.reinterpret_.target_kind = TY_TYVAR;
+        r->as.reinterpret_.retain = false;
+        return r;
     }
     if (wrap_generic_result) {
         return call_wrap_reinterpret_owning(
@@ -11154,11 +11305,15 @@ static void dict_clone_forward_generic_calls(Elab *e, Expr *node,
             if (nc < 1 || nc > MAX_FN_CONSTRAINTS) return;
             if ((uint32_t)node->as.call_.n_args + nc > MAX_FN_ARITY) return;
             Binding *fwd[MAX_FN_CONSTRAINTS];
+            /* constrained-generic-relay-drops-dict: a kind-* constraint is
+             * forwarded too, but RECORDED on the node rather than rewritten
+             * (see below). */
+            bool all_hkt = true;
             for (uint8_t ci = 0; ci < nc; ci++) {
                 const TypeConstraint *con = &ccs->constraints[ci];
-                if (!con->typeclass || !con->tyvar || !con->tyvar->name ||
-                    !dcf_class_is_hkt(con->typeclass))
+                if (!con->typeclass || !con->tyvar || !con->tyvar->name)
                     return;
+                if (!dcf_class_is_hkt(con->typeclass)) all_hkt = false;
                 const Type *bt = NULL;
                 for (uint8_t bi = 0; bi < node->as.call_.n_abi_bindings; bi++) {
                     const AbiTypeBinding *ab = &node->as.call_.abi_bindings[bi];
@@ -11191,6 +11346,24 @@ static void dict_clone_forward_generic_calls(Elab *e, Expr *node,
                 clone = make_dict_clone(e, fb, node->span);
             }
             if (!clone) return;
+            if (!all_hkt) {
+                /* constrained-generic-relay-drops-dict: `(defn ru [a] [(R a)]
+                 * [v : a] : a (ri v))` -- ru's dict clone called ri's carrier
+                 * BASE, whose `(rm x)` resolves to a representative instance,
+                 * so a rank-2 `(use ru w)` ran the wrong instance on `w`.  The
+                 * HKT rewrite below replaces the node, which every clone of
+                 * the caller shares; a kind-* generic also has CONCRETE specs
+                 * emitted from this body, where the dict params do not exist.
+                 * So record the forward and let the emitter apply it only
+                 * inside a dict clone that has these params. */
+                Binding **fp = (Binding **)arena_alloc(e->arena,
+                                                       nc * sizeof(Binding *));
+                for (uint8_t ci = 0; ci < nc; ci++) fp[ci] = fwd[ci];
+                node->as.call_.dict_fwd_clone = clone;
+                node->as.call_.dict_fwd_params = fp;
+                node->as.call_.dict_fwd_n = nc;
+                return;
+            }
             uint32_t na = node->as.call_.n_args;
             Expr **nargs = (Expr **)arena_alloc(e->arena,
                                                 (na + nc) * sizeof(Expr *));

@@ -112,8 +112,8 @@
   if (!a && !b) return true;
   if (!a || !b) return false;
   /* CRU B-3: fst-cmp/snd-cmp are fat closure boxes; fat-dispatch via slot 0. */
-  bool fst_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)fst_cmp)[0])((void*)(intptr_t)fst_cmp, a->fst, b->fst);
-  bool snd_eq = ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)snd_cmp)[0])((void*)(intptr_t)snd_cmp, a->snd, b->snd);
+  bool fst_eq = ((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)fst_cmp)[0])((void*)(intptr_t)fst_cmp, a->fst, b->fst);
+  bool snd_eq = ((int64_t(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)snd_cmp)[0])((void*)(intptr_t)snd_cmp, a->snd, b->snd);
   return fst_eq && snd_eq;
   ```)
 ;;; Eq [Pair] -- element-wise equality using each component's Eq instance.

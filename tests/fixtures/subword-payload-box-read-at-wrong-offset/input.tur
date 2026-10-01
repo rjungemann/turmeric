@@ -1,0 +1,34 @@
+;; A boxed by-value monomorph read through the carrier layout.  The carrier
+;; `tur_adt_Option` keeps its int64 payload at offset 8; `tur_adt_Option__float32`
+;; padded its 4-byte payload to a word (so an 8-byte read stays in bounds) but
+;; left it at offset 4 -- after `int tag`, a union whose widest member is
+;; 4-aligned starts there.  So when a rank-2 dict slot handed back the boxed
+;; `(Option float32)` and the dict clone read it as the carrier, it read the
+;; pad: 3.25 came back as 0, in both engines.  An int64 union member now aligns
+;; the monomorph's union like the carrier's.  Found by the type fuzzer's
+;; rank-2 class crossing.
+
+(defclass C [a] (cm [x : a] : (Option a)))
+(definstance C [float32] (cm [x : float32] : (Option float32) (some x)))
+(definstance C [int16] (cm [x : int16] : (Option int16) (some x)))
+(definstance C [bool] (cm [x : bool] : (Option bool) (some x)))
+(definstance C [float] (cm [x : float] : (Option float) (some x)))
+(defn ri [a] [(C a)] [x : a] : a (match (cm x) (Some q) q (None) x))
+(defn ru32 [l (forall [a] [(C a)] (-> a a)) v : float32] : float32 (l v))
+(defn ru16 [l (forall [a] [(C a)] (-> a a)) v : int16] : int16 (l v))
+(defn rub [l (forall [a] [(C a)] (-> a a)) v : bool] : bool (l v))
+(defn ruf [l (forall [a] [(C a)] (-> a a)) v : float] : float (l v))
+
+(defclass D [a] (dm [x : a] : (Result a cstr)))
+(definstance D [float32] (dm [x : float32] : (Result float32 cstr) (ok x)))
+(defn rd [a] [(D a)] [x : a] : a (match (dm x) (Ok q) q (Err e) x))
+(defn rv [l (forall [a] [(D a)] (-> a a)) v : float32] : float32 (l v))
+
+(defn main [] : int
+  (println (ru32 ri (:: 3.25 float32)))           ; 3.25
+  (println (ru16 ri (:: 1234 int16)))             ; 1234
+  (println (if (rub ri true) "true" "false"))     ; true
+  (println (ruf ri 7.1))                          ; 7.1
+  (println (rv rd (:: 2.5 float32)))              ; 2.5
+  (println (ri (:: 3.25 float32)))                ; 3.25
+  0)

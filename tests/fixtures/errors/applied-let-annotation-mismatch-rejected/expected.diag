@@ -1,0 +1,1 @@
+let binding 'o': type annotation does not match initializer (annotated (Option int), got (Option float))

@@ -1,0 +1,69 @@
+;; A rank-2 argument constrained by a class whose method RETURNS the class
+;; variable. The dictionary-passing dispatch reads the result as the int64
+;; word, so a slot holding an instance method that returns a double, a float,
+;; a bool, a narrow int or a by-value ADT has to hand the word back
+;; converted. Before the fix the float lines printed denormals (the bits of
+;; 7.1 read as an integer, or an integer read as a double), the ADT line
+;; segfaulted or did not compile.
+
+(defclass Cf [a] (cf [x : a] : a))
+(definstance Cf [float] (cf [x : float] : float {x + 1.25}))
+(defn r2f [a] [(Cf a)] [x : a] : a (cf x))
+(defn use-f [l (forall [a] [(Cf a)] (-> a a)) v : float] : float (l v))
+
+(defclass Cf32 [a] (cf32 [x : a] : a))
+(definstance Cf32 [float32] (cf32 [x : float32] : float32 x))
+(defn r2f32 [a] [(Cf32 a)] [x : a] : a (cf32 x))
+(defn use-f32 [l (forall [a] [(Cf32 a)] (-> a a)) v : float32] : float32 (l v))
+
+(defclass Cb [a] (cb [x : a] : a))
+(definstance Cb [bool] (cb [x : bool] : bool (not x)))
+(defn r2b [a] [(Cb a)] [x : a] : a (cb x))
+(defn use-b [l (forall [a] [(Cb a)] (-> a a)) v : bool] : bool (l v))
+
+(defclass Cs [a] (cs [x : a] : a))
+(definstance Cs [cstr] (cs [x : cstr] : cstr x))
+(defn r2s [a] [(Cs a)] [x : a] : a (cs x))
+(defn use-s [l (forall [a] [(Cs a)] (-> a a)) v : cstr] : cstr (l v))
+
+(defclass Ci16 [a] (ci16 [x : a] : a))
+(definstance Ci16 [int16] (ci16 [x : int16] : int16 x))
+(defn r2i16 [a] [(Ci16 a)] [x : a] : a (ci16 x))
+(defn use-i16 [l (forall [a] [(Ci16 a)] (-> a a)) v : int16] : int16 (l v))
+
+;; A by-value ADT result, one instance and two instances.
+(defdata W (Wc :int))
+(defn wv [v : W] : int (match v (Wc x) x))
+
+(defclass Rw [a] (rw [x : a] : a))
+(definstance Rw [W] (rw [x : W] : W x))
+(defn r2w [a] [(Rw a)] [x : a] : a (rw x))
+(defn use-w [l (forall [a] [(Rw a)] (-> a a)) v : W] : W (l v))
+
+(defclass Rw2 [a] (rw2 [x : a] : a))
+(definstance Rw2 [W] (rw2 [x : W] : W x))
+(definstance Rw2 [int] (rw2 [x : int] : int {x + 1}))
+(defn r2w2 [a] [(Rw2 a)] [x : a] : a (rw2 x))
+(defn use-w2 [l (forall [a] [(Rw2 a)] (-> a a)) v : W] : W (l v))
+(defn use-w2i [l (forall [a] [(Rw2 a)] (-> a a)) v : int] : int (l v))
+
+;; A zero-parameter method whose result is the class variable.
+(defclass Dflt [a] (dflt [] : a))
+(definstance Dflt [float] (dflt [] : float 7.1))
+(defn get-dflt [] : float (:: (dflt) float))
+
+(defn main [] : int
+  (println (use-f r2f 7.1))
+  (println (r2f 7.1))
+  (println (use-f32 r2f32 (:: 7.1 float32)))
+  (println (r2f32 (:: 7.1 float32)))
+  (println (if (use-b r2b false) "true" "false"))
+  (println (if (r2b true) "true" "false"))
+  (println (use-s r2s "seven"))
+  (println (use-i16 r2i16 (:: 1234 int16)))
+  (println (wv (use-w r2w (Wc 19))))
+  (println (wv (r2w (Wc 23))))
+  (println (wv (use-w2 r2w2 (Wc 29))))
+  (println (use-w2i r2w2 30))
+  (println (get-dflt))
+  0)

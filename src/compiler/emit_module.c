@@ -319,10 +319,15 @@ static bool inline_c_emit_block_deduped(Buf *buf, InlineCDedup *d,
     bool any_emitted = false;
     for (uint32_t i = 0; i < n; i++) {
         if (inline_c_dedup_seen(d, p + starts[i], lens[i])) continue;
+        /* Hand-written file-scope C: bracketed (once per block) for the
+         * emitted-C checks (tests/check-emitted-float-conversions.py), which
+         * police emitter decisions, not code an author wrote on purpose. */
+        if (!any_emitted) buf_puts(buf, "/* tur:inline-c-begin */\n");
         buf_write(buf, p + starts[i], lens[i]);
         buf_putc(buf, '\n');
         any_emitted = true;
     }
+    if (any_emitted) buf_puts(buf, "/* tur:inline-c-end */\n");
     free(starts);
     free(lens);
     return any_emitted;
@@ -819,6 +824,19 @@ static int64_t tur_any_id_hash(const char *key) {
 
 int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     Type r = ctx ? emit_resolve_type(ctx, t) : t;
+    /* A still-unresolved type variable has no runtime identity.  Its bare
+     * TypeKind (TY_TYVAR) used to go out as the tag, which no consumer
+     * understands; the reserved tag makes TUR_TAG trap instead (see the
+     * TUR_ANY_UNRESOLVED_TAG note in emit_closure_fat_runtime). */
+    if (r.kind == TY_TYVAR) return -1;   /* TUR_ANY_UNRESOLVED_TAG */
+    /* A float32 rides an `any` as a FLOAT: its value promoted to double
+     * (exact), under the float tag -- which is how the interpreter holds it
+     * (one float kind), so `type-of`, `is?`, `cast` and the dynamic operators
+     * agree on both back ends.  The bare TY_FLOAT32 tag was stored as
+     * `(int64_t)(intptr_t)f` -- a VALUE conversion, 2.5 -> 2 -- and named
+     * nothing `type-of` knew ("unknown").  Found by
+     * tests/check-emitted-float-conversions.py on its first corpus run. */
+    if (r.kind == TY_FLOAT32 || r.kind == TY_FLOAT64) return (int64_t)TY_FLOAT;
     AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
     bool named = (r.kind == TY_ADT && r.as.adt_.def) || app_def != NULL;
     /* any-fn-tag-does-not-discriminate-signatures: a FUNCTION type is interned
@@ -1602,6 +1620,173 @@ const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type) {
     return name;
 }
 
+/* fnsan-variadic-rest-slot: the fat-box shim for a VARIADIC function.  Its
+ * rest slot is the cons-chain POINTER: callers pass it as the int64 word (the
+ * thunk / TUR_APPLY spelling every fat call site uses), while the definition
+ * now takes it typed -- `tur_tagged_t r7rs_hylist(tur_adt_Cons__any *)`.  The
+ * typed and generic shims cast the callee to `R (*)(..., int64_t)`, an
+ * indirect call through the wrong function type (a -fsanitize=function trap,
+ * a call_indirect trap on WASM).  This shim keeps slot 0's word spelling and
+ * casts the rest word to `rest_c` for the forwarding call.  Fixed parameters
+ * must be scalars or pointers (anything else declines, keeping today's shim).
+ * The name is caller-owned. */
+/* fnsan-poly-carrier-from-typed-thunk: a fat closure packed into the uniform
+ * `tur_poly_fn_t` carrier is called through `int64_t (*)(void *, int64_t...)`,
+ * but its slot 0 is the lambda's thunk at its OWN C signature -- `const char *
+ * __fn_31(void *, int64_t)` for `(fn [x : a] : cstr tag)`.  Reading slot 0
+ * straight into the carrier is an indirect call through the wrong function
+ * type (a -fsanitize=function trap, a call_indirect trap on WASM; ABI-benign
+ * on SysV only because a pointer and an int64 share a register).  This adapter
+ * is the carrier's fn: it converts each word argument to the thunk's parameter
+ * type, calls slot 0 with the thunk's real type, and returns the result as the
+ * word (a pointer through intptr_t, a float kind as its bits).  Returns NULL
+ * when no adapter is needed or a position is an aggregate (the spill shims own
+ * those).  `rc` / `pc` are C spellings; the name is caller-owned. */
+static bool word_adapter_scalar_ok(const char *c) {
+    if (!c || !*c) return false;
+    size_t L = strlen(c);
+    if (c[L - 1] == '*') return true;
+    return strcmp(c, "int64_t") == 0 || strcmp(c, "double") == 0 ||
+           strcmp(c, "float") == 0 || strcmp(c, "bool") == 0 ||
+           strcmp(c, "int8_t") == 0 || strcmp(c, "int16_t") == 0 ||
+           strcmp(c, "int32_t") == 0 || strcmp(c, "uint8_t") == 0 ||
+           strcmp(c, "uint16_t") == 0 || strcmp(c, "uint32_t") == 0 ||
+           strcmp(c, "uint64_t") == 0;
+}
+char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,
+                                 const char **pc, uint8_t n, bool bare) {
+    if (!ctx || !rc) return NULL;
+    bool need = strcmp(rc, "int64_t") != 0;
+    if (!word_adapter_scalar_ok(rc)) return NULL;
+    for (uint8_t i = 0; i < n; i++) {
+        if (!word_adapter_scalar_ok(pc[i])) return NULL;
+        if (strcmp(pc[i], "int64_t") != 0) need = true;
+    }
+    if (!need) return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, bare ? "__tur_bare2word_" : "__tur_fat2word_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc[i]);
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint8_t i = 0; i < n; i++) buf_printf(target, ", int64_t a%u", (unsigned)i);
+    buf_puts(target, ") {\n");
+    for (uint8_t i = 0; i < n; i++) {
+        const char *c = pc[i];
+        size_t L = strlen(c);
+        if (c[L - 1] == '*')
+            buf_printf(target, "    %s p%u = (%s)(intptr_t)a%u;\n", c, (unsigned)i, c, (unsigned)i);
+        else if (strcmp(c, "double") == 0)
+            buf_printf(target, "    double p%u = ((union { int64_t i; double d; }){ .i = a%u }).d;\n",
+                       (unsigned)i, (unsigned)i);
+        else if (strcmp(c, "float") == 0)
+            buf_printf(target, "    float p%u = ((union { uint32_t u; float f; }){ .u = (uint32_t)a%u }).f;\n",
+                       (unsigned)i, (unsigned)i);
+        else
+            buf_printf(target, "    %s p%u = (%s)a%u;\n", c, (unsigned)i, c, (unsigned)i);
+    }
+    if (bare) {
+        /* A BARE function in slot 1 (an EX_FN_TO_FAT box): no env argument. */
+        buf_printf(target, "    %s r = ((%s (*)(", rc, rc);
+        if (n == 0) buf_puts(target, "void");
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, i ? ", %s" : "%s", pc[i]);
+        buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, i ? ", p%u" : "p%u", (unsigned)i);
+        buf_puts(target, ");\n");
+    } else {
+        buf_printf(target, "    %s r = ((%s (*)(void *", rc, rc);
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, ", %s", pc[i]);
+        buf_puts(target, "))(intptr_t)((int64_t *)__e)[0])(__e");
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, ", p%u", (unsigned)i);
+        buf_puts(target, ");\n");
+    }
+    size_t RL = strlen(rc);
+    if (rc[RL - 1] == '*')
+        buf_puts(target, "    return (int64_t)(intptr_t)r;\n}\n");
+    else if (strcmp(rc, "double") == 0)
+        buf_puts(target, "    return ((union { double d; int64_t i; }){ .d = r }).i;\n}\n");
+    else if (strcmp(rc, "float") == 0)
+        buf_puts(target, "    return (int64_t)((union { float f; uint32_t u; }){ .f = r }).u;\n}\n");
+    else
+        buf_puts(target, "    return (int64_t)r;\n}\n");
+    return name;
+}
+
+char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
+                              const char **pc, uint8_t n) {
+    return ensure_fat_word_adapter_ex(ctx, rc, pc, n, false);
+}
+
+char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
+                                   Type *param_types, uint8_t n_params,
+                                   const char *rest_c) {
+    if (!ctx || n_params == 0 || !rest_c || !*rest_c) return NULL;
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        if (type_is_b4box_closure_slot(param_types[i])) return NULL;
+    const char *rc = type_c_name(result_type);
+    if (!rc || !*rc) return NULL;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    const char *slot_rc = has_ret ? thunk_result_slot_c_name(result_type) : "void";
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatshim_var_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint32_t i = 0; i + 1 < n_params; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, type_c_name(param_types[i]));
+    }
+    buf_putc(&nb, '_');
+    append_sanitized_c_token(&nb, rest_c);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    bool widen = has_ret && strcmp(slot_rc, rc) != 0;
+    buf_printf(target, "static %s %s(void *__e", slot_rc, name);
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+    buf_printf(target, ", int64_t a%u) {\n    ", (unsigned)(n_params - 1));
+    if (has_ret) buf_puts(target, widen ? "return (int64_t)(" : "return ");
+    buf_printf(target, "((%s (*)(", rc);
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        buf_printf(target, "%s, ", type_c_name(param_types[i]));
+    buf_printf(target, "%s))(intptr_t)((int64_t *)__e)[1])(", rest_c);
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        buf_printf(target, "a%u, ", (unsigned)i);
+    buf_printf(target, "(%s)(intptr_t)a%u)", rest_c, (unsigned)(n_params - 1));
+    buf_puts(target, widen ? ");\n}\n" : ";\n}\n");
+    return name;
+}
+
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params) {
     return ensure_typed_fatshim_ex(ctx, result_type, param_types, n_params, false);
@@ -1871,6 +2056,25 @@ char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
  * a typed consumer untouched.  Results other than a b4box aggregate or a plain
  * int64 carrier decline too -- a `double` result would need a conversion here,
  * not a reinterpret, and no caller has asked for one. */
+/* The gate ensure_carrier_fatshim applies, as a question: does a boxing site
+ * with this (resolved) signature get the CARRIER shim -- slot 0 spelled
+ * `int64_t (*)(void *, int64_t...)`, a wide result boxed?  The fat-call
+ * emitter asks it so the consumer reads slot 0 the way the producer filled it
+ * (generic-hof-option-result-read-by-value). */
+bool carrier_fatshim_applies(Type result_type, const Type *param_types,
+                             uint8_t n_params) {
+    bool any_b4box_param = false;
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
+            return false;
+        if (type_is_b4box_closure_slot(param_types[i])) any_b4box_param = true;
+    }
+    if (!any_b4box_param) return false;
+    if (type_is_b4box_closure_slot(result_type)) return true;
+    return thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/false) &&
+           strcmp(type_c_name(result_type), "int64_t") == 0;
+}
+
 char *ensure_carrier_fatshim(EmitCtx *ctx,
                              Type result_type, Type *param_types, uint8_t n_params) {
     if (!ctx) return NULL;
@@ -3175,6 +3379,7 @@ static const Binding *cm_find_g_binding(const Expr *e, const Binding *lensb) {
             return NULL;
         }
         case EX_RETURN:  return cm_find_g_binding(e->as.return_.value, lensb);
+        case EX_REINTERPRET: return cm_find_g_binding(e->as.reinterpret_.expr, lensb);
         case EX_ASCRIBE: return cm_find_g_binding(e->as.ascribe_.inner, lensb);
         case EX_MATCH: {
             const Binding *r = cm_find_g_binding(e->as.match_.scrutinee, lensb);
@@ -3224,6 +3429,8 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
         }
         case EX_ASCRIBE:
             return emit_find_passed_spec_closure(e->as.ascribe_.inner, bindings, n_bindings, arena);
+        case EX_REINTERPRET:
+            return emit_find_passed_spec_closure(e->as.reinterpret_.expr, bindings, n_bindings, arena);
         case EX_POLY_WRAP:
             return emit_find_passed_spec_closure(e->as.poly_wrap_.inner, bindings, n_bindings, arena);
         case EX_FN_TO_FAT:
@@ -5091,6 +5298,27 @@ static bool type_phantom_hides_aggregate(const Type *t) {
     return false;
 }
 
+/* Does `t` have a leaf of kind `k` anywhere in its application spine? */
+static bool type_mentions_kind(const Type *t, TypeKind k) {
+    if (!t) return false;
+    if (t->kind == k) return true;
+    if (t->kind == TY_APP)
+        return type_mentions_kind(t->as.app.fn, k) ||
+               type_mentions_kind(t->as.app.arg, k);
+    return false;
+}
+
+/* construct-in-spec-takes-the-spec-result: is `c` the type `t` with zero or
+ * more subtrees collapsed to the carrier `int`? */
+static bool abi_type_is_int_collapse_of(const Type *c, const Type *t, int depth) {
+    if (!c || !t || depth > 32) return false;
+    if (c->kind == TY_INT) return true;
+    if (c->kind == TY_APP && t->kind == TY_APP)
+        return abi_type_is_int_collapse_of(c->as.app.fn, t->as.app.fn, depth + 1) &&
+               abi_type_is_int_collapse_of(c->as.app.arg, t->as.app.arg, depth + 1);
+    return type_eq(*c, *t) != 0;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -5752,10 +5980,22 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * `(P G)` binding a `tur_adt_P__int *`
                  * (phantom-parametric-ctor-inferred-from-sibling). */
                 const Expr *ae = call->as.call_.args[i];
-                while (ae && ae->kind == EX_REINTERPRET && ae->as.reinterpret_.expr)
+                /* ...and never a reinterpret typed as the enclosing generic's
+                 * own tyvar: that value IS an `A`, and the carrier `int` under
+                 * it is the wrapped call's ABI, not its type.  Pinning from it
+                 * minted a by-value `(Option int)` spec in a carrier base
+                 * whose sibling calls stay on the carrier. */
+                while (ae && ae->kind == EX_REINTERPRET && ae->as.reinterpret_.expr &&
+                       ae->as.reinterpret_.target_kind != TY_TYVAR)
                     ae = ae->as.reinterpret_.expr;
                 if (!ae) continue;
                 Type at = ae->type;
+                /* The tyvar reinterpret pins what `A` IS in the clone being
+                 * scanned: concrete inside a spec (`int` in `over`'s), still a
+                 * tyvar in a carrier base -- which the checks below skip. */
+                if (ae->kind == EX_REINTERPRET &&
+                    ae->as.reinterpret_.target_kind == TY_TYVAR)
+                    at = emit_resolve_type(ctx, ae->type);
                 if (at.kind == TY_UNKNOWN || at.kind == TY_TYVAR ||
                     at.kind == TY_NIL || at.kind == TY_NEVER) continue;
                 if (emit_abi_type_has_any_tyvar(&at)) continue;
@@ -5887,6 +6127,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     break;
                 }
             }
+            /* generic-call-result-in-generic-collapses-to-int: a bare-tyvar
+             * parameter bound to a type variable the CURRENT clone cannot
+             * resolve -- the enclosing generic's own `T` while its carrier base
+             * is scanned (`(pair (schan-recv-value c) ...)` in `schan-recv`) --
+             * is the carrier word there.  Spell it as the carrier; a spec
+             * minted for another parameter (`B -> (SChan R)`) must not carry
+             * an unresolved tyvar into its signature (the R3 routing gate). */
+            if (arg_types[i].kind == TY_TYVAR &&
+                emit_resolve_type(ctx, arg_types[i]).kind == TY_TYVAR)
+                arg_types[i] = emit_type_from_kind(TY_INT);
             if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
                 abi_changes = true;
             } else if (!type_eq(generic_arg, arg_types[i]) &&
@@ -6081,7 +6331,23 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
               type_is_byvalue_adt_product(recovered)) &&
              !type_is_heap_struct(recovered) && !type_is_heap_adt(recovered) &&
              rec_c && strcmp(rec_c, "int64_t") != 0);
-        if (recovered_byvalue) {
+        /* generic-hof-scalar-result-minted-on-the-carrier: the same collapse
+         * for a SCALAR the carrier does not hold by value -- a float, float32,
+         * bool or sub-word integer.  `(mx-app f x)` at A := float minted
+         * `mx_app__spec__int64_t_int64_t_double`, a clone RETURNING the carrier;
+         * the CPS lookup (correctly wanting `double`) then matched nothing and
+         * called the base, reading the result by value conversion (0).  A spec
+         * that returns the concrete scalar is what every consumer bridges
+         * against: the EX_REINTERPRET arm skips its bit-cast when the matched
+         * spec already returns `e->type` (KB-015), and the tyvar arm passes a
+         * temp recorded as the concrete type through. */
+        bool recovered_scalar =
+            (recovered.kind == TY_FLOAT || recovered.kind == TY_FLOAT64 ||
+             recovered.kind == TY_FLOAT32 || recovered.kind == TY_BOOL ||
+             recovered.kind == TY_INT8 || recovered.kind == TY_INT16 ||
+             recovered.kind == TY_INT32 || recovered.kind == TY_UINT8 ||
+             recovered.kind == TY_UINT16 || recovered.kind == TY_UINT32);
+        if (recovered_byvalue || recovered_scalar) {
             result_type = recovered;
         }
     }
@@ -6415,7 +6681,76 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             construct_recovered_byvalue = true;
             abi_changes = true;
         }
+        /* construct-in-spec-takes-the-spec-result: the family adoption below
+         * assumes a same-family construct inside a spec IS the spec's result.
+         * It need not be -- `(match (some x) ...)` inside a spec returning
+         * `(Option float)` (A := (Option float)) is `(Option (Option float))`,
+         * and adopting the spec's result minted `some` at A := float (invalid
+         * C).  The adoption exists for bindings that COLLAPSED the element to
+         * the carrier `int`; when the call's own (composed) bindings already
+         * name a concrete result with no `int` leaf that could be such a
+         * collapse, they are the answer. */
+        bool construct_bindings_decide = false;
         if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
+            ctx->current_abi_specialization && bindings && n_bindings > 0) {
+            Type rb = emit_abi_instantiate_type(&generic_result, bindings,
+                                                n_bindings, ctx->type_arena);
+            rb = emit_resolve_type(ctx, rb);
+            construct_bindings_decide =
+                rb.kind == TY_APP && type_app_is_concrete_adt(&rb) &&
+                !emit_abi_type_has_concrete_named_tyvar(&rb) &&
+                !type_mentions_kind(&rb, TY_INT);
+        }
+        /* ...and an `int` leaf does not license the adoption when the
+         * adoption CONTRADICTS the construct's own arguments.  `(some x)`
+         * with `x : (Option int)` inside a spec returning `(Option int)`
+         * (A := (Option int)): adopting the spec result says `some`'s element
+         * is `int`, while its argument is an `(Option int)` -- the adoption
+         * peeled a layer and minted `some` at A := int (invalid C; `(Option
+         * float)` escaped only because its leaf is not `int`).  An argument
+         * can be the COLLAPSED side (an `int` carrier where the adoption says
+         * `(Option int)`) -- that is what the adoption exists for -- but never
+         * the side with more structure. */
+        if (!construct_bindings_decide && !construct_recovered_byvalue &&
+            body_is_construct && !borrow_path && fd &&
+            ctx->current_abi_specialization && call->kind == EX_CALL) {
+            Type sret = emit_resolve_type(ctx,
+                ctx->current_abi_specialization->result_type);
+            Type rh = sret, ch = generic_result;
+            while (rh.kind == TY_APP && rh.as.app.fn) rh = *rh.as.app.fn;
+            while (ch.kind == TY_APP && ch.as.app.fn) ch = *ch.as.app.fn;
+            if (sret.kind == TY_APP && rh.kind == TY_ADT && ch.kind == TY_ADT &&
+                rh.as.adt_.def && rh.as.adt_.def == ch.as.adt_.def) {
+                AbiTypeBinding ub[ABI_TYPE_BINDINGS_MAX]; uint8_t un = 0;
+                emit_abi_unify_collect(&generic_result, &sret, ub, &un,
+                                       ABI_TYPE_BINDINGS_MAX);
+                for (uint32_t ai = 0; un > 0 && ai < call->as.call_.n_args &&
+                                      ai < fd->n_params; ai++) {
+                    const Type *ef = (fn_binding->type.as.fn.arg_full_types &&
+                                      fn_binding->type.as.fn.arg_full_types[ai])
+                        ? fn_binding->type.as.fn.arg_full_types[ai]
+                        : &fd->params[ai]->type;
+                    Type a = emit_abi_instantiate_type(ef, ub, un, ctx->type_arena);
+                    const Expr *ae = call->as.call_.args[ai];
+                    while (ae && ae->kind == EX_ASCRIBE) ae = ae->as.ascribe_.inner;
+                    if (!ae) continue;
+                    Type actual = emit_resolve_type(ctx, ae->type);
+                    if (a.kind == TY_TYVAR || a.kind == TY_UNKNOWN ||
+                        actual.kind == TY_TYVAR || actual.kind == TY_UNKNOWN ||
+                        emit_abi_type_has_concrete_named_tyvar(&a) ||
+                        emit_abi_type_has_concrete_named_tyvar(&actual))
+                        continue;
+                    if (!type_eq(a, actual) &&
+                        !abi_type_is_int_collapse_of(&actual, &a, 0) &&
+                        abi_type_is_int_collapse_of(&a, &actual, 0)) {
+                        construct_bindings_decide = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
+            !construct_bindings_decide &&
             ctx->current_abi_specialization &&
             ctx->current_abi_specialization->fn) {
             Type spec_ret = ctx->current_abi_specialization->result_type;
@@ -7694,6 +8029,16 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         }
         case EX_REINTERPRET:
+            /* A reinterpret typed as the enclosing generic's own tyvar
+             * (elab_call.c, generic-call-result-in-generic-collapses-to-int)
+             * says nothing about the call's instantiation -- it is resolved
+             * per clone at emit.  Scan the call exactly as the bare call it
+             * wraps; passing `A` as a result override below would register
+             * the call against an unresolved tyvar. */
+            if (e->as.reinterpret_.target_kind == TY_TYVAR) {
+                emit_abi_scan_expr(ctx, e->as.reinterpret_.expr, items, n_items);
+                break;
+            }
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
                 const Expr *rc = e->as.reinterpret_.expr;
                 uint32_t before = ctx->n_specialized_calls;
@@ -7810,6 +8155,26 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         case EX_CATCH_PANIC_OF:
             emit_abi_scan_expr(ctx, e->as.catch_panic_of_.thunk, items, n_items);
+            break;
+        /* generator-in-generic: the calls inside a generator body were never
+         * registered, so a spec's generator called the CARRIER base of every
+         * generic it used (`ok_hyval` on a by-value Result -- and, the base
+         * never being live, a link error). */
+        case EX_GEN:
+            if (e->as.gen_.def)
+                emit_abi_scan_expr(ctx, e->as.gen_.def->body, items, n_items);
+            break;
+        case EX_YIELD:
+            emit_abi_scan_expr(ctx, e->as.yield_.value, items, n_items);
+            break;
+        case EX_GEN_NEXT:
+            emit_abi_scan_expr(ctx, e->as.gen_next_.gen_expr, items, n_items);
+            break;
+        case EX_GEN_UNWRAP:
+            emit_abi_scan_expr(ctx, e->as.gen_unwrap_.ptr_expr, items, n_items);
+            break;
+        case EX_GEN_DONE:
+            emit_abi_scan_expr(ctx, e->as.gen_done_.gen_expr, items, n_items);
             break;
         default:
             break;
@@ -8819,6 +9184,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * items, so the forward-decl pass over `items` never records them. */
         emit_sig_record_param_ctype(spec->clone_name, i, spec->n_args, pc);
     }
+    if (spec->n_args == 0) buf_puts(out, "void");   /* prototyped, not `()` */
     buf_puts(out, ");\n");
     emit_sig_record_ret_ctype(spec->clone_name, spec->n_args, _spec_ret);
     free(_spec_ret);
@@ -9525,6 +9891,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 }
             }
         }
+        /* A zero-parameter prototype is `(void)`: `f()` is an UNPROTOTYPED
+         * function type in C99, which clang's -fsanitize=function reports
+         * against every `(T (*)(void))` call of it -- noise that buried the
+         * real mismatched-call findings (tests/fuzz_arm.py). */
+        if (fd->n_params == 0) buf_puts(out, "void");
         buf_puts(out, ");\n");
         emit_sig_record_ret_ctype(fn_name, fd->n_params, _ret_ty);
         free(_ret_ty);
@@ -10150,6 +10521,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval || heap);
             buf_printf(out, "%s _%u", ctype, fi);
         }
+        if (ctor->n_fields == 0) buf_puts(out, "void");   /* prototyped, not `()` */
         buf_printf(out, ") {\n");
         if (heap) {
             /* malloc the by-value header, store fields inline, return the typed
@@ -10364,7 +10736,29 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     }
     buf_puts(out, "/* IT4: tagged union runtime representation */\n");
     buf_puts(out, "typedef struct { int64_t tag; int64_t val; } tur_tagged_t;\n");
-    buf_puts(out, "#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
+    /* An `any` box whose tag names no concrete type -- the widen of a value
+     * whose type is still a type VARIABLE (erased-instance-body-tags-a-type-
+     * variable-widened-to-any: `TUR_TAG(36, ...)`, 36 being TY_TYVAR) -- is a
+     * box no consumer understands: `type-of` says "unknown", `is?` answers
+     * false and a program silently takes the wrong branch.  emit_any_type_id
+     * gives such a widen the reserved tag below, and TUR_TAG traps on it, so
+     * the failure is a loud internal error AT the widen instead of a wrong
+     * answer somewhere downstream.  Every other tag is a constant, so the
+     * test folds away (and C allows the call in the unevaluated arm of a
+     * constant initializer). */
+    /* A float<->integer conversion the program asked for (`as`).  One
+     * spelling, defined here, so the emitted-conversion check can separate it
+     * from an accidental value conversion (tests/check-emitted-float-
+     * conversions.py). */
+    buf_puts(out, "#define TUR_AS(T, x)    ((T)(x))\n");
+    buf_puts(out, "#define TUR_ANY_UNRESOLVED_TAG (-1)\n");
+    buf_puts(out, "static inline int64_t tur_any_unresolved_tag(void) {\n"
+                  "    fprintf(stderr, \"tur: internal error: a value was widened to `any` "
+                  "while its type was still an unresolved type variable -- the box would "
+                  "carry no usable type tag.  Please report this.\\n\");\n"
+                  "    abort();\n"
+                  "}\n");
+    buf_puts(out, "#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)((t) == TUR_ANY_UNRESOLVED_TAG ? tur_any_unresolved_tag() : (t)), (int64_t)(v)})\n");
     buf_puts(out, "#define TUR_UNTAG(x)    ((x).val)\n");
     buf_puts(out, "#define TUR_GETTAG(x)   ((x).tag)\n");
     /* Pointer accessors for tur_tagged_t*.  Inline-C that allocates tagged
@@ -11815,7 +12209,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "static inline double __tur_dyn_f(tur_tagged_t __v) {\n"
         "    if (TUR_GETTAG(__v) == TUR_DYNTAG_FLOAT)\n"
         "        return ((union { int64_t i; double d; }){.i = TUR_UNTAG(__v)}).d;\n"
-        "    return (double)TUR_UNTAG(__v);\n"
+        "    return TUR_AS(double, TUR_UNTAG(__v));   /* int payload widened on purpose */\n"
         "}\n");
     buf_puts(out,
         "static inline tur_tagged_t __tur_dyn_mkf(double __d) {\n"
@@ -16490,9 +16884,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        pthread_mutex_destroy(&ch->rc_mu); free(ch);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
+    /* emitted-c-indirect-calls-are-not-type-exact: session-spawn takes
+     * `^fat f : (fn [] nil)`, so slot 0 is a `void (*)(void *)` -- a nil
+     * thunk's typed fatshim or a lifted closure body.  Calling it as
+     * `int64_t (*)(void *)` read a return register nothing wrote. */
     buf_puts(out, "static void *tur_session_thread_wrapper(void *arg) {\n");
     buf_puts(out, "    int64_t *fat = (int64_t *)arg;\n");
-    buf_puts(out, "    int64_t (*thunk)(void *) = (int64_t (*)(void *))(intptr_t)fat[0];\n");
+    buf_puts(out, "    void (*thunk)(void *) = (void (*)(void *))(intptr_t)fat[0];\n");
     buf_puts(out, "    thunk(arg);\n");
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n");
@@ -16840,6 +17238,7 @@ static const Binding *vl_composed_adapter_binding(const Expr *body) {
     for (;;) {
         if (!e) return NULL;
         switch (e->kind) {
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr; continue;
             case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
             case EX_RETURN:  e = e->as.return_.value;  continue;
             case EX_LET:
@@ -16940,6 +17339,9 @@ static void emit_mark_byval_fn_field_closures(const Expr *e) {
         case EX_RETURN:
             emit_mark_byval_fn_field_closures(e->as.return_.value);
             return;
+        case EX_REINTERPRET:
+            emit_mark_byval_fn_field_closures(e->as.reinterpret_.expr);
+            break;
         case EX_ASCRIBE:
             emit_mark_byval_fn_field_closures(e->as.ascribe_.inner);
             return;
@@ -17620,6 +18022,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
                     buf_printf(&early_file, "%s _%u", ctype, fi);
                 }
+                if (ctor->n_fields == 0) buf_puts(&early_file, "void");
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
                     /* RM3 R2/R4 (docs/archive/regions-plan.md): the THIRD
@@ -18166,6 +18569,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 if (j > 0) buf_puts(&extern_decls, ", ");
                 buf_printf(&extern_decls, "%s", type_c_name(ec->param_types[j]));
             }
+            if (ec->n_params == 0) buf_puts(&extern_decls, "void");
             buf_puts(&extern_decls, ");\n");
             }
         } else if (e->kind == EX_DEFDYNAMIC) {
@@ -19100,6 +19504,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_cap_ctypes[i]);
     free(ctx.env_struct_cap_ctypes);
     free(ctx.env_struct_names);
+    for (uint32_t gi = 0; gi < ctx.n_emitted_gen_defs; gi++) free((void *)ctx.emitted_gen_defs[gi]);
+    free(ctx.emitted_gen_defs);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
      * closes, so only the backing arrays outlive emission. */
@@ -19962,6 +20368,7 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
                 if (j > 0) buf_puts(out, ", ");
                 buf_puts(out, type_c_name(ec->param_types[j]));
             }
+            if (ec->n_params == 0) buf_puts(out, "void");
             buf_puts(out, ");\n");
         } else if (e->kind == EX_DEF) {
             if (def_is_opaque_type_decl(e)) continue;   /* slice 5: type decl, no storage */
@@ -20426,6 +20833,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
                 if (j > 0) buf_puts(&file, ", ");
                 buf_puts(&file, type_c_name(ec->param_types[j]));
             }
+            if (ec->n_params == 0) buf_puts(&file, "void");
             buf_puts(&file, ");\n");
         } else if (e->kind == EX_INLINE_C) {
             /* Already emitted in Pass 1a above. */
@@ -20649,6 +21057,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_cap_ctypes[i]);
     free(ctx.env_struct_cap_ctypes);
     free(ctx.env_struct_names);
+    for (uint32_t gi = 0; gi < ctx.n_emitted_gen_defs; gi++) free((void *)ctx.emitted_gen_defs[gi]);
+    free(ctx.emitted_gen_defs);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
      * closes, so only the backing arrays outlive emission. */
@@ -20713,6 +21123,7 @@ static int emit_program_job(void *p) {
     EmitProgArgs *a = (EmitProgArgs *)p;
     emission_enter();
     int rc = emit_program_inner(a->out, a->program);
+    emit_write_inline_c_fns(a->out);
     emission_leave();
     return rc;
 }

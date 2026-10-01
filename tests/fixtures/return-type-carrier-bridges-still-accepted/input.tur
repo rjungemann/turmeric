@@ -14,11 +14,11 @@
 ;; a transparent int newtype IS its int64 payload
 (defn unhandle [h : Handle] : int h)
 
-;; a NON-heap parametric ADT return position has a crossing that grounds it and
-;; emits clean.  A :heap one (`(Cons int)`, `(Vec int)`) does not -- it lowers to
-;; a typed pointer, and that IS rejected; see
-;; tests/fixtures/errors/return-type-heap-app-vs-scalar/.
-(defn opt-carrier [o : (Option int)] : int o)
+;; (A by-value parametric ADT under a scalar return, `[o : (Option int)] : int
+;; o`, used to sit here as "accepted": it emitted clean only while nothing called
+;; it -- a call was "aggregate value used where an integer was expected".  It is
+;; rejected now; see tests/fixtures/errors/applied-param-returned-as-int-rejected/.
+;; A :heap one is rejected too: tests/fixtures/errors/return-type-heap-app-vs-scalar/.)
 
 ;; a generic defn may legitimately declare the carrier spelling
 (defn generic-carrier [A] [x : A] : int x)

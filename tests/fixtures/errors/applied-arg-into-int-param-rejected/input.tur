@@ -1,0 +1,6 @@
+;; A ground by-value applied argument into a Turmeric-bodied callee's declared
+;; `int` parameter.  The call boxed the Option and the callee read the box's
+;; ADDRESS as its integer: this printed 140721223092080, compiled and
+;; interpreted alike.
+(defn f [o : int] : int o)
+(defn main [] : int (println (f (some 7.1))) 0)

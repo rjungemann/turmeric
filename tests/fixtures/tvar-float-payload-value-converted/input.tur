@@ -1,0 +1,27 @@
+;; tvar-float-payload-value-converted -- every payload crossed into a TVar's
+;; `void *` slot through `(void*)(intptr_t)v`, a VALUE conversion for a float:
+;; `(tvar/new 7.1)` stored 7, `(tvar/cas t 7.4 ...)` against it SUCCEEDED
+;; (7 == 7), and reading it back printed 3.45846e-323.  The interpreter, which
+;; keeps the double, got every one right.  A float payload now rides the slot
+;; as its bits.  The interpreter half: a cstr read back through `(:: w cstr)`
+;; printed the string's address, and `(:: w float32)` value-converted the bits.
+;; Found by the type fuzzer's tvar seam (tests/type-fuzz-src.py), whose CAS-only
+;; oracle could not see it: every side truncated the same way.
+
+(defn main [] : int
+  (let [t (tvar/new 7.1)]
+    ;; 7.4 is not 7.1: this CAS must fail
+    (println (atomically (stm (tvar/cas t 7.4 3.25))))              ; false
+    (println (atomically (stm (tvar/cas t 7.1 3.25))))              ; true
+    (println (:: (atomically (stm (tvar/read t))) float))           ; 3.25
+    (atomically (stm (tvar/write t -4.25)))
+    (println (:: (atomically (stm (tvar/read t))) float))           ; -4.25
+    (println (:: (atomically (stm (tvar/swap t 2.5))) float))       ; -4.25
+    (println (:: (atomically (stm (tvar/read t))) float)))          ; 2.5
+  (let [b (tvar/new 17) c (tvar/new true) d (tvar/new "s-3")
+        f (tvar/new (:: 7.1 float32))]
+    (println (:: (atomically (stm (tvar/read b))) int))             ; 17
+    (println (:: (atomically (stm (tvar/read c))) bool))            ; true
+    (println (:: (atomically (stm (tvar/read d))) cstr))            ; s-3
+    (println (:: (atomically (stm (tvar/read f))) float32)))        ; 7.1
+  0)

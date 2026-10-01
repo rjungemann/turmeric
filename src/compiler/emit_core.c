@@ -371,6 +371,8 @@ static bool body_yields_thin_fn(const Expr *e) {
             return e->as.var.binding && e->as.var.binding->is_global &&
                    e->as.var.binding->type.kind == TY_FN &&
                    !e->as.var.binding->type.as.fn.boxed;
+        case EX_REINTERPRET:
+            return body_yields_thin_fn(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return body_yields_thin_fn(e->as.ascribe_.inner);
         case EX_DO:
@@ -779,6 +781,7 @@ static void ic_scan_expr(ICScan *sc, const Expr *e) {
                 ic_scan_expr(sc, arm->body);
             }
             return;
+        case EX_REINTERPRET: ic_scan_expr(sc, e->as.reinterpret_.expr); return;
         case EX_ASCRIBE: ic_scan_expr(sc, e->as.ascribe_.inner); return;
         case EX_CAST:    ic_scan_expr(sc, e->as.cast_.expr);     return;
         case EX_RETURN:  ic_scan_expr(sc, e->as.return_.value);  return;
@@ -1886,6 +1889,7 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             if (bc_expr_roots_at_b(e->as.get_field_.struct_expr, b))
                 return !bc_kind_can_alias(e->type.kind) || confined;
             return box_uses_confined(e->as.get_field_.struct_expr, b, true);
+        case EX_REINTERPRET: return box_uses_confined(e->as.reinterpret_.expr, b, confined);
         case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
         case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
         /* byvalue-recursive-shared-copies-leak: an rc clone takes a count on
@@ -3680,19 +3684,19 @@ static char *call_name_plain(EmitCtx *ctx, const Binding *b) {
 
 /* A row-kinded variable (`^&` rows) never changes the C ABI, exactly as
  * emit_abi_type_has_concrete_named_tyvar says; every other tyvar does. */
-static bool emit_type_mentions_tyvar(const Type *t) {
+bool emit_abi_type_is_open(const Type *t) {
     if (!t) return false;
     if (t->kind == TY_TYVAR) return t->hkt_kind != KIND_TYPEROW;
     if (t->kind == TY_APP)
-        return emit_type_mentions_tyvar(t->as.app.fn) ||
-               emit_type_mentions_tyvar(t->as.app.arg);
+        return emit_abi_type_is_open(t->as.app.fn) ||
+               emit_abi_type_is_open(t->as.app.arg);
     return false;
 }
 
 bool emit_expr_abstract_under_active_spec(EmitCtx *ctx, const Expr *e) {
     if (!ctx || !ctx->current_abi_specialization || !e) return false;
     Type rt = emit_resolve_type(ctx, e->type);
-    return emit_type_mentions_tyvar(&rt);
+    return emit_abi_type_is_open(&rt);
 }
 
 bool emit_call_abstract_under_active_spec(EmitCtx *ctx, const Expr *call) {
@@ -3702,6 +3706,63 @@ bool emit_call_abstract_under_active_spec(EmitCtx *ctx, const Expr *call) {
         if (emit_expr_abstract_under_active_spec(ctx, call->as.call_.args[ai]))
             return true;
     return false;
+}
+
+/* class-var-applied-result: does this call dispatch through a runtime dict
+ * slot that hands back the WORD (dict_slot_result_is_word_scalar)?  Then its
+ * C value is an int64 -- for an applied class result, the box the carrier
+ * spells `(Option A)` with -- and no consumer may treat it as a by-value
+ * aggregate to spill.  The dict source and slot are resolved exactly as
+ * emit_call_name resolves them below. */
+bool emit_call_dispatches_word_result(EmitCtx *ctx, const Expr *call) {
+    if (!ctx || !call || call->kind != EX_CALL || !call->as.call_.dict_arg ||
+        call->as.call_.dict_arg->kind != EX_DICT)
+        return false;
+    int ddk = emit_call_dict_param_dispatch_index(ctx, call);
+    int dek = ddk >= 0 ? -1 : emit_call_dict_env_dispatch_index(ctx, call);
+    const TypeClass *tc = ddk >= 0 ? ctx->dict_dispatch_classes[ddk]
+                        : dek >= 0 ? ctx->cur_dict_env_classes[dek] : NULL;
+    if (!tc) return false;
+    const char *mname = call->as.call_.dict_arg->as.dict_.method_name;
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        char mm[64];
+        tur_mangle_ident(tc->methods[i].name->name, mm, sizeof(mm));
+        if (strcmp(mm, mname) != 0) continue;
+        const TypeClassInstance *repr = call->as.call_.dict_arg->as.dict_.instance;
+        const FnDef *mimpl = (repr && i < repr->n_method_impls)
+            ? repr->method_impls[i] : NULL;
+        return dict_slot_result_is_word_scalar(tc, (int)i, mimpl, NULL);
+    }
+    return false;
+}
+
+/* constrained-generic-relay-borrows-sibling-clone: a call recorded only under
+ * a SIBLING outer spec -- `(ei v)` inside `eu`, minted `ei__spec__W` under
+ * `eu__spec__W` and nothing under `eu__spec__int` (no ABI change at int) --
+ * was routed to the sibling's clone by the fallback below, so `(eu 40)` called
+ * the W instance's spec on an int: a segfault, or with a payload that does not
+ * fault, the wrong instance's answer.  Borrow a sibling's clone only when its
+ * parameter C types are what this call's arguments resolve to here. */
+static bool cross_spec_clone_fits_call(EmitCtx *ctx, const Expr *call,
+                                       const char *clone_name) {
+    if (!ctx || !call || call->kind != EX_CALL || !clone_name) return true;
+    const EmitAbiSpecialization *sp = NULL;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations && !sp; i++)
+        if (ctx->abi_specializations[i].clone_name &&
+            strcmp(ctx->abi_specializations[i].clone_name, clone_name) == 0)
+            sp = &ctx->abi_specializations[i];
+    if (!sp || sp->n_args != call->as.call_.n_args) return true;
+    for (uint32_t ai = 0; ai < sp->n_args; ai++) {
+        const Expr *a = call->as.call_.args[ai];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (!a) continue;
+        Type at = emit_resolve_type(ctx, a->type);
+        if (emit_abi_type_is_open(&at) || at.kind == TY_UNKNOWN) continue;
+        const char *want = emit_type_c_name(ctx, emit_resolve_type(ctx, sp->arg_types[ai]));
+        const char *have = emit_type_c_name(ctx, at);
+        if (want && have && strcmp(want, have) != 0) return false;
+    }
+    return true;
 }
 
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
@@ -3775,6 +3836,9 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                 }
             }
             if (!ret_c) ret_c = emit_type_c_name(ctx, call->type);
+            /* dict-slot-classvar-scalar-result: the slot returns the word. */
+            if (dict_slot_result_is_word_scalar(tc, slot, mimpl, NULL))
+                ret_c = "int64_t";
             buf_printf(&b2, "((%s (*)(", ret_c);
             /* MB2 (constrained-hkt-forall-mode-b-plan): the dispatched signature
              * must mirror the dict field layout (emit_stmt.c) exactly -- a
@@ -3791,7 +3855,12 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                         buf_puts(&b2, "tur_poly_fn_t");
                     } else {
                         Type pt = mimpl->param_types[i];
-                        if (type_struct_pass_by_ptr(pt))
+                        if (dict_slot_param_is_word_scalar(tc, slot, mimpl, i))
+                            /* dict-slot-classvar-scalar-param: the slot holds
+                             * a word-taking wrapper for every instance whose
+                             * class-variable parameter is not the word. */
+                            buf_puts(&b2, "int64_t");
+                        else if (type_struct_pass_by_ptr(pt))
                             buf_printf(&b2, "const %s *", type_c_name(pt));
                         else if (emit_type_is_byvalue_adt(ctx, pt)) {
                             /* D8 piece 2 (forall-dict-byvalue-receiver): the
@@ -3900,7 +3969,9 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
              * match so it never routes a call to a spec-scoped clone with a
              * different return ABI (M2-completion primitive-payload construct). */
             if (active_outer != NULL && !saw && !construct_into_carrier &&
-                !abstract_here) {
+                !abstract_here &&
+                cross_spec_clone_fits_call(ctx, call,
+                                           ctx->specialized_call_names[i])) {
                 matched = ctx->specialized_call_names[i];
                 saw = true;
             }
@@ -6019,6 +6090,37 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         char *result = strdup(out.data);
         buf_free(&out);
         return result;
+    }
+
+    /* carrier-bridge-pointer-leaf-dereferenced: a cstr / ptr<void> / sym (and
+     * the int64 family) IS one carrier word -- the producer stores it with
+     * `(int64_t)(intptr_t)`, so the crossing is a cast both ways.  These kinds
+     * used to fall to the aggregate arms below: carrier->concrete read the
+     * word as a POINTER TO a cstr (`*(const char **)w`, a segfault on the
+     * first `(let [y (vec-get v 0)] y)` at A=cstr) and concrete->carrier
+     * spilled the pointer to a stack temp and passed the temp's ADDRESS.
+     * The M3 audit above already names these leaves "cross with no
+     * reinterpret"; this arm is what makes that true. */
+    /* A function value rides the carrier as its (fat-box or code) POINTER, so
+     * it is the same leaf: `(mx-id f)` at A := (fn [int] int) dereferenced the
+     * word as a boxed aggregate and called through garbage. */
+    bool fn_leaf = concrete_ty.kind == TY_FN && cname && strchr(cname, '*') != NULL;
+    switch (fn_leaf ? TY_PTR_VOID : concrete_ty.kind) {
+        case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
+        case TY_INT: case TY_INT64: case TY_UINT64: {
+            bool ptr = cname && strchr(cname, '*') != NULL;
+            if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+                buf_printf(&out, ptr ? "((%s)(intptr_t)(%s))" : "((%s)(%s))",
+                           cname ? cname : "int64_t", src_str);
+            else
+                buf_printf(&out, ptr ? "((int64_t)(intptr_t)(%s))"
+                                     : "((int64_t)(%s))", src_str);
+            free(src_str);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
+        default: break;
     }
 
     if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {

@@ -554,6 +554,11 @@ typedef struct EmitCtx {
     const char  *gen_var_name;           /* "__g" when inside _next function (NULL outside) */
     const char  *gen_struct_type;        /* struct type name when inside _next (NULL outside) */
     bool         gen_hdr_emitted;        /* true once __tur_gen_hdr_t typedef is in ctx->file */
+    /* generator-in-generic-emitted-per-clone: the GenDefs whose struct and
+     * functions are already out.  A generator is emitted ONCE, on the carrier
+     * representation, however many clones of its enclosing fn create it. */
+    const void **emitted_gen_defs;
+    uint32_t     n_emitted_gen_defs, cap_emitted_gen_defs;
     EmitAbiSpecialization *abi_specializations;
     uint32_t     n_abi_specializations;
     uint32_t     cap_abi_specializations;
@@ -648,6 +653,10 @@ typedef struct EmitCtx {
     uint8_t          dict_dispatch_n;
     struct TypeClass *dict_dispatch_classes[MAX_FN_CONSTRAINTS];
     const char      *dict_dispatch_param_cnames[MAX_FN_CONSTRAINTS];
+    /* The dict-param BINDINGS behind dict_dispatch_param_cnames, so a recorded
+     * dict forward (call_.dict_fwd_params) can ask whether its dicts are the
+     * ones in scope. */
+    struct Binding  *dict_dispatch_params[MAX_FN_CONSTRAINTS];
     /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3) +
      * forall-dict-pass-nested-mapper-general-plan (Phase 1): set while emitting a
      * nested MAPPER lambda that was converted into a dict-capturing closure
@@ -1528,6 +1537,10 @@ char *emit_word_slot_bits(const Type *t, const char *v);
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
  * for a primitive, an interned per-monomorph id for a struct/ADT. */
 int64_t emit_any_type_id(EmitCtx *ctx, Type t);
+/* tests/check-emitted-float-conversions.py: record an inline-C (hand-written)
+ * function's C name; emit_program writes the list as one trailing comment. */
+void emit_note_inline_c_fn(const char *cname);
+void emit_write_inline_c_fns(Buf *out);
 
 /* saffron-lang-plan S5: emit the dynamic operator runtime into this TU's
  * file-scope buffer, once.  Called from the three EX_DYN_* emitters rather than
@@ -1566,6 +1579,25 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
  * the `int64_t (*)(void *, int64_t...)` spelling the erased call site casts to,
  * unboxing each b4box parameter and boxing a wide result.  NULL when the
  * signature is not in that set (the generic `__tur_fatshim<arity>` stands). */
+bool carrier_fatshim_applies(Type result_type, const Type *param_types,
+                             uint8_t n_params);
+struct TypeClass;
+bool dict_slot_param_is_word_scalar(const struct TypeClass *tc, int slot,
+                                    const FnDef *mi, uint32_t j);
+/* Does `t` mention a type variable anywhere (through applications)? */
+bool emit_abi_type_is_open(const struct Type *t);
+/* True when `call` dispatches through a runtime dict slot that returns the
+ * int64 word (see dict_slot_result_is_word_scalar). */
+bool emit_call_dispatches_word_result(struct EmitCtx *ctx, const struct Expr *call);
+bool dict_slot_result_is_word_scalar(const struct TypeClass *tc, int slot,
+                                     const FnDef *mi, const char **impl_rc);
+char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
+                              const char **pc, uint8_t n);
+char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,
+                                 const char **pc, uint8_t n, bool bare);
+char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
+                                   Type *param_types, uint8_t n_params,
+                                   const char *rest_c);
 char *ensure_carrier_fatshim(EmitCtx *ctx,
                              Type result_type, Type *param_types, uint8_t n_params);
 /* hkt-generic-forwarded-bind-continuation-segfaults: slot-0 shim that boxes a

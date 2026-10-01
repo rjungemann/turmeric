@@ -3339,6 +3339,9 @@ struct TuriGen {
     bool         done;        /* has the body run to completion? */
     int64_t      box;         /* storage for the yielded value; gen-next
                                * returns &box as the ptr<void> ABI result */
+    TuriValue    box_val;     /* the yielded value itself, tag and all: a
+                               * generic's element (`A`) has no static kind to
+                               * re-tag `box` by, so gen-unwrap hands this back */
     /* eval context (valid for the generator's whole lifetime) */
     TuriEnv     *env;
     EvalFrame   *frame;       /* body scope (child of the creating frame) */
@@ -7752,6 +7755,12 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             union { int64_t i; double d; } u; u.i = v.as_int;
             return turi_float(u.d);
         }
+        /* tvar-float-payload-value-converted: `(:: w cstr)` of a same-size
+         * word -- a `ptr` read back out of a TVar, say -- elaborates to a
+         * REINTERPRET, not the ascription whose arm below re-tags a cstr.  The
+         * word printed as the string's address. */
+        if (rk == TY_CSTR && v.tag == TURI_INT)
+            return turi_cstr((const char *)(intptr_t)v.as_int);
         return v;
     }
     case EX_ASCRIBE:
@@ -7776,7 +7785,14 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             }
             return v;
         case TY_FLOAT32:
-            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
+            /* The same bit REINTERPRET as the float arm above: the tree-walker
+             * holds every float kind as a double, so a float32 riding a word
+             * carries the double's bits.  `(double)v.as_int` value-converted
+             * those bits into 4.6e18 (tvar-float-payload-value-converted). */
+            if (v.tag == TURI_INT) {
+                union { int64_t i; double d; } u; u.i = v.as_int;
+                return turi_float((double)(float)u.d);
+            }
             return v;
         case TY_INT: case TY_INT64:
             if (v.tag == TURI_FLOAT) {
@@ -10331,13 +10347,23 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                  * `(:: 7 Route)` spelling already does, so `type-of` answers
                  * the widen's static name (`Route`) instead of `adt`. */
                 bool ret_is_opaque = false;
+                bool ret_is_bool = fn->return_type.kind == TY_BOOL;
                 if (fn->binding && fn->binding->type.kind == TY_FN &&
                     fn->binding->type.as.fn.result_full_type) {
                     const Type *rft = fn->binding->type.as.fn.result_full_type;
                     if (rft->kind == TY_ADT && rft->as.adt_.def &&
                         rft->as.adt_.def->is_opaque)
                         ret_is_opaque = true;
+                    if (rft->kind == TY_BOOL)
+                        ret_is_bool = true;
                 }
+                /* turi-inline-c-bool-return-tagged-as-int: the executor's
+                 * claim sites hand back a C int as a bare TURI_INT whatever
+                 * the declared result is.  A `: bool` body gets the tag the
+                 * compiled program gives it, so `println`, `type-of` and a
+                 * `match` on `true`/`false` agree with the binary. */
+                if (inline_result.tag == TURI_INT && ret_is_bool)
+                    inline_result = turi_bool(inline_result.as_int != 0);
                 if (inline_result.tag == TURI_INT && inline_result.as_int != 0 &&
                     !ret_is_opaque &&
                     (fn->return_type.kind == TY_ADT ||
@@ -12575,6 +12601,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * (type vars, unknown) so a valid cast never spuriously panics. */
         TuriValue v = eval_expr(env, frame, e->as.any_cast_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
+        /* A TYPE-VARIABLE target -- the checked unbox a dynamic instance body
+         * takes under a `: a` result -- names no concrete type here: the
+         * interpreter runs one body for every element type.  Leave the value
+         * exactly as it arrived.  Unwrapping below would hand back a boxed
+         * Sym's bare int word, and `type-of` would then say `int` where the
+         * compiled spec (which resolves `a`) says `Sym`. */
+        if (e->as.any_cast_.target_kind == TY_TYVAR || e->type.kind == TY_TYVAR)
+            return v;
         bool ok = true;
         switch (e->as.any_cast_.target_kind) {
         case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
@@ -13284,6 +13318,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue v = eval_expr(env, frame, e->as.yield_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
         g->box = v.as_int;
+        g->box_val = v;
         /* Swap back to the caller (gen-next); resumes here on the next advance. */
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
@@ -13312,6 +13347,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue pv = eval_expr(env, frame, e->as.gen_unwrap_.ptr_expr);
         if (turi_is_error(pv) || env_signaled(env)) return pv;
         int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
+        /* generator-in-generic: the element is the enclosing generic's `A`,
+         * which the tree-walker never monomorphizes -- there is no kind to
+         * re-tag the bits by, and the default arm printed 7.1's bits as an
+         * integer.  The pointer is always `&g->box` (gen_advance), so the
+         * yielded value itself is right beside it. */
+        if (pv.as_int && (e->as.gen_unwrap_.elem == TY_TYVAR ||
+                          e->as.gen_unwrap_.elem == TY_UNKNOWN)) {
+            const TuriGen *og = (const TuriGen *)(
+                (const char *)(intptr_t)pv.as_int - offsetof(TuriGen, box));
+            return og->box_val;
+        }
         switch (e->as.gen_unwrap_.elem) {
             case TY_FLOAT: case TY_FLOAT64: {
                 TuriValue r = turi_float(0.0);
@@ -13319,9 +13365,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 return r;
             }
             case TY_FLOAT32: {
-                float f; uint32_t u = (uint32_t)bits;
-                memcpy(&f, &u, sizeof f);
-                return turi_float((double)f);
+                /* The interpreter holds EVERY float kind as a double
+                 * (turi_float), so `yield` boxed the double's bits.  Reading
+                 * the low 32 as a float32 bit pattern printed 0 for 2.5. */
+                double d;
+                memcpy(&d, &bits, sizeof d);
+                return turi_float((double)(float)d);
             }
             case TY_BOOL:
                 return turi_bool(bits != 0);

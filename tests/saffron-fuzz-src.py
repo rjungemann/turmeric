@@ -110,6 +110,9 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fuzz_arm  # noqa: E402  (tests/fuzz_arm.py)
+import fconv_lint  # noqa: E402  (tests/fconv_lint.py)
 
 TIMEOUT = 90
 
@@ -446,9 +449,95 @@ class Gen:
 
     # -- terminals -----------------------------------------------------------
 
+    # -- a class method that CALLS a fn-valued extra ------------------------
+    #
+    # saffron-dyn-witness-fn-arity-defaults-unary (2026-09-30): an instance
+    # body calling its fn extra `g` on the receiver's elements printed the
+    # element's TYPE TAG (`4` for 2.5) compiled, and a binary `g` panicked.
+    # No shape here had ever passed a lambda to a user class method -- the
+    # only class was `Kind`, unary and extra-less -- so the whole family was
+    # outside the space.  This walks its product: constructor vs ground class,
+    # `g : fn` / `(fn [a] b)` / `(fn [a a] b)`, `: any` / `: b` / `: a` result,
+    # unary vs binary, dispatch on an `any` receiver (the witness) vs direct,
+    # and an identity/projection vs an arithmetic lambda.  Every combination
+    # has a known answer.
+    def hof_method(self, e, v):
+        leg, rng = self.leg, self.rng
+        ckind = rng.choice(["ctor", "ground"])
+        arity = rng.choice([1, 2])
+        numeric = v.kind in ("int", "float")
+        op = rng.choice(["id", "arith"]) if numeric else "id"
+        gspell = rng.choice(["fn", "typed"])
+        # `: a` is only honest when the lambda returns the element's type,
+        # which every lambda below does; `: b` needs a spelled fn type.
+        rchoices = ["any", "a"] + (["b"] if gspell == "typed" else [])
+        rspell = rng.choice(rchoices)
+        disp = rng.choice(["dyn", "direct"])
+        for t in ("term_hofm", "hofm_" + ckind, "hofm_ar%d" % arity,
+                  "hofm_op_" + op, "hofm_g_" + gspell, "hofm_r_" + rspell,
+                  "hofm_" + disp):
+            leg.tags.add(t)
+
+        if gspell == "fn":
+            gty = "fn"
+        elif rspell == "a":
+            gty = "(fn [a] a)" if arity == 1 else "(fn [a a] a)"
+        else:
+            gty = "(fn [a] b)" if arity == 1 else "(fn [a a] b)"
+
+        if op == "id":
+            lam = "(fn [x] x)" if arity == 1 else "(fn [x y] %s)" % rng.choice(["x", "y"])
+            out = v
+        elif arity == 1:
+            k = "1" if v.kind == "int" else "0.5"
+            lam = "(fn [x] (+ x %s))" % k
+            out = V(v.kind, v.val + (1 if v.kind == "int" else 0.5))
+        else:
+            lam = "(fn [x y] (+ x y))"
+            out = V(v.kind, v.val + v.val)
+
+        cls, meth = self.name("Hc"), self.name("hm")
+        call = "(g (.l t))" if arity == 1 else "(g (.l t) (.r t))"
+        if ckind == "ctor":
+            adt = self.name("Pr")
+            leg.defs.append("(defclass %s [^t]\n  (%s [ta : (t a) g : %s] : %s))"
+                            % (cls, meth, gty, rspell))
+            leg.defs.append("(defdata %s [a] (%s [l : a r : a]))" % (adt, adt))
+            leg.defs.append("(definstance %s [%s]\n  (%s [t g] %s))"
+                            % (cls, adt, meth, call))
+        else:
+            adt = self.name("Ce")
+            # A ground class: the class variable is the whole receiver, so
+            # the element type the fn sees is the field's (`any`).
+            gty_g = {"fn": "fn", "(fn [a] a)": "(fn [any] any)",
+                     "(fn [a a] a)": "(fn [any any] any)",
+                     "(fn [a] b)": "(fn [any] any)",
+                     "(fn [a a] b)": "(fn [any any] any)"}[gty]
+            leg.defs.append("(defclass %s [s]\n  (%s [x : s g : %s] : %s))"
+                            % (cls, meth, gty_g, "any"))
+            leg.defs.append("(defstruct %s [l : any r : any])" % adt)
+            leg.defs.append("(definstance %s [%s]\n  (%s [t g] %s))"
+                            % (cls, adt, meth, call))
+        f = self.name("hg")
+        # A Sym literal `:kw` in constructor-argument position reads as a
+        # keyword argument (TUR-E0299), so route it through a `let`.
+        lit = v.lit if v.kind != "sym" else "(let [q %s] q)" % v.lit
+        # The routed value fills one slot and a fresh literal of the SAME
+        # value the other: the routed value may be unique (a container
+        # element), and using it twice is TUR-E0201, not a finding.  Every
+        # lambda above answers the same for either order.
+        if disp == "dyn":
+            leg.defs.append("(defn %s [x] (.%s x %s))" % (f, meth, lam))
+            return "(%s (%s %s %s))" % (f, adt, e, lit), out
+        leg.defs.append("(defn %s [x] (.%s (%s x %s) %s))"
+                        % (f, meth, adt, lit, lam))
+        return "(%s %s)" % (f, e), out
+
     def terminal(self, e, v):
         leg = self.leg
         rng = self.rng
+        if rng.random() < 0.25:
+            return self.hof_method(e, v)
         choices = ["none", "class", "truthy"]
         if v.kind == "int":
             choices += ["arith_int", "cmp"]
@@ -599,7 +688,38 @@ def _env():
     # docs/archive/type-fuzz-src-red-on-clang-21.md for the full story.
     env.pop("TUR_STDLIB_DIR", None)
     env["ASAN_OPTIONS"] = env.get("ASAN_OPTIONS", "") or "detect_leaks=0"
+    # Arm clang's function-pointer detector (tests/fuzz_arm.py).  The `g : fn`
+    # extra that printed a type tag for 2.5 was outside this generator's
+    # shapes; the detector traps it whatever shape reaches it.
+    env, _ = fuzz_arm.armed_env(env)
     return env
+
+
+# The shape-independent value-conversion check (tests/fconv_lint.py): a clean,
+# correct run whose emitted C still converts a float<->int VALUE where no `as`
+# asked for it is a finding the output oracle cannot see -- the value may
+# happen to round-trip (7.0) or the conversion may sit on a path this program
+# does not print.  The corpus is at zero, so this class fails the run.
+_FCONV_CLANG = fconv_lint.find_clang()
+
+
+def value_conversions(tur, path, env):
+    if not _FCONV_CLANG or os.environ.get("TUR_FUZZ_FCONV", "1") == "0":
+        return []
+    r = subprocess.run([tur, "emit-c", path], capture_output=True, text=True,
+                       timeout=TIMEOUT, cwd=REPO, env=env)
+    if r.returncode != 0 or fconv_lint.MARK not in r.stdout:
+        return []
+    cpath = path + ".fconv.c"
+    with open(cpath, "w") as f:
+        f.write(r.stdout)
+    try:
+        return fconv_lint.lint_c(cpath, _FCONV_CLANG)
+    finally:
+        try:
+            os.unlink(cpath)
+        except OSError:
+            pass
 
 
 def run_case(tur, path, src):
@@ -620,6 +740,14 @@ def run_case(tur, path, src):
         return Outcome("timeout")
     if p.returncode == 0:
         kind = "clean"
+        conv = value_conversions(tur, path, env)
+        if conv:
+            ln, ck, how, text = conv[0]
+            kind = "value_conv"
+            p = subprocess.CompletedProcess(p.args, 0, p.stdout,
+                "emitted C line %d: %s %s value conversion: %s" % (ln, how, ck, text))
+    elif p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+        kind = "fnptr_trap"
     elif p.returncode in (134, 138, 139) or p.returncode < 0:
         kind = "crash"
     else:
@@ -644,7 +772,9 @@ def run_case(tur, path, src):
 
 
 BUG_OF = {"crash": "BUG_crash", "invalid_c": "BUG_invalid_c",
-          "link": "BUG_link", "other": "BUG_toolchain_other"}
+          "link": "BUG_link", "other": "BUG_toolchain_other",
+          "fnptr_trap": fuzz_arm.TRAP_CLASS,
+          "value_conv": "BUG_value_conversion"}
 
 
 def classify(out, expected):
@@ -676,7 +806,7 @@ def one_case(tur, workdir, idx, seed, max_legs, emit_known):
     kind = classify(out, expected)
 
     detail = None
-    if kind.startswith(("BUG", "IBUG")) or kind == "GEN_REJECT":
+    if kind.startswith(("BUG", "IBUG")) or kind in ("GEN_REJECT", "FNPTR_TRAP"):
         failing = []
         for j, leg in enumerate(legs):
             s2, e2 = assemble([leg])
@@ -848,6 +978,7 @@ def main():
         print("saffron_fuzz_src: %d cases, seed %d, max %d legs, %d job(s)%s"
               % (args.n, args.seed, args.legs, args.jobs,
                  ", emit-known" if args.emit_known else ""))
+        print("saffron_fuzz_src: " + fuzz_arm.armed_env(dict(os.environ))[1])
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             futs = {pool.submit(job, i): i for i in range(args.n)}
             done = 0
@@ -906,6 +1037,10 @@ def main():
         n_known = sum(v for k, v in counts.items() if k.startswith("KNOWN"))
         print("\n  BUG/IBUG classes (fail)     : %d" % n_bugs)
         print("  generator rejects (report)  : %d" % n_rej)
+        n_trap = counts.get("FNPTR_TRAP", 0)
+        if n_trap:
+            print("  fn-pointer traps (report)   : %d   "
+                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
         print("  known open findings (report): %d" % n_known)
         if findings:
             print("\n  saved to %s" % save_dir)

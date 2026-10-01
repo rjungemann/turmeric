@@ -87,3 +87,55 @@ a body whose widened tail calls an untyped `: fn` carrier (minting it turned
 this panic into a cc error, `aggregate value used where an integer was
 expected`), so fixing the arity here will also want that guard revisited
 (`m7_body_returns_byvalue_element`, its `EX_UNION_INJECT` arm).
+
+## Resolution (2026-09-30)
+
+The report was worse than filed. The UNARY `g : fn` case did not work either.
+It printed the element's TYPE TAG (`4` for `2.5`, `3` for an int) compiled,
+because two representations disagreed at once:
+
+- The dyn witness handed the erased instance body a `(Two any)` receiver
+  whose elements are 16-byte tagged boxes, and the body read `->l` as an
+  `int64_t` word, which is the box's tag.
+- The body then called a Saffron lambda (`tur_tagged_t (void*, tur_tagged_t)`)
+  through the poly-fn carrier's `int64_t (*)(void*, int64_t)`.
+
+It went unfound because the Saffron fuzzer had never passed a lambda to a user
+class method. Its only class was `Kind`, unary and extra-less, so this whole
+family was outside its shape space.
+
+**Fixed by semantics, not by arity.** In a dynamic dialect an arity-less `fn`
+class parameter is now what every Saffron function value already is: an `any`
+called dynamically (`tc_fn_param_type` in `src/compiler/elab_typeclasses.c`).
+`EX_DYN_CALL` checks the arity against the closure that actually arrived, so
+unary, binary and n-ary all work, and the int64 carrier is out of the picture.
+Four follow-ons made that complete:
+
+- the M7 gate (`m7_body_returns_byvalue_element`) admits an `EX_DYN_CALL`
+  through a local fn value, and an `EX_ANY_CAST` over an element read, so the
+  spec that knows the element type is minted instead of the erased body
+  running;
+- the static method-call path widens an argument whose instance parameter is
+  `any` (`A <: any`, as `elab_call_fn` already did), so a lambda passed by
+  direct dispatch compiles;
+- a dynamic instance body under a `: a` result is narrowed with the checked
+  unbox, as a `defn`'s concrete result already was. The emitter treats a cast
+  whose target resolves to `any` as the identity, and the interpreter treats a
+  type-variable-target cast as the identity, so a boxed `Sym` keeps its name;
+- an `any` widened while its type is still an unresolved type variable now
+  gets a reserved tag that makes `TUR_TAG` trap at runtime, instead of the
+  bare `TY_TYVAR` kind no consumer understands. Any erased body that still
+  runs fails loudly rather than silently.
+
+The witness arity inference first drafted for this (reading `g`'s arity from
+the impl body) was dropped. With the dynamic parameter it no longer serves
+Saffron. For a typed class consumed from Saffron it would have let the cast
+PASS into the same thin-call mismatch, trading a loud panic for a silent
+wrong answer.
+
+Pinned by `tests/fixtures/saffron-class-fn-extra`: dynamic and direct
+dispatch, unary and binary, `: any` and `: a` results, float, int and cstr
+elements. It is clean under clang `-fsanitize=function`. The Saffron fuzzer
+gained the shape family (`hof_method`, tags `hofm_*`): 900 cases across
+three seeds, all ok, where the first run on the pre-fix tree found 40
+invalid-C programs.

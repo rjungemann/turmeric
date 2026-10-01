@@ -116,6 +116,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fuzz_arm  # noqa: E402  (tests/fuzz_arm.py)
 
 # ---------------------------------------------------------------------------
 # Program generation
@@ -1132,6 +1134,8 @@ def run_gate(tur, path, refined):
     # The generated programs are tiny and self-contained; leak checking the
     # spawned binary is not what this harness is measuring.
     env["ASAN_OPTIONS"] = env.get("ASAN_OPTIONS", "") or "detect_leaks=0"
+    # Arm clang's function-pointer detector (tests/fuzz_arm.py).
+    env, _ = fuzz_arm.armed_env(env)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=TIMEOUT, cwd=REPO, env=env)
@@ -1145,6 +1149,10 @@ def run_gate(tur, path, refined):
 
     if p.returncode == 0:
         return Outcome("clean", p.stdout, proven, refuted)
+    # A trapped mismatched function-pointer call.  Without this arm it fell
+    # through to "reject" and classify() dropped it as skip_invalid.
+    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+        return Outcome("fnptr_trap", p.stdout, proven, refuted)
     # SIGABRT (134) and SIGSEGV (139) both mean the program was built and then
     # died; a contract violation is the 134 case.
     if p.returncode in (134, 139) or p.returncode < 0:
@@ -1153,10 +1161,13 @@ def run_gate(tur, path, refined):
 
 
 # Classification.  BUG_* fail the run; SUSPICIOUS is reported only.
-BUGS = ("BUG_soundness", "BUG_output_divergence", "BUG_new_abort")
+BUGS = ("BUG_soundness", "BUG_output_divergence", "BUG_new_abort",
+        "BUG_fnptr_trap")
 
 
 def classify(off, on):
+    if off.kind == "fnptr_trap" or on.kind == "fnptr_trap":
+        return fuzz_arm.TRAP_CLASS     # report-only unless strict
     if off.kind == "timeout" or on.kind == "timeout":
         return "skip_timeout"
     if off.kind == "reject":
@@ -1305,6 +1316,7 @@ def main():
 
     print("refine_fuzz_src: %d cases, seed %d, mode %s, %d job(s)"
           % (args.n, args.seed, args.mode, args.jobs))
+    print("refine_fuzz_src: " + fuzz_arm.armed_env(dict(os.environ))[1])
     try:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             futs = {pool.submit(job, i): i for i in range(args.n)}

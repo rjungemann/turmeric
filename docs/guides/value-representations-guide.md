@@ -371,6 +371,50 @@ this guide's open-cells table is that campaign's live scoreboard, and the
 closed-cells table below it is the record of what the campaign has already
 consolidated.
 
+## Detecting the mechanism, not the shape
+
+Everything above finds a defect by **reaching its shape**: a generator
+composes wrappers and boundaries, and a finding is a composition nobody had
+written. That is how this class was found for two years, one seam at a time --
+and it is why it kept coming back: the next defect is always in a shape the
+generators do not produce (a class method calling a fn-valued extra, a
+function stored in a struct field, a `float32` in an `any`). Three checks now
+look at the MECHANISM instead, whatever shape reaches it.
+
+**Float<->int value conversions in emitted C**
+(`tests/check-emitted-float-conversions.py`, ctest
+`tur_emitted_float_conversions`, and inside both source fuzzers as
+`BUG_value_conversion`). `-Wfloat-conversion` sees implicit conversions only;
+the emitter spells a carrier crossing as an explicit `(int64_t)(d)`, which
+never warns. clang's AST records every conversion, so the check reports each
+`FloatingToIntegral` / `IntegralToFloating` in emitted program code that is
+none of: an `as` the program asked for (spelled `TUR_AS(T, x)`, a preamble
+macro), an exact integer literal, or hand-written inline C (a `defn` body
+named in the trailing `/* tur:inline-c-fns: ... */` list, or a file-scope
+block between `/* tur:inline-c-begin/end */`). **The corpus is at zero** (2512
+programs), so every finding is new. Its first corpus run found a live one: a
+`float32` widened to `any` was stored by value conversion (2.5 came back as
+2) under a tag `type-of` could not name. When you add a DELIBERATE conversion
+to the emitter, spell it `TUR_AS`; anything else it reports is the bug.
+
+**Mismatched indirect calls** (`tests/fuzz_arm.py`: clang
+`-fsanitize=function` in trap mode, armed in all four source fuzzers and
+proven armed by a canary). It sees a call through a function pointer whose
+type disagrees with the callee's definition -- the thin/fat, int64/double and
+int64/tagged-`any` confusions of the fn-value rows above. It is exact, so it
+also traps on ABI-benign `bool`/pointer vs `int64_t` mismatches, of which the
+corpus still has some; until that sweep reaches zero a trap is the
+report-only `FNPTR_TRAP` (`TUR_FUZZ_FNSAN_STRICT=1` fails on it). See
+[emitted-c-indirect-calls-are-not-type-exact](https://github.com/rjungemann/turmeric/blob/main/docs/reported/emitted-c-indirect-calls-are-not-type-exact.md)
+for the live count and how to run the sweep.
+
+**An unresolved type tag** (runtime). A value widened to `any` while its type
+is still a type VARIABLE used to be tagged with the bare `TY_TYVAR` kind, a
+box no consumer understands (`type-of` "unknown", `is?` false, a silent wrong
+branch). It now gets a reserved tag and `TUR_TAG` traps on it with an internal
+error, so an erased body that should have been specialized fails loudly where
+the value was widened.
+
 ## Maintenance -- keep this guide truthful
 
 This guide is load-bearing for triage; a stale representation inventory is

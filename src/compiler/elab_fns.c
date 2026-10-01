@@ -256,7 +256,12 @@ bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb) {
 
 bool call_returns_fresh_sum_box(const Expr *call) {
     if (!call || call->kind != EX_CALL) return false;
-    if (call->as.call_.ctor) return true;
+    /* phantom-parametric-heap-let-binding-repr-ice (second defect): a
+     * transparent int newtype's constructor is an identity -- `(Holder 7)` IS
+     * 7, no box is minted -- so it is not a fresh sum box, and the RM1 scope
+     * drop freed the payload integer as a pointer (a segfault at scope end). */
+    if (call->as.call_.ctor)
+        return !type_is_transparent_int_newtype(call->type);
     if (!call_dispatch_is_static(call)) return false;
     return call_returns_fresh_sum_box_as(call, call->as.call_.fn_binding);
 }
@@ -6866,6 +6871,8 @@ static unsigned fn_tail_fn_leaf_kinds(const Expr *x, const FnTailAlias *env) {
             FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
             return fn_tail_fn_leaf_kinds(x->as.let_.body, env_new);
         }
+        case EX_REINTERPRET:
+            return fn_tail_fn_leaf_kinds(x->as.reinterpret_.expr, env);
         case EX_ASCRIBE:
             return fn_tail_fn_leaf_kinds(x->as.ascribe_.inner, env);
         case EX_MATCH: {
@@ -9354,6 +9361,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (ann->kind == TY_TYVAR) {
                         return_tyvar_type = ann;
                     }
+                    /* refined-adt-return-type-miscompiles: an ADT reached
+                     * through this path -- the base of a peeled
+                     * `#refine{ r : Lst | p }` -- keeps its def, exactly as
+                     * the `: Lst` keyword path and the defalias path above
+                     * do.  Without it return_kind said TY_ADT with no def, so
+                     * the signature fell back to the int64_t carrier while the
+                     * body returned the by-value aggregate, and call sites
+                     * read the call as a constructor of the ADT. */
+                    if (ann->kind == TY_ADT && ann->as.adt_.def) {
+                        return_adt_def = ann->as.adt_.def;
+                    }
                     /* SS3a: Capture full session return type so callers see the complete
                      * protocol type (e.g. Session[Rec[self, ...]]) rather than a bare
                      * TY_SESSION shell with a NULL protocol pointer. */
@@ -9800,6 +9818,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * so a GADT match arm can distinguish a quantified-`a` result from a skolem
      * that escapes.  Accumulated on top of any enclosing function's set. */
     uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
+    bool saved_in_construct_template = e->in_construct_template;
+    e->in_construct_template = defn_has_construct_attr;
     for (uint32_t i = 0; i < n_params; i++) {
         if (param_poly_types[i]) fn_collect_sig_tyvars(e, param_poly_types[i]);
         else                     fn_collect_sig_tyvars(e, &params[i]->type);
@@ -9997,6 +10017,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->in_construct_template = saved_in_construct_template;
                 e->expected_type = prev_body_expected;
                 e->current_fn_name = NULL;
                 e->cur_hkt_constraint_class = saved_cur_hkt_class;
@@ -10019,6 +10040,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->in_construct_template = saved_in_construct_template;
                 e->expected_type = prev_body_expected;
                 /* Phase R6: Reset current function name */
                 e->current_fn_name = NULL;
@@ -10043,6 +10065,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
+                    e->in_construct_template = saved_in_construct_template;
                     e->expected_type = prev_body_expected;
                     /* Phase R6: Reset current function name */
                     e->current_fn_name = NULL;
@@ -10148,6 +10171,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
     e->n_sig_tyvars = saved_n_sig_tyvars;
+    e->in_construct_template = saved_in_construct_template;
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
     e->cur_hkt_constraint_class = saved_cur_hkt_class;
@@ -10420,8 +10444,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
             ? RET_CONFLICT_NONE
             : return_position_conflict(return_adt_def, return_kind, body->type,
                                        ret_cls, check_nil_body);
+        /* committed-applied-return-vs-scalar: the dispatcher compares the
+         * declared return by kind, so an applied side never met a scalar one.
+         * A monomorphic defn has no crossing to ground it. */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            ret_cls == RET_CLASS_COMMITTED && !return_adt_def &&
+            return_type_applied_scalar_conflict(
+                return_kind == TY_APP ? return_app_type : NULL,
+                return_kind, body->type))
+            rc = RET_CONFLICT_CARRIER_AGGREGATE;
         if (rc != RET_CONFLICT_NONE) {
+            Buf wb; buf_init(&wb);
+            if (!return_adt_def && return_kind == TY_APP && return_app_type)
+                type_print(&wb, *return_app_type);
+            buf_putc(&wb, '\0');
             const char *want = return_adt_def ? return_adt_def->name
+                             : (wb.data && wb.data[0]) ? wb.data
                              : typekind_to_string(return_kind);
             Buf gb; buf_init(&gb);
             type_print(&gb, body->type);
@@ -10501,6 +10539,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }
             buf_free(&gb);
+            buf_free(&wb);
             e->scope = inner.parent;
             scope_free(&inner);
             return NULL;
@@ -12663,10 +12702,34 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
+    /* lambda-thin-fn-result-read-as-fat: fn-value-fat-normalization stage 2
+     * for a LAMBDA whose result is a concrete effect-free fn type, under the
+     * guards the defn path uses.  Stage 2 marks such a result `boxed` inside
+     * every fn-typed parameter annotation, so a consumer of
+     * `(f : (fn [] (fn [int] int)))` -- and of a generic `(fn [] A)` at a
+     * function -- reads `(f)` as a fat handle.  A defn producer returns one;
+     * a captureless lambda returned its bare code pointer, and `((f) 41)`
+     * dereferenced that pointer as a closure box: SIGSEGV.  Normalizing the
+     * tail leaves and marking the result makes the lambda say, and be, what
+     * its consumers read. */
+    {
+        Type *rft = fn_type.as.fn.result_full_type;
+        if (body && rft && rft->kind == TY_FN && !rft->as.fn.boxed &&
+            !fn_type.as.fn.result_fat &&
+            rft->as.fn.result_kind != TY_FN &&
+            rft->as.fn.result_kind != TY_UNKNOWN &&
+            fn_result_type_is_fat_normalized(rft)) {
+            elab_normalize_fn_tail_leaves(e, &body, rft, NULL);
+            rft->as.fn.boxed = true;
+        }
+    }
     /* let-bound-sf-loses-outer-arg-type: see the defn path -- record whether the
      * lambda's return *value* is a fat closure box vs a thin fn pointer. */
     b->returns_boxed_closure = (body && body->type.kind == TY_FN &&
-                                body->type.as.fn.boxed);
+                                body->type.as.fn.boxed) ||
+                               (fn_type.as.fn.result_full_type &&
+                                fn_type.as.fn.result_full_type->kind == TY_FN &&
+                                fn_type.as.fn.result_full_type->as.fn.boxed);
     /* fn-typed-tyvar-drops-a-capturing-closure: the defn path's
      * boxed-fn-typed-closure-return marking, mirrored.  A lambda declared
      * `: (fn [int] int)` whose body yields a CAPTURING closure returns a fat

@@ -699,6 +699,10 @@ typedef struct Elab {
      * kind `*` and tripping TUR-E0012. */
     Kind         sig_tyvar_kinds[32];
     uint8_t      n_sig_tyvars;
+    /* generic-ctor-over-sig-tyvar-erased: the defn being elaborated is a
+     * `#{Construct}` template (stdlib `some`/`ok`/`err`...), whose bare-ctor
+     * body the emitter types from the spec's RESULT, not its bindings. */
+    bool         in_construct_template;
     /* Phase G3: coerce special form */
     const Symbol *sym_coerce;
     /* Phase G3: (~ a b) equality constraint notation */
@@ -1364,6 +1368,7 @@ typedef struct GenContext {
     uint32_t          n_yields;         /* number of (yield ...) forms seen so far */
     TypeKind          element_kind;     /* TypeKind of the first yield (TY_UNKNOWN until set) */
     bool              element_kind_set; /* true once first yield is elaborated */
+    const char       *element_tyvar;    /* first yield typed with a signature tyvar */
     struct GenContext *parent;          /* enclosing GenContext (NULL for outermost) */
     /* CF5: true when the enclosing function calls itself inside this gen body */
     bool              is_recursive;
@@ -1745,6 +1750,20 @@ bool return_type_bool_integer_conflict(TypeKind declared, Type body);
  * return has a crossing that grounds it. */
 bool return_type_carrier_aggregate_conflict(Type declared, Type body);
 
+/* committed-applied-return-vs-scalar: a ground by-value applied type (`(Option
+ * float)`, `(Pair float int)`) against a concrete int-family / bool / cstr
+ * return, either direction.  `declared_app` is the declared return when it is
+ * an applied type (NULL otherwise; `ret_kind` then names the scalar).  Only a
+ * committed (monomorphic, non-`#{Unsafe}`) defn has no crossing to ground the
+ * applied side, so the caller gates it on RET_CLASS_COMMITTED. */
+bool return_type_applied_scalar_conflict(const Type *declared_app,
+                                         TypeKind ret_kind, Type body);
+/* The same question for any position that states a type and receives a value
+ * (a let annotation, a declared parameter): `want` a ground by-value applied
+ * type and `got` a scalar or a DIFFERENT ground applied type, or `want` an
+ * int-family / bool / cstr scalar and `got` a ground by-value applied type. */
+bool applied_type_conflict(Type want, Type got);
+
 /* carrier-aware-return-unification: classify a return position so the shared
  * dispatcher knows how much to reject against the int64 carrier ABI.
  *   RET_CLASS_COMMITTED -- a genuinely committed position: a monomorphic,
@@ -1929,6 +1948,26 @@ Expr *elab_fn(Elab *e, const Form *call);
 /* bare-fat-param-non-int-result inference (Phase A); see
  * docs/archive/history/bare-fat-result-type-inference-plan.md. */
 bool kind_is_non_int_register_class(TypeKind k);
+
+/* The float register class, as the untyped-fn carrier rule spells it: a value
+ * of this kind lives in xmm, not a GP register, so it cannot cross a
+ * signature-less `fn` slot (a `:fn` parameter, or a struct field declared
+ * bare `fn`) whose calling convention is the int64 word. */
+static inline bool kind_is_float_class(TypeKind k) {
+    return kind_is_non_int_register_class(k) || k == TY_FLOAT32 || k == TY_FLOAT64;
+}
+
+/* True when a function value of type `ft` has a float-class argument or
+ * result, so it cannot be stored into -- or called through -- a
+ * signature-less `fn` slot without a register-class miscompile. */
+static inline bool fn_sig_has_float_class(const Type *ft) {
+    if (!ft || ft->kind != TY_FN) return false;
+    if (kind_is_float_class(ft->as.fn.result_kind)) return true;
+    for (uint32_t k = 0; k < ft->as.fn.arity; k++)
+        if (ft->as.fn.arg_kinds && kind_is_float_class(ft->as.fn.arg_kinds[k]))
+            return true;
+    return false;
+}
 
 /* bare-fat-result-monomorphization (Phase B); see
  * docs/archive/history/bare-fat-result-monomorphization-plan.md.

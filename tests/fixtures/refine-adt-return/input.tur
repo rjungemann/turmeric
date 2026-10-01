@@ -1,0 +1,31 @@
+;; refined-adt-return-type-miscompiles: a `defn` whose RESULT is a refinement
+;; over an ADT emits the same signature as the plain `: Lst` result -- the
+;; by-value aggregate, not the int64_t carrier -- and the caller matches it.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+(defstruct P [x : int y : int])
+
+(defn same [xs : Lst] : #refine{ r : Lst | true } xs)
+
+(defn nonempty? [xs : Lst] : bool
+  (match xs
+    (Nil) false
+    (Cons _ _) true))
+
+;; A predicate that reads the result, so a runtime check wraps the aggregate.
+(defn push-front [h : int xs : Lst] : #refine{ r : Lst | (nonempty? r) }
+  (Cons h xs))
+
+(defn bump [p : P] : #refine{ r : P | (> (.x r) 0) }
+  (P (+ (.x p) 1) (.y p)))
+
+(defn main [] : int
+  (match (same (Cons 7 (Nil)))
+    (Nil) (println 0)
+    (Cons h _) (println h))
+  (match (push-front 3 (Nil))
+    (Nil) (println 0)
+    (Cons h _) (println h))
+  (let [q (bump (P 4 9))]
+    (println (.x q))
+    (println (.y q)))
+  0)

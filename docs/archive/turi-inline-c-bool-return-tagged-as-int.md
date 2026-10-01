@@ -104,3 +104,22 @@ That second site is why `(= (yes) true)` prints `true` on both paths: the
 Not a fix: converting inside `println`'s tag dispatch, as
 `ascribe-bool-to-numeric-prints` did -- that repaired one renderer and would
 leave `match` and `type-of` wrong here.
+
+## Resolution (2026-09-30)
+
+Fixed by direction 1, at the single seam: the consumer of
+`try_exec_simple_inline_c` in `src/turi/eval.c` now re-tags a `TURI_INT` result
+as `turi_bool(v != 0)` when the declared result is `bool`. It reads
+`fn->return_type.kind` (populated for a plain `defn`) and falls back to the
+binding's `result_full_type`, the same source the opaque check in that block
+already uses. Every pattern the executor claims (simple-return, accessor,
+constructor) goes through that one site.
+
+Direction 2 (`unit` / `cstr`) did not need a change: `unit` is not a result
+type a `defn` can declare, and no claim site hands back a string as an int.
+
+Pinned by `tests/fixtures/inline-c-bool-return-prints`, which is on
+`run-turi.sh`'s `TURI_INLINEC_RUN` allowlist so the interpreter runs it too
+(the inline-C carve-out would otherwise skip it). Both paths print
+`true`/`true`/`false`, `type-of` answers `bool`, and both `match`es find their
+arm. `printf '(defn yes [] : bool ...)\n(yes)\n' | tur repl` echoes `=> true`.

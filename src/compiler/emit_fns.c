@@ -1,7 +1,83 @@
 /* emit_fns.c -- function-definition C emission (emit_fn_def). */
 #include "emit_internal.h"
+
+/* The inline-C function names of the program being emitted -- written by
+ * emit_program as one trailing `tur:inline-c-fns: a b c` comment for the
+ * emitted-C checks.
+ * One line per program instead of one per function: the stdlib alone puts
+ * ~190 inline-C definitions in every program. */
+static Buf g_inline_c_fns;
+static bool g_inline_c_fns_init;
+void emit_note_inline_c_fn(const char *cname) {
+    if (!cname || !*cname) return;
+    if (!g_inline_c_fns_init) { buf_init(&g_inline_c_fns); g_inline_c_fns_init = true; }
+    buf_putc(&g_inline_c_fns, ' ');
+    buf_puts(&g_inline_c_fns, cname);
+}
+void emit_write_inline_c_fns(Buf *out) {
+    if (g_inline_c_fns_init && g_inline_c_fns.len > 0) {
+        buf_puts(out, "/* tur:inline-c-fns:");
+        buf_write(out, g_inline_c_fns.data, g_inline_c_fns.len);
+        buf_puts(out, " */\n");
+    }
+    if (g_inline_c_fns_init) { buf_free(&g_inline_c_fns); g_inline_c_fns_init = false; }
+}
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path, g_panic_trace */
+
+/* carrier-return-concrete-tail: an `int64_t` (carrier) return fed a value whose
+ * emitted C is concrete -- a by-value aggregate or a float kind.  The mixed
+ * clone the ABI scan mints for a sole-instance method called from a carrier
+ * base (`__inst_Rc_rm_W__spec__int64_t_tur_adt_W(tur_adt_W x) { return x; }`)
+ * returned the struct into the int64 (invalid C), and a `double` there is a
+ * VALUE conversion.  Box the aggregate / put the float in as its bits, the
+ * carrier convention.  With `out` NULL, only answers whether it applies. */
+/* Does the function being emitted return the int64 word in its EMITTED C
+ * signature?  The declared kind can say `int` while an earlier rule retyped
+ * the C return to the body's aggregate (`opt-carrier : int` returning an
+ * `(Option int)`); the signature table records what was actually printed. */
+static bool fn_emitted_ret_is_word(EmitCtx *ctx, const FnDef *fd, bool use_abi_spec) {
+    char *cn = (use_abi_spec && ctx->current_abi_specialization->clone_name)
+        ? strdup(ctx->current_abi_specialization->clone_name)
+        : (fd && fd->binding ? raw_name_for_binding(fd->binding) : NULL);
+    const char *rc = cn ? emit_sig_lookup_ret_ctype(cn) : NULL;
+    bool w = rc && strcmp(rc, "int64_t") == 0;
+    free(cn);
+    return w;
+}
+
+static bool carrier_return_concrete_stmt(EmitCtx *ctx, const Expr *tail_e,
+                                         const char *ret_val, Buf *out) {
+    const char *c = NULL;
+    if (emit_str_is_bare_ident(ret_val)) c = emit_localvar_lookup_ctype(ret_val);
+    if (!c) {
+        Type rt = emit_resolve_type(ctx, tail_e->type);
+        if (rt.kind == TY_FLOAT || rt.kind == TY_FLOAT64) c = "double";
+        else if (rt.kind == TY_FLOAT32) c = "float";
+        else if ((rt.kind == TY_ADT || rt.kind == TY_APP) &&
+                 !type_is_heap_adt(rt) && !type_is_heap_struct(rt))
+            c = emit_type_c_name(ctx, rt);
+    }
+    if (!c) return false;
+    bool flt = strcmp(c, "double") == 0 || strcmp(c, "float") == 0;
+    bool agg = strncmp(c, "tur_adt_", 8) == 0 && !strchr(c, '*');
+    if (!flt && !agg) return false;
+    if (!out) return true;
+    if (flt) {
+        Type ft = emit_type_from_kind(strcmp(c, "float") == 0 ? TY_FLOAT32 : TY_FLOAT);
+        char *w = emit_word_slot_bits(&ft, ret_val);
+        buf_printf(out, "return %s;\n", w);
+        free(w);
+    } else {
+        buf_printf(out,
+            "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+            "*__tur_ret_p = %s; "
+            "TUR_REGION_NOTE_WORDS(__tur_ret_p, sizeof *__tur_ret_p); "
+            "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+            c, c, c, ret_val);
+    }
+    return true;
+}
 
 /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...md, as ONE
  * answer: does this non-spec instance-method impl return the int64 carrier
@@ -422,6 +498,8 @@ static bool tco_drop_use_ok(const Expr *e, const Binding *b) {
                 !tco_drop_use_ok(e->as.set_deref_.ref, b))
                 return false;
             return tco_drop_use_ok(e->as.set_deref_.value, b);
+        case EX_REINTERPRET:
+            return tco_drop_use_ok(e->as.reinterpret_.expr, b);
         case EX_ASCRIBE:
             return tco_drop_use_ok(e->as.ascribe_.inner, b);
         case EX_IF:
@@ -1537,6 +1615,32 @@ static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
  *     `&&`) is sound, if blunt.
  *
  * Refusing costs nothing: the call is still T2's `return f(args);`. */
+/* musttail-indirect-aggregate-arg-dangles-on-aarch64: may a parameter of
+ * this C type ride a `musttail` call?  Yes for a pointer, a scalar, and the
+ * 16-byte `tur_tagged_t`; no for any other by-value aggregate.  AAPCS64
+ * passes an aggregate over 16 bytes INDIRECTLY -- the caller makes a copy
+ * in its own frame and passes its address -- and a musttail call's frame is
+ * gone by the time the callee reads that copy.  SysV x86-64 passes the same
+ * aggregate in the outgoing argument area, which musttail reuses safely, so
+ * only arm64 saw it: `__dynwit_Comb_comb_Two` forwarding its 32-byte
+ * `tur_adt_Two__any` printed nothing and panicked on macOS
+ * (saffron-class-fn-extra, #1007).  A by-value ADT's size is not visible in
+ * its spelling, so every aggregate other than `tur_tagged_t` is refused;
+ * the call is still an ordinary `return f(args);`. */
+static bool musttail_param_in_registers(const char *c) {
+    if (!c || !*c) return false;
+    if (strchr(c, '*')) return true;
+    static const char *const ok[] = {
+        "tur_tagged_t", "int64_t", "int32_t", "int16_t", "int8_t",
+        "uint64_t", "uint32_t", "uint16_t", "uint8_t", "double", "float",
+        "bool", "_Bool", "char", "int", "unsigned", "long", "size_t",
+        "intptr_t", "uintptr_t", NULL
+    };
+    for (int i = 0; ok[i]; i++)
+        if (strcmp(c, ok[i]) == 0) return true;
+    return false;
+}
+
 static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) {
     if (!ctx->mt_fn_cname || !v || body != ctx->mt_body_buf) return false;
     const char *q = v;
@@ -1572,6 +1676,7 @@ static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) 
         const char *b = emit_sig_lookup_param_ctype(callee, (uint32_t)i);
         if (!a || !b || strcmp(a, b) != 0) return false;
         if (strncmp(a, "const ", 6) == 0) return false;
+        if (!musttail_param_in_registers(a)) return false;
     }
     const char *segs[2] = { body->data + ctx->mt_body_start, v };
     size_t lens[2] = { body->len - ctx->mt_body_start, strlen(v) };
@@ -2151,6 +2256,7 @@ static FnDef *gs_thunk_fn(const Expr *cu) {
             case EX_POLY_WRAP: th = th->as.poly_wrap_.inner; break;
             case EX_FN_TO_FAT: th = th->as.fn_to_fat_.inner; break;
             case EX_CAST:      th = th->as.cast_.expr; break;
+            case EX_REINTERPRET:   th = th->as.reinterpret_.expr; break;
             case EX_ASCRIBE:   th = th->as.ascribe_.inner; break;
             default: return NULL;
         }
@@ -2187,6 +2293,7 @@ static bool gs_suspends(const Expr *e, FnDef *fd) {
                 if (gs_suspends(e->as.call_.args[i], fd)) return true;
             return false;
         case EX_CAST:    return gs_suspends(e->as.cast_.expr, fd);
+        case EX_REINTERPRET: return gs_suspends(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE: return gs_suspends(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends(e->as.panic_payload_value_.payload, fd);
@@ -2445,6 +2552,7 @@ static bool gs_has_br3b(const Expr *e, FnDef *fd) {
         case EX_GET_FIELD: return gs_has_br3b(e->as.get_field_.struct_expr, fd);
         case EX_DEREF:     return gs_has_br3b(e->as.deref_.expr, fd);
         case EX_CAST:      return gs_has_br3b(e->as.cast_.expr, fd);
+        case EX_REINTERPRET:   return gs_has_br3b(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE:   return gs_has_br3b(e->as.ascribe_.inner, fd);
         default:           return false;
     }
@@ -2471,6 +2579,7 @@ static bool gs_value_ok(const Expr *e, FnDef *fd) {
         case EX_CSTR_LIT: case EX_NIL_LIT: case EX_VAR:
             return true;
         case EX_CAST:       return gs_value_ok(e->as.cast_.expr, fd);
+        case EX_REINTERPRET:    return gs_value_ok(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE:    return gs_value_ok(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_value_ok(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_value_ok(e->as.panic_payload_value_.payload, fd);
@@ -2606,6 +2715,7 @@ static bool gs_has_panic(const Expr *e) {
                 if (gs_has_panic(e->as.call_.args[i])) return true;
             return false;
         case EX_CAST:                return gs_has_panic(e->as.cast_.expr);
+        case EX_REINTERPRET:             return gs_has_panic(e->as.reinterpret_.expr);
         case EX_ASCRIBE:             return gs_has_panic(e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_has_panic(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_has_panic(e->as.panic_payload_value_.payload);
@@ -2661,6 +2771,7 @@ static const Expr *gs_leftmost_panic(const Expr *e) {
             }
             return NULL;
         case EX_CAST:                return gs_leftmost_panic(e->as.cast_.expr);
+        case EX_REINTERPRET:             return gs_leftmost_panic(e->as.reinterpret_.expr);
         case EX_ASCRIBE:             return gs_leftmost_panic(e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost_panic(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost_panic(e->as.panic_payload_value_.payload);
@@ -2694,6 +2805,7 @@ static bool gs_has_catch(const Expr *e, FnDef *fd) {
                 if (gs_has_catch(e->as.call_.args[i], fd)) return true;
             return false;
         case EX_CAST:    return gs_has_catch(e->as.cast_.expr, fd);
+        case EX_REINTERPRET: return gs_has_catch(e->as.reinterpret_.expr, fd);
         case EX_ASCRIBE: return gs_has_catch(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_has_catch(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_has_catch(e->as.panic_payload_value_.payload, fd);
@@ -2874,6 +2986,7 @@ static void gs_collect(GsCtx *gs, const Expr *e) {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) { gs_collect(gs, e->as.call_.args[i]); }
             break;
         case EX_CAST:       gs_collect(gs, e->as.cast_.expr); break;
+        case EX_REINTERPRET:    gs_collect(gs, e->as.reinterpret_.expr); break;
         case EX_ASCRIBE:    gs_collect(gs, e->as.ascribe_.inner); break;
         case EX_PANIC_PAYLOAD_TYPE:  gs_collect(gs, e->as.panic_payload_type_.payload); break;
         case EX_PANIC_PAYLOAD_VALUE: gs_collect(gs, e->as.panic_payload_value_.payload); break;
@@ -2912,6 +3025,7 @@ static bool gs_suspends_live(GsCtx *gs, const Expr *e) {
                 if (gs_suspends_live(gs, e->as.call_.args[i])) return true;
             return false;
         case EX_CAST:    return gs_suspends_live(gs, e->as.cast_.expr);
+        case EX_REINTERPRET: return gs_suspends_live(gs, e->as.reinterpret_.expr);
         case EX_ASCRIBE: return gs_suspends_live(gs, e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends_live(gs, e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends_live(gs, e->as.panic_payload_value_.payload);
@@ -2958,6 +3072,7 @@ static const Expr *gs_leftmost(GsCtx *gs, const Expr *e) {
             }
             return NULL;
         case EX_CAST:    return gs_leftmost(gs, e->as.cast_.expr);
+        case EX_REINTERPRET: return gs_leftmost(gs, e->as.reinterpret_.expr);
         case EX_ASCRIBE: return gs_leftmost(gs, e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost(gs, e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost(gs, e->as.panic_payload_value_.payload);
@@ -3381,6 +3496,7 @@ static bool gs_has_br3b_live(GsCtx *gs, const Expr *e) {
                 if (gs_has_br3b_live(gs, e->as.call_.args[i])) return true;
             return false;
         case EX_CAST:    return gs_has_br3b_live(gs, e->as.cast_.expr);
+        case EX_REINTERPRET: return gs_has_br3b_live(gs, e->as.reinterpret_.expr);
         case EX_ASCRIBE: return gs_has_br3b_live(gs, e->as.ascribe_.inner);
         default:         return false;
     }
@@ -3402,6 +3518,7 @@ static void gs_preemit_br3b(GsCtx *gs, Buf *b, const Expr *e) {
                 gs_preemit_br3b(gs, b, e->as.builtin.args[i]);
             return;
         case EX_CAST:    gs_preemit_br3b(gs, b, e->as.cast_.expr); return;
+        case EX_REINTERPRET: gs_preemit_br3b(gs, b, e->as.reinterpret_.expr); return;
         case EX_ASCRIBE: gs_preemit_br3b(gs, b, e->as.ascribe_.inner); return;
         case EX_CALL: {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
@@ -3841,6 +3958,7 @@ static void gs_callees(const Expr *e, FnDef **out, int *n, int cap) {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) { gs_callees(e->as.call_.args[i], out, n, cap); }
             break;
         case EX_CAST:       gs_callees(e->as.cast_.expr, out, n, cap); break;
+        case EX_REINTERPRET:    gs_callees(e->as.reinterpret_.expr, out, n, cap); break;
         case EX_ASCRIBE:    gs_callees(e->as.ascribe_.inner, out, n, cap); break;
         case EX_PANIC_PAYLOAD_TYPE:  gs_callees(e->as.panic_payload_type_.payload, out, n, cap); break;
         case EX_PANIC_PAYLOAD_VALUE: gs_callees(e->as.panic_payload_value_.payload, out, n, cap); break;
@@ -4287,9 +4405,20 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
     }
     bool ret_is_int64_carrier = ret_ctype &&
         strcmp(ret_ctype, "int64_t") == 0;
+    /* What the hoist temp HOLDS settles an int64 return before any of the
+     * tail predicates below, which read the elaborated EXPRESSION: a temp
+     * recorded `int64_t` is already the word, whatever its type says.  A mixed
+     * spec (`__inst_R_rm_W__spec__int64_t_tur_adt_W`) and a word-returning
+     * dict slot both hand one back under a concrete-looking type (`W`), and
+     * every box path below then assigned the int64 into a struct. */
+    const char *ret_val_ct = (ret_val && emit_str_is_bare_ident(ret_val))
+        ? emit_localvar_lookup_ctype(ret_val) : NULL;
     /* Special case: if this is main and it returns int64_t, cast to int */
     if (is_main && result_kind == TY_INT) {
         buf_printf(out, "return (int)%s;\n", ret_val);
+    } else if (ret_is_int64_carrier && ret_val_ct &&
+               strcmp(ret_val_ct, "int64_t") == 0) {
+        buf_printf(out, "return %s;\n", ret_val);
     } else if (fd->box_aggregate_result) {
         /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): a functor-
          * wrapping closure `g` for a wide-functor lens must return the int64
@@ -4339,6 +4468,19 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          * into garbage. */
         TypeKind clone_rk = tail_e
             ? emit_resolve_type(ctx, tail_e->type).kind : TY_UNKNOWN;
+        /* dict-slot-classvar-scalar-result: a dispatch through a slot whose
+         * class result is the class variable now returns the WORD (the slot
+         * wrapper boxed / bit-packed it), into a temp recorded `int64_t` --
+         * even where the elaborator typed the call with a sole instance's
+         * concrete result (`W`, `double`).  That value is already the carrier;
+         * boxing or bit-packing it again would double-convert. */
+        if (ret_val && emit_str_is_bare_ident(ret_val)) {
+            const char *rvc = emit_localvar_lookup_ctype(ret_val);
+            if (rvc && strcmp(rvc, "int64_t") == 0) {
+                buf_printf(out, "return %s;\n", ret_val);
+                goto clone_ret_done;
+            }
+        }
         /* hkt-dict-clone-tail-generic-call: the body is NOT always a single
          * dispatch.  A constrained generic that calls ANOTHER constrained
          * generic -- `(defn add-two [^Monad M] ... (add-one (add-one m)))` --
@@ -4631,6 +4773,30 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
         indent_buf(out, ctx->indent);
         buf_printf(out, "return %s;\n", bridged);
         free(bridged);
+    } else if (!ret_is_int64_carrier && ret_ctype && ret_val &&
+               tail_e && tail_e->type.kind != TY_NEVER &&
+               (strcmp(ret_ctype, "double") == 0 ||
+                strcmp(ret_ctype, "float") == 0) &&
+               (emit_tail_call_returns_tyvar_carrier(ctx, tail_e) ||
+                (emit_str_is_bare_ident(ret_val) &&
+                 emit_localvar_lookup_ctype(ret_val) &&
+                 strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) {
+        /* generic-tail-call-carrier-into-float-return: a spec whose C return
+         * is a concrete `double`/`float` (`first-of [A] ... : A` at A=float)
+         * but whose tail value is the int64 CARRIER -- a generic callee
+         * returning a bare tyvar (`(vec-get v 0)`), hoisted into an int64
+         * temp.  `return __ps;` is then C's implicit integer->float VALUE
+         * conversion: 7.1's bit pattern printed as 4.61968e+18.  Keyed on the
+         * two C types, not on the tail's shape: an int64 word handed to a
+         * float return is a carrier, because a conversion the program ASKED
+         * for is spelled TUR_AS and never reaches here as a bare temp. */
+        Type sink_rt = emit_type_from_kind(strcmp(ret_ctype, "float") == 0
+                                               ? TY_FLOAT32 : TY_FLOAT);
+        char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
+                                            CK_CARRIER, CK_CONCRETE, sink_rt);
+        indent_buf(out, ctx->indent);
+        buf_printf(out, "return %s;\n", bridged);
+        free(bridged);
     } else if (!ret_is_int64_carrier &&
                ctx->current_fn_ret_ctype &&
                strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
@@ -4755,6 +4921,17 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
         buf_printf(out, "(void)(%s);\n", ret_val);
         indent_buf(out, ctx->indent);
         buf_puts(out, "return;\n");
+    } else if (ret_is_int64_carrier && tail_e && ret_val &&
+               /* the function as actually EMITTED returns the word -- a
+                * declared `: int` an earlier rule retyped to the body's
+                * `(Option int)` returns that aggregate, not the carrier */
+               fn_emitted_ret_is_word(ctx, fd, use_abi_spec) &&
+               carrier_return_concrete_stmt(ctx, tail_e, ret_val, NULL)) {
+        Buf rs; buf_init(&rs);
+        carrier_return_concrete_stmt(ctx, tail_e, ret_val, &rs);
+        buf_putc(&rs, '\0');
+        buf_puts(out, rs.data);
+        buf_free(&rs);
     } else {
         buf_printf(out, "return %s;\n", ret_val);
     }
@@ -5172,6 +5349,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     const char   *saved_dd_cnames[MAX_FN_CONSTRAINTS];
     memcpy(saved_dd_classes, ctx->dict_dispatch_classes, sizeof saved_dd_classes);
     memcpy(saved_dd_cnames, ctx->dict_dispatch_param_cnames, sizeof saved_dd_cnames);
+    struct Binding *saved_dd_params[MAX_FN_CONSTRAINTS];
+    memcpy(saved_dd_params, ctx->dict_dispatch_params, sizeof saved_dd_params);
     char         *dd_cnames_owned[MAX_FN_CONSTRAINTS] = {0};
     if (fd->n_dict_clone > 0) {
         /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): install the full
@@ -5182,6 +5361,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         for (uint8_t k = 0; k < fd->n_dict_clone; k++) {
             dd_cnames_owned[k] = raw_name_for_binding(fd->dict_clone_params[k]);
             ctx->dict_dispatch_param_cnames[k] = dd_cnames_owned[k];
+            ctx->dict_dispatch_params[k] = fd->dict_clone_params[k];
             ctx->dict_dispatch_classes[k] = fd->dict_clone_classes[k];
         }
         ctx->dict_dispatch_param_cname = dd_cnames_owned[0];
@@ -5506,6 +5686,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
               || user_inst_method)
           && !fd->binding->is_from_stdlib) &&
         !(emit_split_lib_owns(fd->binding) && !ctx->fn_name_override);
+    /* A HAND-WRITTEN body is recorded for the emitted-C checks
+     * (tests/check-emitted-float-conversions.py): they police what the
+     * EMITTER decides, and a conversion an inline-C author wrote on purpose
+     * -- `return (double)n;` in int->float -- is reviewed as code, not
+     * inferred.  emit_program writes the list as one trailing comment. */
+    if (fd->body && fd->body->kind == EX_INLINE_C)
+        emit_note_inline_c_fn(fn_name);
     if (needs_static) {
         buf_printf(file, "static ");
     }
@@ -5924,6 +6111,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         }
         free((void*)pn);
     }
+    /* `(void)`, not `()`: see the forward declaration in emit_module.c. */
+    if (fd->n_params == 0 && !emit_main_argv) buf_puts(file, "void");
     buf_puts(file, ") {\n");
 
     /* proper-tail-calls T6 (T-D6): a bouncer -- a function whose tail reaches a
@@ -6590,6 +6779,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->dict_dispatch_n = saved_dd_n;
     memcpy(ctx->dict_dispatch_classes, saved_dd_classes, sizeof saved_dd_classes);
     memcpy(ctx->dict_dispatch_param_cnames, saved_dd_cnames, sizeof saved_dd_cnames);
+    memcpy(ctx->dict_dispatch_params, saved_dd_params, sizeof saved_dd_params);
     for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_cnames_owned[k]);
     ctx->cur_dict_env_n = saved_de_n;
     memcpy(ctx->cur_dict_env_classes, saved_de_classes, sizeof saved_de_classes);

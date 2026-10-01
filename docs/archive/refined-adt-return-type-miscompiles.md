@@ -45,3 +45,25 @@ arg peeling) is the analogous place for type ARGUMENTS; this is the result slot.
   wraps the aggregate value, not a carrier word.
 - Add a fixture: a refined ADT result that is matched by the caller
   (`refine-adt-return`), plus the `--no-contracts` variant.
+
+## Resolution (2026-09-30)
+
+The suspected root cause was close but not the site. The peel itself was
+right: `elab_defn`'s `: (type-expr)` return path (`src/compiler/elab_fns.c`)
+peels `#refine{ r : T | p }` to `T` before classifying it. What that path never
+did was capture an ADT's DEF. The `: Lst` keyword path sets `return_adt_def`
+from the ADT name, and the defalias path sets it from the alias target, but
+the type-expr path set only `return_kind = TY_ADT`. Every downstream consumer
+of `return_adt_def` then saw no ADT. The signature fell back to the `int64_t`
+carrier. The body still returned the aggregate. The caller read the call as a
+constructor of `Lst` (`ctor_Lst_same(...)`).
+
+The fix captures `ann->as.adt_.def` into `return_adt_def` in that path, so a
+refined ADT result and the plain `: Lst` result emit identical signatures and
+return sequences. The runtime check wraps the aggregate. A violating result
+panics with `Return contract violated`, as before.
+
+Pinned by `tests/fixtures/refine-adt-return` (a recursive `defdata` result
+matched by the caller, a predicate that reads the result, and a record
+`defstruct` result read field by field) and its `--no-contracts` twin
+`refine-adt-return-no-contracts`. Both pass under `run.sh` and `run-turi.sh`.

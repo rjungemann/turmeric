@@ -1,0 +1,4 @@
+# generic-spec-matrix open cells (tests/generic-spec-matrix.py)
+# Empty: every PRODUCER/SINK/TYPE cell passes compiled, interpreted and
+# linted.  A new failing cell fails ctest tur_generic_spec_matrix; do not add
+# it here without a filed report.

@@ -1,0 +1,46 @@
+;; generic-spec-carrier-crossings-4 -- what tests/generic-spec-matrix.py found
+;; once the map sink could be elaborated at all:
+;;
+;;   vec   `(let [w (vec-new)] (vec-push! w (vec-get v 0)) ...)`: S4 forward
+;;         inference peeled the tyvar wrapper around `(vec-get v 0)`, read the
+;;         carrier `int` under it and pinned `w` to `(Vec int)`.  That retyped
+;;         the generic's declared `A` result `int`, so at `A := (fn ...)` the
+;;         caller thin-called the fat handle it returned (SIGSEGV)
+;;   map   `(map-assoc (map-new) 1 x)` with `x : A` was refused at check time,
+;;         and once accepted it kept `(map-new)`'s own unfixed V, which
+;;         `map-get` read back as `int` -- the same retype, the same SIGSEGV
+;;   cps   a colored generic whose heap-handle spec the CPS backend refuses
+;;         rendered its TEMPLATE a second time under the base name
+;;         (`redefinition of mx__cps`)
+;;
+;; See docs/archive/generic-spec-carrier-crossings.md.
+
+(defstruct Pt [x : int y : float])
+(defstruct Hp :heap [x : int y : float])
+
+(defn via-vec [A] [v : (Vec A)] : A
+  (let [w (vec-new)] (vec-push! w (vec-get v 0)) (vec-get w 0)))
+(defn via-map [A] [v : (Vec A)] : A
+  (map-get (map-assoc (map-new) 1 (vec-get v 0)) 1))
+(defn via-thunk-map [A] [f : (fn [] A)] : A
+  (map-get (map-assoc (map-new) 1 (f)) 1))
+
+(defn fns [] : (Vec (fn [int] int))
+  (let [v (:: (vec-new) (Vec (fn [int] int)))]
+    (vec-push! v (fn [n : int] : int (+ n 1)))
+    v))
+(defn floats [] : (Vec float)
+  (let [v (:: (vec-new) (Vec float))] (vec-push! v 7.1) v))
+(defn pts [] : (Vec Pt)
+  (let [v (:: (vec-new) (Vec Pt))] (vec-push! v (Pt 3 2.5)) v))
+
+(defn main [] : int
+  (println ((via-vec (fns)) 41))                      ; 42
+  (println (via-vec (floats)))                        ; 7.1
+  (println (.y (via-vec (pts))))                      ; 2.5
+  (println ((via-map (fns)) 41))                      ; 42
+  (println (via-map (floats)))                        ; 7.1
+  (println (.y (via-map (pts))))                      ; 2.5
+  (println (.y (via-thunk-map (fn [] (Hp 5 2.25)))))  ; 2.25
+  (println (via-thunk-map (fn [] 4.5)))               ; 4.5
+  0)

@@ -661,6 +661,26 @@ static void m7_collect_form_tyvars(const Form *form,
     }
 }
 
+/* saffron-dyn-witness-fn-arity-defaults-unary: what an arity-less `fn`
+ * class parameter means.  In typed Turmeric it is the Phase CCL poly-closure
+ * carrier (`tur_poly_fn_t`, int64 in and out).  In a DYNAMIC dialect every
+ * lambda is `(fn [any ..] any)` -- a tagged-value convention the int64 carrier
+ * cannot speak -- so there the parameter is simply a function value that
+ * arrives as `any` and is called dynamically (EX_DYN_CALL checks the arity
+ * against the closure that arrived).  With the carrier, the instance body
+ * called a Saffron lambda through `int64_t(*)(void*, int64_t)` and printed
+ * the element's TYPE TAG (`4` for 2.5), and a binary `g` panicked at the
+ * witness's unary cast. */
+static void tc_fn_param_type(Span sp, Type *ty, bool *is_fn) {
+    if (lang_span_is_dynamic(sp)) {
+        *ty = type_simple(TY_ANY, CK_COPY);
+        *is_fn = false;
+    } else {
+        *ty = TYPE_PTR_VOID;
+        *is_fn = true;
+    }
+}
+
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
                                                uint32_t *out_body_start,
                                                const Symbol **class_type_params,
@@ -832,8 +852,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                            (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
                     param_types[prev] = TYPE_PTR_VOID;
                 } else if (kw->len == 2 && memcmp(kw->name, "fn", 2) == 0) {
-                    param_types[prev] = TYPE_PTR_VOID;
-                    param_is_fn[prev] = true;
+                    tc_fn_param_type(p->span, &param_types[prev], &param_is_fn[prev]);
                 } else {
                     /* Phase RT: a parameter typed `:a` naming a class type
                      * parameter becomes a TY_TYVAR -- this is the dispatch
@@ -875,8 +894,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     (inner_f->tag == F_SYM || inner_f->tag == F_KEYWORD) &&
                     inner_f->as.sym->len == 2 &&
                     memcmp(inner_f->as.sym->name, "fn", 2) == 0) {
-                    param_types[actual_p - 1] = TYPE_PTR_VOID;
-                    param_is_fn[actual_p - 1] = true;
+                    tc_fn_param_type(p->span, &param_types[actual_p - 1],
+                                     &param_is_fn[actual_p - 1]);
                 } else if (inner_f &&
                            (inner_f->tag == F_SYM || inner_f->tag == F_KEYWORD) &&
                            class_type_param_match(inner_f->as.sym->name,
@@ -944,8 +963,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                         /* Phase CCL: :fn marks this param as a single-argument
                          * callable; it will be passed as tur_poly_fn_t at call
                          * sites so that capturing closures work transparently. */
-                        param_types[actual_p] = TYPE_PTR_VOID;
-                        param_is_fn[actual_p] = true;
+                        tc_fn_param_type(type_f->span, &param_types[actual_p],
+                                         &param_is_fn[actual_p]);
                     } else {
                         diag_emit(DIAG_ERROR, type_f->span,
                                   "unsupported type in typeclass method parameter");
@@ -960,8 +979,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                         (ti->tag == F_SYM || ti->tag == F_KEYWORD) &&
                         ti->as.sym->len == 2 &&
                         memcmp(ti->as.sym->name, "fn", 2) == 0) {
-                        param_types[actual_p] = TYPE_PTR_VOID;
-                        param_is_fn[actual_p] = true;
+                        tc_fn_param_type(type_f->span, &param_types[actual_p],
+                                         &param_is_fn[actual_p]);
                     } else {
                         Type *ft = ti
                             ? type_expr_from_form(e, ti, NULL,
@@ -2279,6 +2298,28 @@ static bool m7_body_returns_byvalue_element(const Expr *e) {
             return e->as.call_.fn_binding && !e->as.call_.fn_expr &&
                    !e->as.call_.fn_binding->is_global &&
                    e->type.kind != TY_APP;
+        case EX_ANY_CAST:
+            /* The checked unbox a dynamic body takes under a `: a` result
+             * (see the instance-body narrowing): the element read is under it. */
+            return m7_body_returns_byvalue_element(e->as.any_cast_.value);
+        case EX_DYN_CALL: {
+            /* saffron-dyn-witness-fn-arity-defaults-unary: a Saffron `g : fn`
+             * extra is an `any` called dynamically -- `(g (.l t) (.r t))`.
+             * Like the Foldable fn-PARAMETER arm above, the receiver reaches
+             * the callee only as extracted elements, each WIDENED to `any` on
+             * the way in, and that widen is what needs the element's type.
+             * Admit a local (parameter) callee whose every argument is itself
+             * a by-value element read. */
+            const Expr *fe = e->as.dyn_call_.fn;
+            while (fe && fe->kind == EX_ASCRIBE) fe = fe->as.ascribe_.inner;
+            if (!fe || fe->kind != EX_VAR || !fe->as.var.binding ||
+                fe->as.var.binding->is_global)
+                return false;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (!m7_body_returns_byvalue_element(e->as.dyn_call_.args[i]))
+                    return false;
+            return true;
+        }
         case EX_UNION_INJECT: {
             /* erased-instance-body-tags-a-type-variable-widened-to-any: an
              * `: any` result is an element read WIDENED on the way out --
@@ -4212,6 +4253,26 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     impl_body_start = 3;
                 }
             }
+            /* A compound result annotation, `: (Option float)`, `: (Vec int)`:
+             * only a bare symbol reached the `kw` path, so this fell through to
+             * the body and came back as "type annotation ': type' is only valid
+             * after a parameter name" -- while the same form is accepted on a
+             * method PARAMETER and on the class declaration.  Resolve it the
+             * way a parameter annotation is resolved. */
+            if (!kw && impl_body_start == 2 && ret_or_body->tag == F_TYPE_ANN &&
+                ret_or_body->as.list.len == 1 &&
+                ret_or_body->as.list.items[0]->tag != F_CONTRACT_TYPE) {
+                Type *ft = type_expr_from_form(e, ret_or_body->as.list.items[0],
+                                               NULL, NULL, NULL, 0);
+                if (!ft) {
+                    diag_emit(DIAG_ERROR, ret_or_body->span,
+                              "unsupported type form in method return annotation");
+                    return NULL;
+                }
+                ret_was_class_var = false;
+                return_type = *ft;
+                impl_body_start = 3;
+            }
             if (kw) {
                 /* carrier-aware-return-unification Phase 3: an explicit instance
                  * return annotation replaces the substituted class-var return, so
@@ -5168,6 +5229,24 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
             method_body->type.kind != TY_NEVER) {
             Expr *widened = elab_coerce_to_any_return(e, method_body);
             if (widened) method_body = widened;
+        }
+
+        /* The inverse, for a DYNAMIC body under a type-variable result: a
+         * Saffron `g : fn` extra is called dynamically, so `(g (.l t))` is an
+         * `any` while the class declares `: a`.  Nothing narrowed it, and the
+         * erased body returned a `tur_tagged_t` from an `int64_t` function
+         * (saffron-dyn-witness-fn-arity-defaults-unary; the fuzzer's
+         * `hofm_g_fn` + `hofm_r_a` legs).  The checked unbox -- the node
+         * `(cast x T)` lowers to -- is the D5 seam a defn's concrete result
+         * already takes; under a spec `a` resolves to the element's type, and
+         * in the erased body an unresolved target fails loudly at runtime
+         * rather than reinterpreting the box. */
+        if (method_body && method_body->kind != EX_INLINE_C &&
+            mp->ret_kind == TY_TYVAR && method_body->type.kind == TY_ANY &&
+            lang_span_is_dynamic(method_body->span)) {
+            Expr *unboxed = elab_any_unbox_to(e, method_body, mp->ret_full,
+                                              method_body->span);
+            if (unboxed) method_body = unboxed;
         }
 
         /* saffron-applied-class-var-result-takes-one-instances-type: with the
@@ -6364,9 +6443,11 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
          * impl never records the fn's arity, but the CLASS does
          * when it spells the parameter -- Foldable's `fn : (fn
          * [b a] b)` is binary -- so the cast takes that arity,
-         * `(fn [any any] any)`.  Only an unannotated class
-         * parameter (`[container g]`) leaves it unknown, and
-         * that one is taken as unary. */
+         * `(fn [any any] any)`.  A Saffron class never reaches
+         * this arm with an arity-less `g : fn`: there the
+         * parameter is an `any` called dynamically
+         * (tc_fn_param_type).  Only a TYPED class's unannotated
+         * parameter leaves the arity unknown, taken as unary. */
         FnDef *wimpl = wi->method_impls[slot];
         bool tc_hkt = false;
         if (tc->type_param_kinds)
@@ -7230,6 +7311,22 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         for (uint32_t j = 0; j < n_args; j++) {
                             args[j] = elab_form(e, call->as.list.items[2 + j]);
                             if (!args[j]) return NULL;
+                            /* A bare `fn` field has no signature, so the call
+                             * uses the int64 register class; a float argument
+                             * would reach the callee in the wrong register.
+                             * Same rule as a `:fn` parameter's application. */
+                            if (!ctor->fields[i].full_type &&
+                                kind_is_float_class(args[j]->type.kind)) {
+                                diag_emit(DIAG_ERROR, args[j]->span,
+                                          "calling field '%s' with a floating-point "
+                                          "argument is not supported: it is declared "
+                                          "bare `fn` (no signature), and a call "
+                                          "through it uses the int64 register class\n"
+                                          "  = help: declare the field's function "
+                                          "type, e.g. (fn [float] float)",
+                                          method_name);
+                                return NULL;
+                            }
                         }
                         Type result_type = TYPE_INT;
                         if (field_type.kind == TY_FN) {
@@ -8481,6 +8578,18 @@ found_method:;
             best_inst = user_fallback_inst;
             goto resolved_user_fallback;
         }
+        /* rank2-class-float-float32-ambiguous: an ABSTRACT type-variable
+         * receiver in a constrained generic is never ambiguous -- the instance
+         * that runs comes from the dictionary (or per-spec re-resolution), and
+         * best_inst is only the base clone's representative.  The carrier tier
+         * above finds one when the class has an int-like instance; a class
+         * whose instances are all floats or aggregates (`float` and
+         * `float32`) fell through to here and was refused outright.  Keep the
+         * first candidate the search recorded. */
+        if (obj_is_abstract_tyvar && best_method && best_inst) {
+            exact_match_found = true;
+            goto resolved_user_fallback;
+        }
         /* A RETURN-directed method reached through the dot form.
          *
          * `.m` means "dispatch on the first argument", which is the wrong
@@ -8844,6 +8953,22 @@ resolved_user_fallback:;
         }
     }
 
+    /* A <: any, as elab_call_fn's argument loop spells it: an argument whose
+     * instance parameter is `any` crosses as a BOX.  The static dispatch path
+     * never did this, so a lambda handed to a Saffron `g : fn` extra (an `any`
+     * parameter -- tc_fn_param_type) reached the `tur_tagged_t` slot as a bare
+     * function pointer, and cc refused it (saffron-dyn-witness-fn-arity-
+     * defaults-unary, the direct-dispatch half). */
+    for (uint32_t i = 0; i < n_args; i++) {
+        uint8_t pidx = 1 + (uint8_t)i;
+        if (pidx < best_method->n_params && best_method->params[pidx] &&
+            best_method->params[pidx]->type.kind == TY_ANY && args[i] &&
+            args[i]->type.kind != TY_ANY && args[i]->type.kind != TY_NEVER) {
+            Expr *w = elab_coerce_to_any(e, args[i]);
+            if (w) args[i] = w;
+        }
+    }
+
     /* Allocate arguments array with obj prepended */
     Expr **call_args = (Expr **)arena_alloc(e->arena, (n_args + 1) * sizeof(Expr *));
     call_args[0] = obj;
@@ -8984,6 +9109,25 @@ resolved_user_fallback:;
                 cm->return_type.as.tyvar_.name &&
                 strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
             if (recv_is_cv && res_is_cv) result_type = obj->type;
+            /* class-var-applied-result-untyped-in-constrained-generic: the
+             * same rule for a result that mentions the class variable INSIDE
+             * an application -- `(co [x : a] : (Option a))`.  The
+             * representative's result kind is TY_APP with no structure, the
+             * def-less `(? ?)` that unifies with anything: `(unwrap-or (co x)
+             * x)` was refused, `(match (co x) (Some q) q ...)` bound `q` as
+             * int, and a `: cstr` return of `(co x)` was accepted.  Kind-*
+             * classes only: an HKT class's application head is a constructor
+             * variable, which the M7 path below grounds. */
+            else if (recv_is_cv && cm->return_type.kind == TY_APP &&
+                     !(rtc->type_param_kinds &&
+                       rtc->type_param_kinds[0] != KIND_STAR)) {
+                const Symbol *cvs[1] = { rtc->type_params[0] };
+                Type rt = elab_subst_class_tyvars(e->arena, cm->return_type,
+                                                  cvs, 1, &obj->type, 1);
+                const Type *hd = &rt;
+                while (hd->kind == TY_APP && hd->as.app.fn) hd = hd->as.app.fn;
+                if (hd->kind == TY_ADT && hd->as.adt_.def) result_type = rt;
+            }
             break;
         }
     }
@@ -9788,7 +9932,13 @@ resolved_user_fallback:;
             out->as.call_.n_abi_bindings = bi;
         }
     }
-    return out;
+    /* method-call-control-operand-evicted: a dict-dispatched method call is
+     * an indirect callee to the CPS translation, which delegates it whole to
+     * the direct emitter and so requires atomic operands -- `(.p (handle
+     * ...))` evicted its function ("indirect call (non-atomic args)") and,
+     * with it, every performer of the handled effect.  Bind a control-bearing
+     * operand out first, as the constructor call already does. */
+    return elab_hoist_control_operands(e, out);
 }
 
 /* ======================================================================== *

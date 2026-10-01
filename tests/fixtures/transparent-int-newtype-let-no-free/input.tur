@@ -1,0 +1,16 @@
+;; phantom-parametric-heap-let-binding-repr-ice, second defect: a transparent
+;; int newtype (a parametric single-`:int`-field record, not `:heap`) is its
+;; int64 payload, and its constructor is an identity.  The RM1 scope drop read
+;; every constructor application as a freshly minted box and freed the let
+;; binding at scope exit -- `tur_region_free((void *)7)`, a segfault.
+(defstruct Holder [V] [payload : int])
+(defn holder-new [V] [] : (Holder V) (Holder 0))
+(defn holder-put [V] [^borrow h : (Holder V) v : V] : (Holder V) (Holder (:: v int)))
+(defn holder-get [V] [^borrow h : (Holder V)] : int (.payload h))
+
+(defn main [] : int
+  (let [a (holder-put (:: (holder-new) (Holder int)) 7)]
+    (println (holder-get a)))
+  (let [b (:: (Holder 11) (Holder cstr))]
+    (println (holder-get b)))
+  0)

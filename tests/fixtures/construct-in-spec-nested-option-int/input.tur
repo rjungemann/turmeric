@@ -1,0 +1,21 @@
+;; A constructor inside a generic's spec builds a value of the spec result's
+;; FAMILY that is not the spec's result: `(some x)` at A := (Option int) is an
+;; `(Option (Option int))` scrutinee.  The ABI scan adopted the spec's result
+;; whenever the call's own bindings had an `int` leaf (its guess for a carrier
+;; collapse), which peeled a layer and minted `some` at A := int -- invalid C.
+;; `(Option float)` never showed it, its leaf not being `int`.  The adoption
+;; now yields when it contradicts the constructor's own argument types.
+
+(defstruct Bx [A] [val : A])
+(defn g1 [A] [x : A] : A (match (some (.val (Bx x))) (Some q) q (None) x))
+(defn g2 [A] [x : A] : A (let [b (.val (Bx x))] (match (some b) (Some q) q (None) x)))
+(defn g3 [A] [x : A] : A (match (some x) (Some q) q (None) x))
+(defn g4 [A] [x : A] : (Option A) (some x))
+
+(defn main [] : int
+  (println (unwrap-or (g3 (some 7)) -1))                    ; 7
+  (println (unwrap-or (g2 (some 8)) -1))                    ; 8
+  (println (unwrap-or (g1 (some 9)) -1))                    ; 9
+  (println (unwrap-or (unwrap-or (g4 (some 10)) (:: (none) (Option int))) -1)) ; 10
+  (println (ok-val (g3 (:: (ok 11) (Result int cstr)))))    ; 11
+  0)

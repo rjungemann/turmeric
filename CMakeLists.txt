@@ -643,6 +643,37 @@ add_test(
   COMMAND bash tests/check-cc-warn-ratchet.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The explicit-cast half of the float<->int ratchet above.  -Wfloat-conversion
+# sees only IMPLICIT conversions, and the emitter spells a carrier crossing as
+# an explicit `(int64_t)(d)` -- the mechanism behind dozens of silent 7.1 -> 7
+# answers found one seam at a time.  clang's AST records every conversion, so
+# this reports each float<->int VALUE conversion in emitted program code that
+# is neither an `as` the program asked for (TUR_AS) nor an exact literal nor a
+# hand-written inline-C body.  Swept to zero over the corpus before landing
+# (2512 programs).  Self-tests its detector first; prints UNAVAILABLE rather
+# than passing when there is no clang.  Fans out across nproc, so serial.
+add_test(
+  NAME tur_emitted_float_conversions
+  COMMAND python3 tests/check-emitted-float-conversions.py --self-test --corpus
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_emitted_float_conversions PROPERTIES
+  RUN_SERIAL TRUE TIMEOUT 1500 DEPENDS tur)
+# generic-spec-carrier-crossings: the lint above only sees programs that exist,
+# and the fixture corpus held none of the generic-body shapes that were wrong.
+# This generates them -- a value typed as the enclosing generic's own `A`, every
+# producer x sink x representation -- and checks each cell compiled, interpreted
+# and linted.  Gated by a baseline that can only shrink (a FIXED cell fails the
+# run until it is removed).  Fans out across nproc, so serial.
+add_test(
+  NAME tur_generic_spec_matrix
+  COMMAND python3 tests/generic-spec-matrix.py
+          --tur "$<TARGET_FILE:tur>"
+          --baseline tests/generic-spec-matrix.baseline
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_generic_spec_matrix PROPERTIES
+  RUN_SERIAL TRUE TIMEOUT 3000 DEPENDS tur)
 # TUR_TEST_SHARD must partition the corpus: disjoint slices whose union is the
 # whole thing.  Neither half is observable from a sharded run itself -- a shard
 # that silently skipped fixtures, or ran some twice, still prints a clean

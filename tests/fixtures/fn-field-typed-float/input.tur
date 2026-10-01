@@ -1,0 +1,24 @@
+;; A TYPED fn field carries a float signature correctly, plain and effectful.
+;; The effectful one used to abort ("no CPS entry registered for effectful
+;; fn-value"): the E2a call looked the registry up by the field's fat box, and
+;; spelled every argument slot int64_t, so a float argument was value-converted
+;; into the wrong register class.  A BARE `fn` field cannot carry a float
+;; signature at all -- see errors/fn-field-bare-float-*.
+(defeffect Emit [x :float] :nil)
+(defeffect Count [n :int] :nil)
+(defstruct Scale :copy [app : (fn [float] float)])
+(defstruct Sink :copy [put : (fn [float] nil) #fx{Emit}])
+(defstruct Tally :copy [add : (fn [int] nil) #fx{Count}])
+(defn twice [v : float] : float (* v 2.0))
+(defn put-float [v : float] (perform (Emit v)))
+(defn add-int [n : int] (perform (Count n)))
+(defn main [] : int
+  (let [t (make-struct Scale twice)]
+    (println (.app t 3.25)))
+  (let [s (make-struct Sink put-float)]
+    (handle (do (.put s 2.5) (.put s 7.25))
+      (Emit [x] k) (do (println x) (resume k nil))))
+  (let [c (make-struct Tally add-int)]
+    (handle (do (.add c 4) (.add c 9))
+      (Count [n] k) (do (println n) (resume k nil))))
+  0)

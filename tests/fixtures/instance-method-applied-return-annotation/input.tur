@@ -1,0 +1,18 @@
+;; An instance method may restate an applied result type, `: (Option float)`,
+;; the way it may restate an applied PARAMETER type and the way the class
+;; declares it.  Only a bare symbol reached the return-annotation path, so the
+;; annotation fell through to the body and came back as "type annotation
+;; ': type' is only valid after a parameter name or as a return type".
+
+(defclass Co [a] (co [x : a] : (Option a)))
+(definstance Co [float] (co [x : float] : (Option float) (some {x + 1.25})))
+(definstance Co [cstr] (co [x : cstr] : (Option cstr) (some x)))
+
+(defclass Wrap [a] (wrap [x : a] : (Vec a)))
+(definstance Wrap [int] (wrap [x : int] : (Vec int) (vec-of x {x + 1})))
+
+(defn main [] : int
+  (println (unwrap-or (co 7.1) 0.5))      ; 8.35
+  (println (unwrap-or (co "seven") "d"))  ; seven
+  (println (vec-get (wrap 41) 1))         ; 42
+  0)

@@ -690,6 +690,7 @@ static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b) {
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 if ((r = any_find_sole_drop_use(e->as.let_.bindings[i].init, b))) return r;
             return any_find_sole_drop_use(e->as.let_.body, b);
+        case EX_REINTERPRET: return any_find_sole_drop_use(e->as.reinterpret_.expr, b);
         case EX_ASCRIBE: return any_find_sole_drop_use(e->as.ascribe_.inner, b);
         case EX_RETURN:  return any_find_sole_drop_use(e->as.return_.value, b);
         default: return NULL;
@@ -1375,6 +1376,22 @@ Expr *elab_let(Elab *e, const Form *call) {
                         typekind_to_string(ak), typekind_to_string(ik));
                     rc = -1; break;
                 }
+                /* committed-applied-let-annotation: an applied annotation was
+                 * parsed and then not compared at all, so `[o : (Option int)
+                 * (some 7.1)]`, `[o : (Vec int) (some 1)]` and `[o : (Option
+                 * int) 7]` were accepted -- the binding silently took the
+                 * initializer's type, or an int where an Option was claimed. */
+                if (!primitive && applied_type_conflict(*ann_ty, init->type)) {
+                    Buf ab; buf_init(&ab); type_print(&ab, *ann_ty); buf_putc(&ab, '\0');
+                    Buf ib; buf_init(&ib); type_print(&ib, init->type); buf_putc(&ib, '\0');
+                    diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
+                        TUR_E0001_TYPE_MISMATCH,
+                        "let binding '%s': type annotation does not match "
+                        "initializer (annotated %s, got %s)",
+                        name->name, ab.data, ib.data);
+                    buf_free(&ab); buf_free(&ib);
+                    rc = -1; break;
+                }
             }
             /* gadt-length-index-not-enforced: an annotated GADT index is a
              * claim about the initializer -- `[v : (Vec (Succ Zero)) (VNil)]`
@@ -1832,6 +1849,7 @@ Expr *elab_let(Elab *e, const Form *call) {
             if (ai && ai->kind == EX_GEN_NEXT && ai->as.gen_next_.gen_expr &&
                 ai->as.gen_next_.gen_expr->type.kind == TY_GENERATOR) {
                 b->gen_elem_kind = ai->as.gen_next_.gen_expr->type.as.generator_.element_kind;
+                b->gen_elem_tyvar = ai->as.gen_next_.gen_expr->type.as.generator_.element_tyvar;
                 b->gen_elem_set  = true;
             }
         }
@@ -5294,6 +5312,7 @@ Expr *elab_gen(Elab *e, const Form *call) {
     gen_type.copy_kind = CK_COPY;
     gen_type.hkt_kind  = KIND_STAR;
     gen_type.as.generator_.element_kind = def->element_kind;
+    gen_type.as.generator_.element_tyvar = gctx.element_tyvar;
 
     Expr *out = expr_new(e->arena, EX_GEN, gen_type, call->span);
     out->as.gen_.def = def;
@@ -5333,6 +5352,16 @@ Expr *elab_yield(Elab *e, const Form *call) {
     if (!e->gen_ctx->element_kind_set) {
         e->gen_ctx->element_kind     = value->type.kind;
         e->gen_ctx->element_kind_set = true;
+        /* generator-in-generic: remember WHICH tyvar, when it is one the
+         * enclosing signature quantifies -- the kind alone collapsed the
+         * element to `int` at gen-unwrap. */
+        if (value->type.kind == TY_TYVAR && value->type.as.tyvar_.name)
+            for (uint8_t si = 0; si < e->n_sig_tyvars; si++)
+                if (e->sig_tyvars[si] &&
+                    strcmp(e->sig_tyvars[si], value->type.as.tyvar_.name) == 0) {
+                    e->gen_ctx->element_tyvar = value->type.as.tyvar_.name;
+                    break;
+                }
     }
 
     uint32_t yid = ++e->gen_ctx->n_yields;
@@ -5393,14 +5422,28 @@ Expr *elab_gen_unwrap(Elab *e, const Form *call) {
     bool have = false;
     const Expr *src = p;
     while (src && src->kind == EX_ASCRIBE) src = src->as.ascribe_.inner;
+    const char *elem_tyvar = NULL;
     if (src && src->kind == EX_GEN_NEXT && src->as.gen_next_.gen_expr &&
         src->as.gen_next_.gen_expr->type.kind == TY_GENERATOR) {
         elem = src->as.gen_next_.gen_expr->type.as.generator_.element_kind;
+        elem_tyvar = src->as.gen_next_.gen_expr->type.as.generator_.element_tyvar;
         have = true;
     } else if (src && src->kind == EX_VAR && src->as.var.binding &&
                src->as.var.binding->gen_elem_set) {
         elem = src->as.var.binding->gen_elem_kind;
+        elem_tyvar = src->as.var.binding->gen_elem_tyvar;
         have = true;
+    }
+    /* generator-in-generic: an element typed with the enclosing signature's
+     * own tyvar reads as that tyvar -- the emitter bridges it per clone and
+     * the interpreter hands back the yielded value -- instead of collapsing
+     * to the `int` read below (7.1's bits printed as 4.61968e+18). */
+    if (have && elem == TY_TYVAR && elem_tyvar) {
+        Expr *tout = expr_new(e->arena, EX_GEN_UNWRAP,
+                              type_tyvar_named(elem_tyvar), call->span);
+        tout->as.gen_unwrap_.ptr_expr = p;
+        tout->as.gen_unwrap_.elem     = TY_TYVAR;
+        return tout;
     }
     if (have) {
         switch (elem) {

@@ -84,3 +84,34 @@ two prior reports were fixed and is the place to look.
 A fixture belongs next to the existing ones: a non-generic three-word
 `defstruct` pushed from a parameter, plus the two-word control that already
 passes, so the width boundary is pinned rather than rediscovered.
+
+## Resolution (2026-09-30)
+
+Two arms of the argument-bridging code in `emit_call` (`src/compiler/emit_expr.c`)
+heap-promote a by-value aggregate into an inline-C `val : A` carrier slot
+through `emit_carrier_bridge_escaping`. Both handed that bridge the raw
+argument text. For a wide struct PARAMETER that text names a `const T *`, so
+the heap cell was assigned a pointer (`*__t = x`). Then the later pass-by-ptr
+`(*(...))` deref wrapped the already-bridged carrier word (`*((int64_t)...)`).
+Those are the two cc errors in the report.
+
+Both arms now check `expr_is_pbp_param` first. They hand the bridge the
+pointee `(*(x))` and set `pbp_carrier_cast`, which suppresses the second
+deref. This is what the neighbouring TY_APP arm already did for its
+pointer-cast crossing. The arms are:
+
+- the non-parametric seam-4 arm (`(defstruct Node [a b c])`, the report's
+  repro), and
+- the first `expr_emits_byvalue_carrier_abi` arm, reached by a PARAMETRIC
+  by-value struct parameter (`x : (Tri int)`). Fixing only the first arm left
+  this shape failing the same way.
+
+The element is still a heap COPY. A copy is what a store needs, because the
+element outlives the caller's aggregate the parameter pointer borrows.
+
+Pinned by `tests/fixtures/vec-push-byvalue-struct-param`: the two-word
+control, a three-word struct pushed twice and read field by field, the
+four-field `Wide` shape (the one with a `bool` field) from the table above,
+and the parametric `(Tri int)`. It runs under both `run.sh` and `run-turi.sh`.
+The `crdt/rga` workaround in turmeric-spices (`__ins-at!` passes fields) can
+now be reverted to take the node.

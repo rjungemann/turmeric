@@ -1,0 +1,57 @@
+;; generic-spec-carrier-crossings-2 -- more of the shapes
+;; tests/generic-spec-matrix.py found once the first batch was fixed, each a
+;; value typed as the enclosing generic's own `A`:
+;;
+;;   lambda   `((fn [y : A] : A y) x)`: the lambda is lifted ONCE with the
+;;            carrier signature, but the float32 spec called it through a
+;;            float-typed pointer (printed 0)
+;;   capture  `(let [c x] ((fn [] c)))` at an Option: the closure's clone
+;;            returns the aggregate, the call read it as a box (segfault)
+;;   some     `(match (some x) ...)` with A := (Option float): `some` took the
+;;            enclosing spec's result type and was minted at A := float
+;;   vecagg   `(vec-push! w (ident x))` of a by-value struct / Option: passed
+;;            unboxed into the int64 slot (invalid C)
+;;   mut      a `^mut` Option cell reset from `vec-get`: the read-back freed
+;;            the vector's element box, the second read double-freed it
+;;   thunk    `(ident (f))` / `(pair-fst (pair (f) 0))` with `f : (fn [] A)`:
+;;            the CPS result slot took the double by value (3.45846e-323)
+;;
+;; See docs/archive/generic-spec-carrier-crossings.md.
+
+(defstruct Pt [x : int y : float])
+
+(defn ident [A] [x : A] : A x)
+
+(defn lam     [A] [x : A] : A ((fn [y : A] : A y) x))
+(defn capture [A] [x : A] : A (let [c x] ((fn [] c))))
+(defn some-of [A] [x : A] : A
+  (match (some x)
+    (Some q) q
+    (None) x))
+(defn vecagg  [A] [x : A] : A
+  (let [w (vec-new)]
+    (vec-push! w (ident x))
+    (vec-get w 0)))
+(defn mutcell [A] [v : (Vec A)] : A
+  (let [^mut c (vec-get v 0)]
+    (set! c (vec-get v 0))
+    c))
+(defn thunk-id   [A] [f : (fn [] A)] : A (ident (f)))
+(defn thunk-pair [A] [f : (fn [] A)] : A (pair-fst (pair (f) 0)))
+
+(defn main [] : int
+  (println (lam (:: 7.1 float32)))
+  (println (lam 7.1))
+  (println (unwrap-or (capture (some 2.5)) 0.5))
+  (println (.y (capture (Pt 3 4.5))))
+  (println (unwrap-or (some-of (some 2.5)) 0.5))
+  (println (.y (vecagg (Pt 3 4.5))))
+  (println (unwrap-or (vecagg (some 2.5)) 0.5))
+  (let [vo (:: (vec-new) (Vec (Option float)))]
+    (vec-push! vo (some 3.25))
+    (println (unwrap-or (mutcell vo) 0.5)))
+  (println (thunk-id (fn [] 7.1)))
+  (println (.y (thunk-id (fn [] (Pt 1 2.25)))))
+  (println (thunk-pair (fn [] 7.1)))
+  (println (thunk-id (fn [] (:: 7.1 float32))))
+  0)
