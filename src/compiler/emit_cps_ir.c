@@ -4694,6 +4694,31 @@ static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
                 if (expr_stores_fnval_in_struct(h->cases[i].body, fv)) return true;
             return false;
         }
+        /* handle-over-effectful-fn-field-in-arg-let-evicted: a builtin's
+         * arguments (`println`'s), a match, a letrec.  The walker returned
+         * false at these, so `(println (let [s (make-struct FE fe)] (handle
+         * (.run s 3) ...)))` never registered `fe`; unregistered, an escaping
+         * effectful fn-value is a permanent fiber source, and the handler and
+         * performer were evicted from the CPS backend ("this effect operation
+         * has no lowering here").  The same `let` outside the `println`
+         * worked. */
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.builtin.args[i], fv)) return true;
+            return false;
+        /* `(.run (make-struct FE fe) 3)`: the store is the field read's
+         * receiver. */
+        case EX_GET_FIELD:
+            return expr_stores_fnval_in_struct(e->as.get_field_.struct_expr, fv);
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, fv)) return true;
+            return expr_stores_fnval_in_struct(e->as.let_.body, fv);
+        case EX_MATCH:
+            if (expr_stores_fnval_in_struct(e->as.match_.scrutinee, fv)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (expr_stores_fnval_in_struct(e->as.match_.arms[i].body, fv)) return true;
+            return false;
         case EX_REINTERPRET: return expr_stores_fnval_in_struct(e->as.reinterpret_.expr, fv);
         case EX_ASCRIBE: return expr_stores_fnval_in_struct(e->as.ascribe_.inner, fv);
         case EX_RETURN:  return expr_stores_fnval_in_struct(e->as.return_.value, fv);

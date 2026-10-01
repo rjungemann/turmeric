@@ -939,10 +939,18 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
 
 /* True if every argument of an EX_CALL is atomic (so the whole call can be
  * delegated to the direct emitter without control ops hiding in an arg). */
-static bool call_args_atomic(const Expr *e) {
+/* handle-over-effectful-fn-field-in-arg-let-evicted: the registry-threaded
+ * effectful fn-value calls (E2a / E2c) ATOMIZE their arguments -- a non-atomic
+ * one becomes a pending CPS binding folded around the call -- so they never
+ * needed atomic arguments, only room in the Pending array (32, and atomize
+ * silently drops past it; one slot is the E2c field-load callee).  Requiring
+ * call_args_atomic evicted `(.run s (let [v 1.25] v))` -- and with it every
+ * handler and performer of the effect. */
+static bool call_args_pendable(const Expr *e) {
+    uint32_t non_atomic = 0;
     for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-        if (!is_atomic(e->as.call_.args[i])) return false;
-    return true;
+        if (!is_atomic(e->as.call_.args[i])) non_atomic++;
+    return non_atomic + 1 < 32;
 }
 
 /* mutual-tail-call-through-guard-grows-the-stack: an argument the direct
@@ -3653,7 +3661,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             if (call_is_effectful_fnvalue(e)) {
                 /* E2a: a tier-`now` thread-param call THREADS the DK via the registry. */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && cps_ir_thread_param_has(pf) && call_args_atomic(e)) {
+                if (pf && cps_ir_thread_param_has(pf) && call_args_pendable(e)) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -3673,7 +3681,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                  * force-registered (emit_cps_ir.c registration loop). */
                 if (!pf && e->as.call_.fn_expr
                     && e->as.call_.fn_expr->kind == EX_GET_FIELD
-                    && call_args_atomic(e)) {
+                    && call_args_pendable(e)) {
                     Pending pp = {0};
                     CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
                     uint32_t n = e->as.call_.n_args;
@@ -4167,7 +4175,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                  * threading it to the fn-value's __cps (via the registry).  Same shape
                  * as a colored-callee non-tail call (below), but via_registry. */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && cps_ir_thread_param_has(pf) && call_args_atomic(e)) {
+                if (pf && cps_ir_thread_param_has(pf) && call_args_pendable(e)) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -4189,7 +4197,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                  * the field-load callee via the registry (fn_atom key). */
                 if (!pf && e->as.call_.fn_expr
                     && e->as.call_.fn_expr->kind == EX_GET_FIELD
-                    && call_args_atomic(e)) {
+                    && call_args_pendable(e)) {
                     Pending pp = {0};
                     CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
                     uint32_t n = e->as.call_.n_args;

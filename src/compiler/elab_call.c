@@ -631,7 +631,9 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
          * call one level down, and a `let` operand is no more delegatable than
          * the call was.  Bound out, the field read is over a plain local. */
         case EX_CALL:
-            if (!node->as.call_.ctor) return node;
+            /* ...and a dict-dispatched method call, the same indirect-callee
+             * arm for the same reason (method-call-control-operand-evicted). */
+            if (!node->as.call_.ctor && !node->as.call_.dict_arg) return node;
             for (uint32_t i = 0; i < node->as.call_.n_args && n_slots < 32; i++)
                 slots[n_slots++] = &node->as.call_.args[i];
             break;

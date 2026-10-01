@@ -9932,7 +9932,13 @@ resolved_user_fallback:;
             out->as.call_.n_abi_bindings = bi;
         }
     }
-    return out;
+    /* method-call-control-operand-evicted: a dict-dispatched method call is
+     * an indirect callee to the CPS translation, which delegates it whole to
+     * the direct emitter and so requires atomic operands -- `(.p (handle
+     * ...))` evicted its function ("indirect call (non-atomic args)") and,
+     * with it, every performer of the handled effect.  Bind a control-bearing
+     * operand out first, as the constructor call already does. */
+    return elab_hoist_control_operands(e, out);
 }
 
 /* ======================================================================== *
