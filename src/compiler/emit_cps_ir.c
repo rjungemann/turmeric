@@ -930,6 +930,12 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             return has_capture_rec(t->as.letcall.body, exclude, bound, nb + 1);
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) CC_ATOM(&t->as.tailcall.args[i]);
+            /* E2c field-load callee (fn == NULL): its atom is read like an
+             * argument -- a join continuation that calls it must capture it
+             * (`(.run (make-struct FE fe) <arg with a CPS call>)` read an
+             * uncaptured `__t2` in the join). */
+            if (t->as.tailcall.via_registry && !t->as.tailcall.fn)
+                CC_ATOM(&t->as.tailcall.fn_atom);
             /* E2c: a `via_registry` tailcall's fn-value callee is a capture when it
              * is an enclosing (non-local, non-global) param -- mirrors the
              * collect_caps_rec CT_TAILCALL case. */
@@ -1344,6 +1350,8 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
+            if (t->as.tailcall.via_registry && !t->as.tailcall.fn)
+                COL_ATOM(&t->as.tailcall.fn_atom);   /* E2c field-load callee */
             /* E2c: a `via_registry` tailcall threads its fn-value CALLEE through
              * `__tur_cps_lookup(f)`; when that callee is an enclosing param (not a
              * local of this lifted body), carry it on the frame env as an int64
