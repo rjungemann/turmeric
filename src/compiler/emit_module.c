@@ -1620,6 +1620,173 @@ const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type) {
     return name;
 }
 
+/* fnsan-variadic-rest-slot: the fat-box shim for a VARIADIC function.  Its
+ * rest slot is the cons-chain POINTER: callers pass it as the int64 word (the
+ * thunk / TUR_APPLY spelling every fat call site uses), while the definition
+ * now takes it typed -- `tur_tagged_t r7rs_hylist(tur_adt_Cons__any *)`.  The
+ * typed and generic shims cast the callee to `R (*)(..., int64_t)`, an
+ * indirect call through the wrong function type (a -fsanitize=function trap,
+ * a call_indirect trap on WASM).  This shim keeps slot 0's word spelling and
+ * casts the rest word to `rest_c` for the forwarding call.  Fixed parameters
+ * must be scalars or pointers (anything else declines, keeping today's shim).
+ * The name is caller-owned. */
+/* fnsan-poly-carrier-from-typed-thunk: a fat closure packed into the uniform
+ * `tur_poly_fn_t` carrier is called through `int64_t (*)(void *, int64_t...)`,
+ * but its slot 0 is the lambda's thunk at its OWN C signature -- `const char *
+ * __fn_31(void *, int64_t)` for `(fn [x : a] : cstr tag)`.  Reading slot 0
+ * straight into the carrier is an indirect call through the wrong function
+ * type (a -fsanitize=function trap, a call_indirect trap on WASM; ABI-benign
+ * on SysV only because a pointer and an int64 share a register).  This adapter
+ * is the carrier's fn: it converts each word argument to the thunk's parameter
+ * type, calls slot 0 with the thunk's real type, and returns the result as the
+ * word (a pointer through intptr_t, a float kind as its bits).  Returns NULL
+ * when no adapter is needed or a position is an aggregate (the spill shims own
+ * those).  `rc` / `pc` are C spellings; the name is caller-owned. */
+static bool word_adapter_scalar_ok(const char *c) {
+    if (!c || !*c) return false;
+    size_t L = strlen(c);
+    if (c[L - 1] == '*') return true;
+    return strcmp(c, "int64_t") == 0 || strcmp(c, "double") == 0 ||
+           strcmp(c, "float") == 0 || strcmp(c, "bool") == 0 ||
+           strcmp(c, "int8_t") == 0 || strcmp(c, "int16_t") == 0 ||
+           strcmp(c, "int32_t") == 0 || strcmp(c, "uint8_t") == 0 ||
+           strcmp(c, "uint16_t") == 0 || strcmp(c, "uint32_t") == 0 ||
+           strcmp(c, "uint64_t") == 0;
+}
+char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,
+                                 const char **pc, uint8_t n, bool bare) {
+    if (!ctx || !rc) return NULL;
+    bool need = strcmp(rc, "int64_t") != 0;
+    if (!word_adapter_scalar_ok(rc)) return NULL;
+    for (uint8_t i = 0; i < n; i++) {
+        if (!word_adapter_scalar_ok(pc[i])) return NULL;
+        if (strcmp(pc[i], "int64_t") != 0) need = true;
+    }
+    if (!need) return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, bare ? "__tur_bare2word_" : "__tur_fat2word_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc[i]);
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint8_t i = 0; i < n; i++) buf_printf(target, ", int64_t a%u", (unsigned)i);
+    buf_puts(target, ") {\n");
+    for (uint8_t i = 0; i < n; i++) {
+        const char *c = pc[i];
+        size_t L = strlen(c);
+        if (c[L - 1] == '*')
+            buf_printf(target, "    %s p%u = (%s)(intptr_t)a%u;\n", c, (unsigned)i, c, (unsigned)i);
+        else if (strcmp(c, "double") == 0)
+            buf_printf(target, "    double p%u = ((union { int64_t i; double d; }){ .i = a%u }).d;\n",
+                       (unsigned)i, (unsigned)i);
+        else if (strcmp(c, "float") == 0)
+            buf_printf(target, "    float p%u = ((union { uint32_t u; float f; }){ .u = (uint32_t)a%u }).f;\n",
+                       (unsigned)i, (unsigned)i);
+        else
+            buf_printf(target, "    %s p%u = (%s)a%u;\n", c, (unsigned)i, c, (unsigned)i);
+    }
+    if (bare) {
+        /* A BARE function in slot 1 (an EX_FN_TO_FAT box): no env argument. */
+        buf_printf(target, "    %s r = ((%s (*)(", rc, rc);
+        if (n == 0) buf_puts(target, "void");
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, i ? ", %s" : "%s", pc[i]);
+        buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, i ? ", p%u" : "p%u", (unsigned)i);
+        buf_puts(target, ");\n");
+    } else {
+        buf_printf(target, "    %s r = ((%s (*)(void *", rc, rc);
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, ", %s", pc[i]);
+        buf_puts(target, "))(intptr_t)((int64_t *)__e)[0])(__e");
+        for (uint8_t i = 0; i < n; i++) buf_printf(target, ", p%u", (unsigned)i);
+        buf_puts(target, ");\n");
+    }
+    size_t RL = strlen(rc);
+    if (rc[RL - 1] == '*')
+        buf_puts(target, "    return (int64_t)(intptr_t)r;\n}\n");
+    else if (strcmp(rc, "double") == 0)
+        buf_puts(target, "    return ((union { double d; int64_t i; }){ .d = r }).i;\n}\n");
+    else if (strcmp(rc, "float") == 0)
+        buf_puts(target, "    return (int64_t)((union { float f; uint32_t u; }){ .f = r }).u;\n}\n");
+    else
+        buf_puts(target, "    return (int64_t)r;\n}\n");
+    return name;
+}
+
+char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
+                              const char **pc, uint8_t n) {
+    return ensure_fat_word_adapter_ex(ctx, rc, pc, n, false);
+}
+
+char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
+                                   Type *param_types, uint8_t n_params,
+                                   const char *rest_c) {
+    if (!ctx || n_params == 0 || !rest_c || !*rest_c) return NULL;
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        if (type_is_b4box_closure_slot(param_types[i])) return NULL;
+    const char *rc = type_c_name(result_type);
+    if (!rc || !*rc) return NULL;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    const char *slot_rc = has_ret ? thunk_result_slot_c_name(result_type) : "void";
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatshim_var_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint32_t i = 0; i + 1 < n_params; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, type_c_name(param_types[i]));
+    }
+    buf_putc(&nb, '_');
+    append_sanitized_c_token(&nb, rest_c);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    bool widen = has_ret && strcmp(slot_rc, rc) != 0;
+    buf_printf(target, "static %s %s(void *__e", slot_rc, name);
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+    buf_printf(target, ", int64_t a%u) {\n    ", (unsigned)(n_params - 1));
+    if (has_ret) buf_puts(target, widen ? "return (int64_t)(" : "return ");
+    buf_printf(target, "((%s (*)(", rc);
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        buf_printf(target, "%s, ", type_c_name(param_types[i]));
+    buf_printf(target, "%s))(intptr_t)((int64_t *)__e)[1])(", rest_c);
+    for (uint32_t i = 0; i + 1 < n_params; i++)
+        buf_printf(target, "a%u, ", (unsigned)i);
+    buf_printf(target, "(%s)(intptr_t)a%u)", rest_c, (unsigned)(n_params - 1));
+    buf_puts(target, widen ? ");\n}\n" : ";\n}\n");
+    return name;
+}
+
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params) {
     return ensure_typed_fatshim_ex(ctx, result_type, param_types, n_params, false);

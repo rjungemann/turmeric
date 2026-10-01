@@ -1,0 +1,64 @@
+;; dict-classvar-float-param-value-converted -- a rank-2 lens applied at a
+;; float, dispatching through a runtime dictionary.  Two silent wrong answers on
+;; the way in, both found while sweeping -fsanitize=function traps:
+;;
+;;   1. the poly-carrier call passed the float argument as `(int64_t)(s)` -- a
+;;      VALUE conversion (7.1 became 7) before any instance saw it;
+;;   2. the dict slot held the raw instance method `sh(double)`, called through
+;;      the erased `(const char *(*)(int64_t))`: the word went in an integer
+;;      register and the method read a float one.
+;;
+;; The interpreter answered "big" / "small" all along; the compiled path said
+;; "small" twice.  The carrier argument now crosses as bits, and a class-variable
+;; parameter that is not the word gets a per-instance slot wrapper that converts
+;; it, as a by-value aggregate one already did.
+
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defclass Sh1 [a] (sh1 [x : a] : cstr))
+(definstance Sh1 [float] (sh1 [x : float] : cstr (if (> x 7.0) "big1" "small1")))
+
+(defclass Sh [a] (sh [x : a] : cstr))
+(definstance Sh [float] (sh [x : float] : cstr (if (> x 7.0) "big" "small")))
+(definstance Sh [bool] (sh [x : bool] : cstr (if x "yes" "no")))
+(definstance Sh [cstr] (sh [x : cstr] : cstr x))
+
+(defn sh-lens [^f a] [^Functor f ^Sh a g : (-> a (f a)) s : a] : (f cstr)
+  (let [tag (sh s)]
+    (fmap (g s) (fn [x : a] : cstr tag))))
+
+(defn sh1-lens [^f a] [^Functor f ^Sh1 a g : (-> a (f a)) s : a] : (f cstr)
+  (let [tag (sh1 s)]
+    (fmap (g s) (fn [x : a] : cstr tag))))
+(defn shown1-float
+    [l (forall [(f :: * -> *) a] [(Functor f) (Sh1 a)] (-> (-> a (f a)) a (f cstr)))
+     s : float] : cstr
+  (run-id (l (fn [x : float] : (Identity float) (mk-id x)) s)))
+
+(defn shown-float
+    [l (forall [(f :: * -> *) a] [(Functor f) (Sh a)] (-> (-> a (f a)) a (f cstr)))
+     s : float] : cstr
+  (run-id (l (fn [x : float] : (Identity float) (mk-id x)) s)))
+(defn shown-bool
+    [l (forall [(f :: * -> *) a] [(Functor f) (Sh a)] (-> (-> a (f a)) a (f cstr)))
+     s : bool] : cstr
+  (run-id (l (fn [x : bool] : (Identity bool) (mk-id x)) s)))
+(defn shown-cstr
+    [l (forall [(f :: * -> *) a] [(Functor f) (Sh a)] (-> (-> a (f a)) a (f cstr)))
+     s : cstr] : cstr
+  (run-id (l (fn [x : cstr] : (Identity cstr) (mk-id x)) s)))
+
+(defn main [] : int
+  ;; one instance: the deterministic shape (the baseline printed small1 twice)
+  (println (shown1-float sh1-lens 7.1))   ; big1
+  (println (shown1-float sh1-lens 3.25))  ; small1
+  ;; three instances: the representative is cstr, so the old cast was a pointer
+  (println (shown-float sh-lens 7.1))     ; big
+  (println (shown-float sh-lens 3.25))    ; small
+  (println (shown-bool sh-lens true))     ; yes
+  (println (shown-cstr sh-lens "hi"))     ; hi
+  0)

@@ -5592,8 +5592,18 @@ static void __tur_fatbox_keep(void *__e) { (void)__e; }
 #endif
 TUR_FATBOX_DECL(__tur_fatbox_0);
 TUR_FATBOX_DECL(__tur_fatbox_1);
+static int64_t __tur_fat2word_const_char___int64_t(void *__e, int64_t a0) {
+    int64_t p0 = (int64_t)a0;
+    const char * r = ((const char * (*)(void *, int64_t))(intptr_t)((int64_t *)__e)[0])(__e, p0);
+    return (int64_t)(intptr_t)r;
+}
 typedef int64_t (*tur_thunk_int64_t_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+static int64_t __tur_bare2word_int64_t_bool(void *__e, int64_t a0) {
+    bool p0 = (bool)a0;
+    int64_t r = ((int64_t (*)(bool))(intptr_t)((int64_t *)__e)[1])(p0);
+    return (int64_t)r;
+}
 #if defined(__GNUC__) && !defined(__clang__)
 #define TUR_ANY_DROP_ATTR __attribute__((noinline, noclone))
 #else
@@ -6356,11 +6366,14 @@ static int64_t __inst_Hash_hash_bool(bool x) {
 }
 
 typedef struct dict_Hash_bool {
-    int64_t (*hash)(bool);
+    int64_t (*hash)(int64_t);
 } dict_Hash_bool;
 
+static int64_t __dictwrap_Hash_hash_bool(int64_t __a0) {
+    return __inst_Hash_hash_bool((bool)__a0);
+}
 static dict_Hash_bool dict_Hash_bool_singleton = {
-    .hash = __inst_Hash_hash_bool,
+    .hash = __dictwrap_Hash_hash_bool,
 };
 
 static int64_t __inst_Hash_hash_cstr(const char * x) {
@@ -6369,11 +6382,14 @@ static int64_t __inst_Hash_hash_cstr(const char * x) {
 }
 
 typedef struct dict_Hash_cstr {
-    int64_t (*hash)(const char *);
+    int64_t (*hash)(int64_t);
 } dict_Hash_cstr;
 
+static int64_t __dictwrap_Hash_hash_cstr(int64_t __a0) {
+    return __inst_Hash_hash_cstr((const char *)(intptr_t)__a0);
+}
 static dict_Hash_cstr dict_Hash_cstr_singleton = {
-    .hash = __inst_Hash_hash_cstr,
+    .hash = __dictwrap_Hash_hash_cstr,
 };
 
 static int64_t __inst_Hash_hash_float32(float x) {
@@ -6391,11 +6407,14 @@ static int64_t __inst_Hash_hash_float(double x) {
 }
 
 typedef struct dict_Hash_float {
-    int64_t (*hash)(double);
+    int64_t (*hash)(int64_t);
 } dict_Hash_float;
 
+static int64_t __dictwrap_Hash_hash_float(int64_t __a0) {
+    return __inst_Hash_hash_float(((union { int64_t i; double d; }){ .i = __a0 }).d);
+}
 static dict_Hash_float dict_Hash_float_singleton = {
-    .hash = __inst_Hash_hash_float,
+    .hash = __dictwrap_Hash_hash_float,
 };
 
 static int64_t __inst_Hash_hash_Sym(const struct __tur_sym * x) {
@@ -6404,11 +6423,14 @@ static int64_t __inst_Hash_hash_Sym(const struct __tur_sym * x) {
 }
 
 typedef struct dict_Hash_Sym {
-    int64_t (*hash)(const struct __tur_sym *);
+    int64_t (*hash)(int64_t);
 } dict_Hash_Sym;
 
+static int64_t __dictwrap_Hash_hash_Sym(int64_t __a0) {
+    return __inst_Hash_hash_Sym((const struct __tur_sym *)(intptr_t)__a0);
+}
 static dict_Hash_Sym dict_Hash_Sym_singleton = {
-    .hash = __inst_Hash_hash_Sym,
+    .hash = __dictwrap_Hash_hash_Sym,
 };
 
 static int64_t __inst_Hash_hash_T(tur_tagged_t x) {
@@ -6503,15 +6525,24 @@ static int64_t __inst_MapKey_mk_hyowned_qu_bool(bool x) {
 }
 
 typedef struct dict_MapKey_bool {
-    int64_t (*mk_hybox)(bool);
-    int64_t (*mk_hycmp)(bool);
-    int64_t (*mk_hyowned_qu)(bool);
+    int64_t (*mk_hybox)(int64_t);
+    int64_t (*mk_hycmp)(int64_t);
+    int64_t (*mk_hyowned_qu)(int64_t);
 } dict_MapKey_bool;
 
+static int64_t __dictwrap_MapKey_mk_hybox_bool(int64_t __a0) {
+    return __inst_MapKey_mk_hybox_bool((bool)__a0);
+}
+static int64_t __dictwrap_MapKey_mk_hycmp_bool(int64_t __a0) {
+    return __inst_MapKey_mk_hycmp_bool((bool)__a0);
+}
+static int64_t __dictwrap_MapKey_mk_hyowned_qu_bool(int64_t __a0) {
+    return __inst_MapKey_mk_hyowned_qu_bool((bool)__a0);
+}
 static dict_MapKey_bool dict_MapKey_bool_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_bool,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_bool,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_bool,
+    .mk_hybox = __dictwrap_MapKey_mk_hybox_bool,
+    .mk_hycmp = __dictwrap_MapKey_mk_hycmp_bool,
+    .mk_hyowned_qu = __dictwrap_MapKey_mk_hyowned_qu_bool,
 };
 
 static int64_t __inst_MapKey_mk_hybox_cstr(const char * x) {
@@ -6527,15 +6558,24 @@ static int64_t __inst_MapKey_mk_hyowned_qu_cstr(const char * x) {
 }
 
 typedef struct dict_MapKey_cstr {
-    int64_t (*mk_hybox)(const char *);
-    int64_t (*mk_hycmp)(const char *);
-    int64_t (*mk_hyowned_qu)(const char *);
+    int64_t (*mk_hybox)(int64_t);
+    int64_t (*mk_hycmp)(int64_t);
+    int64_t (*mk_hyowned_qu)(int64_t);
 } dict_MapKey_cstr;
 
+static int64_t __dictwrap_MapKey_mk_hybox_cstr(int64_t __a0) {
+    return __inst_MapKey_mk_hybox_cstr((const char *)(intptr_t)__a0);
+}
+static int64_t __dictwrap_MapKey_mk_hycmp_cstr(int64_t __a0) {
+    return __inst_MapKey_mk_hycmp_cstr((const char *)(intptr_t)__a0);
+}
+static int64_t __dictwrap_MapKey_mk_hyowned_qu_cstr(int64_t __a0) {
+    return __inst_MapKey_mk_hyowned_qu_cstr((const char *)(intptr_t)__a0);
+}
 static dict_MapKey_cstr dict_MapKey_cstr_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_cstr,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_cstr,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_cstr,
+    .mk_hybox = __dictwrap_MapKey_mk_hybox_cstr,
+    .mk_hycmp = __dictwrap_MapKey_mk_hycmp_cstr,
+    .mk_hyowned_qu = __dictwrap_MapKey_mk_hyowned_qu_cstr,
 };
 
 static int64_t __inst_MapKey_mk_hybox_float32(float x) {
@@ -6563,15 +6603,24 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float(double x) {
 }
 
 typedef struct dict_MapKey_float {
-    int64_t (*mk_hybox)(double);
-    int64_t (*mk_hycmp)(double);
-    int64_t (*mk_hyowned_qu)(double);
+    int64_t (*mk_hybox)(int64_t);
+    int64_t (*mk_hycmp)(int64_t);
+    int64_t (*mk_hyowned_qu)(int64_t);
 } dict_MapKey_float;
 
+static int64_t __dictwrap_MapKey_mk_hybox_float(int64_t __a0) {
+    return __inst_MapKey_mk_hybox_float(((union { int64_t i; double d; }){ .i = __a0 }).d);
+}
+static int64_t __dictwrap_MapKey_mk_hycmp_float(int64_t __a0) {
+    return __inst_MapKey_mk_hycmp_float(((union { int64_t i; double d; }){ .i = __a0 }).d);
+}
+static int64_t __dictwrap_MapKey_mk_hyowned_qu_float(int64_t __a0) {
+    return __inst_MapKey_mk_hyowned_qu_float(((union { int64_t i; double d; }){ .i = __a0 }).d);
+}
 static dict_MapKey_float dict_MapKey_float_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_float,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_float,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float,
+    .mk_hybox = __dictwrap_MapKey_mk_hybox_float,
+    .mk_hycmp = __dictwrap_MapKey_mk_hycmp_float,
+    .mk_hyowned_qu = __dictwrap_MapKey_mk_hyowned_qu_float,
 };
 
 static int64_t __inst_MapKey_mk_hybox_Sym(const struct __tur_sym * x) {
@@ -6587,15 +6636,24 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
 }
 
 typedef struct dict_MapKey_Sym {
-    int64_t (*mk_hybox)(const struct __tur_sym *);
-    int64_t (*mk_hycmp)(const struct __tur_sym *);
-    int64_t (*mk_hyowned_qu)(const struct __tur_sym *);
+    int64_t (*mk_hybox)(int64_t);
+    int64_t (*mk_hycmp)(int64_t);
+    int64_t (*mk_hyowned_qu)(int64_t);
 } dict_MapKey_Sym;
 
+static int64_t __dictwrap_MapKey_mk_hybox_Sym(int64_t __a0) {
+    return __inst_MapKey_mk_hybox_Sym((const struct __tur_sym *)(intptr_t)__a0);
+}
+static int64_t __dictwrap_MapKey_mk_hycmp_Sym(int64_t __a0) {
+    return __inst_MapKey_mk_hycmp_Sym((const struct __tur_sym *)(intptr_t)__a0);
+}
+static int64_t __dictwrap_MapKey_mk_hyowned_qu_Sym(int64_t __a0) {
+    return __inst_MapKey_mk_hyowned_qu_Sym((const struct __tur_sym *)(intptr_t)__a0);
+}
 static dict_MapKey_Sym dict_MapKey_Sym_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_Sym,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_Sym,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_Sym,
+    .mk_hybox = __dictwrap_MapKey_mk_hybox_Sym,
+    .mk_hycmp = __dictwrap_MapKey_mk_hycmp_Sym,
+    .mk_hyowned_qu = __dictwrap_MapKey_mk_hyowned_qu_Sym,
 };
 
 static int64_t __inst_MapKey_mk_hybox_T(tur_tagged_t x) {
@@ -7031,11 +7089,14 @@ static const char * __inst_Show_show_bool(bool x) {
 }
 
 typedef struct dict_Show_bool {
-    const char * (*show)(bool);
+    const char * (*show)(int64_t);
 } dict_Show_bool;
 
+static const char * __dictwrap_Show_show_bool(int64_t __a0) {
+    return __inst_Show_show_bool((bool)__a0);
+}
 static dict_Show_bool dict_Show_bool_singleton = {
-    .show = __inst_Show_show_bool,
+    .show = __dictwrap_Show_show_bool,
 };
 
 static int64_t __inst_Rank_rank_int(int64_t x) {
@@ -7055,11 +7116,14 @@ static int64_t __inst_Rank_rank_bool(bool x) {
 }
 
 typedef struct dict_Rank_bool {
-    int64_t (*rank)(bool);
+    int64_t (*rank)(int64_t);
 } dict_Rank_bool;
 
+static int64_t __dictwrap_Rank_rank_bool(int64_t __a0) {
+    return __inst_Rank_rank_bool((bool)__a0);
+}
 static dict_Rank_bool dict_Rank_bool_singleton = {
-    .rank = __inst_Rank_rank_bool,
+    .rank = __dictwrap_Rank_rank_bool,
 };
 
 struct __env_70 { int64_t __fn; int64_t __dict_63; int64_t __dict_65; };
@@ -7103,7 +7167,7 @@ static int64_t two_hylens_un_undict_un60(int64_t __dict_61, int64_t __dict_63, i
         TUR_REGION_NOTE_WORDS(&(__t70->__dict_65), sizeof(__t70->__dict_65));
         void *__t72 = __t70;
         void *__t73 = (void *)(intptr_t)(__t72);
-        int64_t __ps_74 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_61)[0])(__ps_69, (tur_poly_fn_t){ __t73, (int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)__t73)[0] }));
+        int64_t __ps_74 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_61)[0])(__ps_69, (tur_poly_fn_t){ __t73, __tur_fat2word_const_char___int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return (int64_t)(intptr_t)__ps_74;
 }
@@ -7125,7 +7189,7 @@ static int64_t two_hylens_un_undict_un85(int64_t __dict_61, int64_t __dict_63, i
         TUR_REGION_NOTE_WORDS(&(__t76->__dict_65), sizeof(__t76->__dict_65));
         void *__t78 = __t76;
         void *__t79 = (void *)(intptr_t)(__t78);
-        int64_t __ps_80 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_61)[0])(__ps_75, (tur_poly_fn_t){ __t79, (int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)__t79)[0] }));
+        int64_t __ps_80 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_61)[0])(__ps_75, (tur_poly_fn_t){ __t79, __tur_fat2word_const_char___int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return (int64_t)(intptr_t)__ps_80;
 }
@@ -7147,7 +7211,7 @@ static int64_t two_hylens_un_undict_un101(int64_t __dict_61, int64_t __dict_63, 
         TUR_REGION_NOTE_WORDS(&(__t82->__dict_65), sizeof(__t82->__dict_65));
         void *__t84 = __t82;
         void *__t85 = (void *)(intptr_t)(__t84);
-        int64_t __ps_86 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_61)[0])(__ps_81, (tur_poly_fn_t){ __t85, (int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)__t85)[0] }));
+        int64_t __ps_86 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_61)[0])(__ps_81, (tur_poly_fn_t){ __t85, __tur_fat2word_const_char___int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return (int64_t)(intptr_t)__ps_86;
 }
@@ -9792,7 +9856,7 @@ static const char * shown_hyint(tur_poly_fn_t l, int64_t s) {
         __t197[0] = (int64_t)(intptr_t)__tur_fatshim1;
         __t197[1] = (int64_t)(intptr_t)__fn_48;
         void *__t199 = __t197;
-        int64_t __ps_200 = (((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton))), (int64_t)((int64_t)(intptr_t)(__t199)), (int64_t)(s)));
+        int64_t __ps_200 = (((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton)), (int64_t)(intptr_t)(__t199), (int64_t)(s)));
         if (tur_panicking) return ((const char *)0);
         int64_t __ps_201 = (run_hyid(__ps_200));
         if (tur_panicking) return ((const char *)0);
@@ -9803,10 +9867,10 @@ static const char * shown_hybool(tur_poly_fn_t l, bool s) {
         void *__t203 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
         *(void (**)(void *))__t203 = 0;
         int64_t *__t202 = (int64_t *)((char *)__t203 + sizeof(void *));
-        __t202[0] = (int64_t)(intptr_t)__tur_fatshim1;
+        __t202[0] = (int64_t)(intptr_t)__tur_bare2word_int64_t_bool;
         __t202[1] = (int64_t)(intptr_t)__fn_53;
         void *__t204 = __t202;
-        int64_t __ps_205 = (((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_bool_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_bool_singleton))), (int64_t)((int64_t)(intptr_t)(__t204)), (int64_t)(s)));
+        int64_t __ps_205 = (((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_bool_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_bool_singleton)), (int64_t)(intptr_t)(__t204), (int64_t)(s)));
         if (tur_panicking) return ((const char *)0);
         int64_t __ps_206 = (run_hyid(__ps_205));
         if (tur_panicking) return ((const char *)0);
@@ -9820,7 +9884,7 @@ static int64_t peek_hyint(tur_poly_fn_t l, int64_t s) {
         __t207[0] = (int64_t)(intptr_t)__tur_fatshim1;
         __t207[1] = (int64_t)(intptr_t)__fn_58;
         void *__t209 = __t207;
-        int64_t __ps_210 = (((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Const_tyvar_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton))), (int64_t)((int64_t)(intptr_t)(__t209)), (int64_t)(s)));
+        int64_t __ps_210 = (((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Const_tyvar_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton)), (int64_t)(intptr_t)(__t209), (int64_t)(s)));
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_211 = (get_hyconst(__ps_210));
         if (tur_panicking) return ((int64_t)0);

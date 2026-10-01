@@ -3795,7 +3795,12 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                         buf_puts(&b2, "tur_poly_fn_t");
                     } else {
                         Type pt = mimpl->param_types[i];
-                        if (type_struct_pass_by_ptr(pt))
+                        if (dict_slot_param_is_word_scalar(tc, slot, mimpl, i))
+                            /* dict-slot-classvar-scalar-param: the slot holds
+                             * a word-taking wrapper for every instance whose
+                             * class-variable parameter is not the word. */
+                            buf_puts(&b2, "int64_t");
+                        else if (type_struct_pass_by_ptr(pt))
                             buf_printf(&b2, "const %s *", type_c_name(pt));
                         else if (emit_type_is_byvalue_adt(ctx, pt)) {
                             /* D8 piece 2 (forall-dict-byvalue-receiver): the

@@ -9,7 +9,7 @@ silent-wrong-answer family, when the type that differs is a `double` or a
 16-byte tagged `any`. Filed 2026-09-30 with the P0 representation-confusion
 work.
 
-**Status: OPEN, being swept.** The detector is armed in the four source
+**Status: OPEN, being swept (66 trapping fixtures as of 2026-10-01).** The detector is armed in the four source
 fuzzers (`tests/fuzz_arm.py`, report-only `FNPTR_TRAP` until this reaches
 zero). It is **not** yet a gate on the fixture suite.
 
@@ -41,6 +41,7 @@ harmful one, so the corpus has to reach zero before it can gate.
 | first | 328 | -- |
 | second | 165 | zero-parameter functions emitted `(void)`, not the unprototyped `()` the sanitizer hashes as a different type |
 | third | 106 | session thread wrapper calls `void (*)(void *)`; stdlib `seq-call-bool-fn1` and the comparator calls (vec/map/set/mutmap/pair/result eq) cast slot 0 to the `int64_t` it returns for a narrow result (narrow-closure-result-read-through-int64-carrier) |
+| fourth (2026-10-01) | 66 | a variadic's fat-box shim casts the rest slot to the definition's typed chain pointer (`ensure_variadic_rest_fatshim`); a fat closure packed into the `tur_poly_fn_t` carrier gets a word adapter when its thunk is not all-word (`ensure_fat_word_adapter`); a dictionary slot whose class-variable parameter is a non-word scalar holds a converting wrapper (`dict_slot_param_is_word_scalar`); a bare function boxed behind the generic word shim gets a bare-call word adapter keyed on its recorded signature.  **Two of these were silent wrong answers when the type was a `double`** -- see `docs/archive/dict-classvar-float-param-value-converted.md` |
 
 Clusters at `-O0` as of the second sweep (165 fixtures; counts are
 fixtures). The session, `seq-call-bool-fn1` and comparator rows are fixed in
@@ -55,6 +56,22 @@ the third sweep:
 | 9 | stdlib `seq-call-bool-fn1`: `TUR_APPLY1_T(bool, int64_t, f, x)` on a generic `int64_t` fatshim | bool vs int64 |
 | 12 | stdlib comparators (`vec-eq?`, map/set/result eq): `bool(*)(void*, int64_t, int64_t)` | benign/M4 |
 | ~70 | long tail: typed-field boxes on the generic shim for pointer signatures, E2a pointer args, reactor callbacks, serializer hooks | mixed |
+
+How the fourth sweep was measured, since the trap gives no message without a
+UBSan runtime: build each trapping fixture at `-O0 -g` with the trap flags,
+run it under `gdb -batch`, and read frame 0 and its emitted C line. The 56
+fixtures that failed to LINK under clang (libturi is built with gcc's ASan)
+are environmental and not counted.
+
+Remaining clusters (66 traps, at `-O0`):
+
+| Count | Site | Kind |
+| --- | --- | --- |
+| ~12 | `__tur_cps_lookup_checked(...)` cast to `int64_t (*)(int64_t, DK *)` for a callee whose `__cps` entry takes a `const char *` (an effectful typed fn-field / writer row) | CPS registry, pointer vs int |
+| 5 | `__inst_Functor_fmap_Identity`: `g.fn(g.env, x)` on a carrier whose fn is not all-word (a path the fat-box adapter does not see yet) | M4 |
+| ~10 | runtime callbacks: timer wheel, serializer `r->ser`, image registry `TUR_APPLY0`, `tur_async_fiber`, `fs-write` | runtime typedefs |
+| ~8 | `TUR_APPLY1_T` / thin `call-*` helpers in fixtures' own inline C | typed slot vs erased callee |
+| rest | one-offs: existential witness `puts(...)`, `apply-mw`, `future-then`, `__tur_poly_to_fat1` | mixed |
 
 ## Fixed on the way (not open)
 

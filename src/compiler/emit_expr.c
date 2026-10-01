@@ -5328,6 +5328,32 @@ static bool catch_thunk_owns_fat_box(const Expr *thunk) {
 
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
 
+/* poly-carrier-float-arg-value-converted: an argument of the generic
+ * `tur_poly_fn_t` carrier dispatch goes into an int64 word slot.  It was
+ * spelled `(int64_t)(v)` -- a VALUE conversion for a float: a rank-2 lens
+ * applied at `s : float` handed the instance 7 for 7.1, so `Sh float` answered
+ * for the wrong number.  Put it in as its bits (emit_word_slot_bits); a value
+ * already spelled as a word passes through. */
+static char *poly_carrier_arg_word(EmitCtx *ctx, const Expr *arg, const char *v) {
+    if (!v) return strdup("0");
+    if (strncmp(v, "(int64_t)", 9) == 0 || strncmp(v, "((int64_t)", 10) == 0 ||
+        strncmp(v, "((union", 7) == 0)
+        return strdup(v);
+    if (emit_str_is_bare_ident(v)) {
+        const char *rc = emit_localvar_lookup_ctype(v);
+        if (rc && strcmp(rc, "int64_t") == 0) {
+            Buf b; buf_init(&b);
+            buf_printf(&b, "(int64_t)(%s)", v);
+            buf_putc(&b, '\0');
+            char *r = strdup(b.data);
+            buf_free(&b);
+            return r;
+        }
+    }
+    Type t = arg ? emit_resolve_type(ctx, arg->type) : TYPE_INT;
+    return emit_word_slot_bits(&t, v);
+}
+
 /* tvar-float-payload-value-converted: a TVar slot is one `void *` word, and
  * every payload crossed into it through `(void*)(intptr_t)v` -- a VALUE
  * conversion for a float: `(tvar/new 7.1)` stored 7, and `(tvar/cas t 7.4
@@ -9519,13 +9545,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) buf_puts(&out, ", int64_t");
                     buf_printf(&out, "))%s.fn)(%s.env", fn_name, fn_name);
                     for (uint32_t i = 0; i < n; i++) {
-                        buf_printf(&out, ", (int64_t)(%s)", arg_strs[i]);
+                        char *w = poly_carrier_arg_word(ctx, e->as.call_.args[i],
+                                                        arg_strs[i]);
+                        buf_printf(&out, ", %s", w);
+                        free(w);
                     }
                 } else {
                     /* Generic carrier dispatch, unary: call through the field as-is. */
                     buf_printf(&out, "%s.fn(%s.env", fn_name, fn_name);
                     for (uint32_t i = 0; i < n; i++) {
-                        buf_printf(&out, ", (int64_t)(%s)", arg_strs[i]);
+                        char *w = poly_carrier_arg_word(ctx, e->as.call_.args[i],
+                                                        arg_strs[i]);
+                        buf_printf(&out, ", %s", w);
+                        free(w);
                     }
                 }
                 buf_puts(&out, ")");
@@ -16225,10 +16257,44 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                          "(int64_t(*)(void*,int64_t))%s }",
                                    tmp, bare_shim);
                     } else {
-                        buf_printf(&out,
-                            "(tur_poly_fn_t){ %s, "
-                            "(int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)%s)[0] }",
-                            tmp, tmp);
+                        /* fnsan-poly-carrier-from-typed-thunk: when the box's
+                         * slot 0 is a lambda thunk whose C signature is not the
+                         * all-word one the carrier calls -- a `const char *`
+                         * result, a typed parameter -- carry an adapter that
+                         * converts at the word boundary instead of the raw
+                         * slot 0 (ensure_fat_word_adapter). */
+                        char *wadapt = NULL;
+                        const Expr *ci = e->as.poly_wrap_.inner;
+                        while (ci && ci->kind == EX_ASCRIBE) ci = ci->as.ascribe_.inner;
+                        const FnDef *cfd = (ci && ci->kind == EX_CLOSURE &&
+                                            ci->as.closure_.closure)
+                            ? ci->as.closure_.closure->fn : NULL;
+                        if (cfd && cfd->binding && cfd->binding->type.kind == TY_FN &&
+                            cfd->binding->type.as.fn.arity >= 1 &&
+                            cfd->binding->type.as.fn.arity - 1 <= MAX_FN_ARITY) {
+                            Type cty = cfd->binding->type;
+                            uint8_t cn = (uint8_t)(cty.as.fn.arity - 1);
+                            const char *pcs[MAX_FN_ARITY];
+                            for (uint8_t ci2 = 0; ci2 < cn; ci2++) {
+                                Type pt = emit_resolve_type(ctx,
+                                    emit_fn_arg_type_from_type(cty, (uint8_t)(ci2 + 1)));
+                                pcs[ci2] = type_is_b4box_closure_slot(pt)
+                                    ? "int64_t" : emit_type_c_name(ctx, pt);
+                            }
+                            Type rt = emit_resolve_type(ctx,
+                                emit_fn_result_type_from_type(cty));
+                            const char *rcs = rt.kind == TY_NIL ? "int64_t"
+                                                                : thunk_result_slot_c_name(rt);
+                            wadapt = ensure_fat_word_adapter(ctx, rcs, pcs, cn);
+                        }
+                        if (wadapt)
+                            buf_printf(&out, "(tur_poly_fn_t){ %s, %s }", tmp, wadapt);
+                        else
+                            buf_printf(&out,
+                                "(tur_poly_fn_t){ %s, "
+                                "(int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)%s)[0] }",
+                                tmp, tmp);
+                        free(wadapt);
                     }
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
@@ -16531,10 +16597,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     ? *fnty.as.fn.arg_full_types[i]
                                     : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
                 /* r7rs-lang-plan R6: a variadic's rest slot is the CHAIN
-                 * POINTER (an int64 carrier), whatever the element type says
-                 * -- `(fn [& xs : any])` is emitted `(int64_t xs)`.  The shim
-                 * used to be typed by the element (`tur_tagged_t`), so it
-                 * handed the callee a two-word box where it read a pointer. */
+                 * POINTER, whatever the element type says.  In SLOT 0 it is
+                 * the int64 word every fat call site passes; the definition
+                 * now takes it typed (`tur_adt_Cons__any *`), which
+                 * ensure_variadic_rest_fatshim bridges below.  The shim used
+                 * to be typed by the element (`tur_tagged_t`), so it handed
+                 * the callee a two-word box where it read a pointer. */
                 if (fnty.as.fn.is_variadic && (uint32_t)i + 1 == (uint32_t)arity)
                     fnt_params[i] = emit_type_from_kind(TY_INT);
             }
@@ -16552,10 +16620,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         fnt_params[i] = emit_resolve_type(ctx, fnt_params[i]);
             }
             char *typed_shim = NULL;
+            /* fnsan-variadic-rest-slot: a variadic's rest slot stays the
+             * int64 chain word in slot 0 (above), but the definition takes it
+             * typed (`tur_adt_Cons__any *`), so the forwarding call casts it
+             * -- keyed on the callee's RECORDED signature. */
+            if (fnty.kind == TY_FN && fnty.as.fn.is_variadic && arity >= 1 &&
+                arity <= MAX_FN_ARITY && fnptr && emit_str_is_bare_ident(fnptr)) {
+                const char *rest_c = emit_sig_lookup_param_ctype(fnptr, arity - 1);
+                if (rest_c && strchr(rest_c, '*'))
+                    typed_shim = ensure_variadic_rest_fatshim(ctx, fnt_result,
+                                                              fnt_params,
+                                                              (uint8_t)arity, rest_c);
+            }
             /* An erased-result sink reads slot 0's result as a carrier: box a
              * by-value aggregate result there
              * (hkt-generic-forwarded-bind-continuation-segfaults). */
-            if (e->as.fn_to_fat_.erased_result)
+            if (!typed_shim && e->as.fn_to_fat_.erased_result)
                 typed_shim = ensure_boxres_fatshim(ctx, fnt_result, fnt_params,
                                                    (uint8_t)arity);
             if (!typed_shim)
@@ -16597,6 +16677,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (!typed_shim)
                 win_shim = ensure_typed_fatshim_ex(ctx, fnt_result, fnt_params,
                                                    arity, /*win64_result=*/true);
+            /* fnsan-bare-fn-boxed-at-erased-slot: the generic word shim was
+             * chosen because the SLOT's signature is all words (a rank-2
+             * `(-> a (f a))` parameter, an erased HOF slot), but the boxed
+             * function was emitted at its own types -- `int64_t __fn_44(bool)`
+             * for `(fn [x : bool] ...)`.  Calling it through `int64_t
+             * (*)(int64_t)` is a -fsanitize=function trap, and for a `double`
+             * parameter the word lands in the wrong register class.  Key the
+             * shim on the callee's RECORDED signature: a bare-call word
+             * adapter converts each word in and the result back out. */
+            /* Falling through to the generic `__tur_fatshim<N>` means slot 0
+             * is all words whatever fnt_params says (the typed shim declined
+             * -- an opaque `(Identity bool)` result, say). */
+            if (!typed_shim && !win_shim && fnptr && emit_str_is_bare_ident(fnptr) &&
+                arity <= MAX_FN_ARITY) {
+                const char *rrc = emit_sig_lookup_ret_ctype(fnptr);
+                const char *rpc[MAX_FN_ARITY];
+                bool have = rrc && *rrc;
+                for (uint8_t i = 0; i < arity && have; i++) {
+                    rpc[i] = emit_sig_lookup_param_ctype(fnptr, i);
+                    if (!rpc[i] || !*rpc[i]) have = false;
+                }
+                if (have)
+                    typed_shim = ensure_fat_word_adapter_ex(ctx, rrc, rpc,
+                                                            (uint8_t)arity,
+                                                            /*bare=*/true);
+            }
 
             /* repr-trace: a bare fn crossing into a fat sink -- the shim
              * bridge is where the representation changes hands. */
