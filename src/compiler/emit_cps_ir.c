@@ -8836,6 +8836,23 @@ static int sk_tag_for_frame(const CloneFrame *fr) {
  * and true, or false if no instance.  Mirrors emit_cps.c's sk_find_serializable
  * name path, kept in the native path so the CT-IR serial emitter owns its env
  * marshaling (the runtime Sk registry already encodes SK_ENV_SER). */
+/* fnsan-serial-registry-hooks: the C types of the instance's methods, so the
+ * registry can hold adapters at its own fixed slot types (`void *(*)(int64_t)`,
+ * `int64_t (*)(void *)`) instead of the methods cast to them -- an indirect
+ * call through the wrong function type (a -fsanitize=function trap, a
+ * call_indirect trap on WASM) for every env type that is not an int64. */
+typedef struct SerSigs { const char *ser_p, *ser_r, *deser_p, *deser_r; } SerSigs;
+static SerSigs g_serial_env_sigs;
+static Type ser_sig_arg0(Type ft) {
+    if (ft.as.fn.arg_full_types && ft.as.fn.arg_full_types[0])
+        return *ft.as.fn.arg_full_types[0];
+    return emit_type_from_kind(ft.as.fn.arg_kinds[0]);
+}
+static Type ser_sig_result(Type ft) {
+    if (ft.as.fn.result_full_type) return *ft.as.fn.result_full_type;
+    return emit_type_from_kind(ft.as.fn.result_kind);
+}
+
 static bool serial_env_ser_names(CE *ce, const Type *t,
                                  char **ser_out, char **deser_out) {
     const Expr *program = ce->ctx->program_root;
@@ -8858,9 +8875,29 @@ static bool serial_env_ser_names(CE *ce, const Type *t,
             if (!inst->method_impls[j] || !inst->method_impls[j]->binding) continue;
             const char *mn = tc->methods[j].name ? tc->methods[j].name->name : "";
             char *cn = raw_name_for_binding(inst->method_impls[j]->binding);
-            if (strcmp(mn, "serialize") == 0) ser = cn;
-            else if (strcmp(mn, "deserialize") == 0) deser = cn;
-            else free(cn);
+            /* The binding's type keeps the class variable; the parameter
+             * itself carries the instance's type, which is what the method is
+             * emitted at. */
+            const FnDef *mfd = inst->method_impls[j];
+            Type mt = mfd->binding->type;
+            const char *pc = NULL;
+            if (mfd->n_params >= 1 && mfd->params && mfd->params[0])
+                pc = emit_type_c_name(ce->ctx, emit_resolve_type(ce->ctx,
+                         mfd->param_types ? mfd->param_types[0] : mfd->params[0]->type));
+            else if (mt.kind == TY_FN && mt.as.fn.arity >= 1)
+                pc = emit_type_c_name(ce->ctx, emit_resolve_type(ce->ctx,
+                         ser_sig_arg0(mt)));
+            const char *rc = mt.kind == TY_FN
+                ? emit_type_c_name(ce->ctx, emit_resolve_type(ce->ctx,
+                      ser_sig_result(mt)))
+                : NULL;
+            if (strcmp(mn, "serialize") == 0) {
+                ser = cn;
+                g_serial_env_sigs.ser_p = pc; g_serial_env_sigs.ser_r = rc;
+            } else if (strcmp(mn, "deserialize") == 0) {
+                deser = cn;
+                g_serial_env_sigs.deser_p = pc; g_serial_env_sigs.deser_r = rc;
+            } else free(cn);
         }
         if (ser && deser) { *ser_out = ser; *deser_out = deser; return true; }
         free(ser); free(deser);
@@ -9188,6 +9225,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
              * the captured operand's type. */
             int ekc = 0;
             char *eser = NULL, *edeser = NULL;
+            memset(&g_serial_env_sigs, 0, sizeof g_serial_env_sigs);
             if (has_env) {
                 if (fr->operand.ty == TY_CSTR) ekc = 1;
                 else if (fr->operand.type
@@ -9239,12 +9277,38 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 side = "$L";
             }
             if (ekc == 2) {
-                /* SER env: carry the instance serialize/deserialize fn pointers. */
+                /* SER env: carry the instance serialize/deserialize fns, each
+                 * behind an adapter at the registry's slot type when its own
+                 * signature differs (fnsan-serial-registry-hooks). */
+                const SerSigs *sg = &g_serial_env_sigs;
+                char sers[160], desers[160];
+                snprintf(sers, sizeof sers, "%s", eser);
+                snprintf(desers, sizeof desers, "%s", edeser);
+                if (sg->ser_p && sg->ser_r &&
+                    (strcmp(sg->ser_p, "int64_t") != 0 || strcmp(sg->ser_r, "void *") != 0)) {
+                    snprintf(sers, sizeof sers, "%s_sks%d_%u", ce->fn_cn, id, i);
+                    buf_printf(ce->helpers, "static void *%s(int64_t e) {\n    %s r = %s(",
+                               sers, sg->ser_r, eser);
+                    emit_scalar_word_conv(ce->helpers, "int64_t", sg->ser_p, "e");
+                    buf_puts(ce->helpers, ");\n    return ");
+                    emit_scalar_word_conv(ce->helpers, sg->ser_r, "void *", "r");
+                    buf_puts(ce->helpers, ";\n}\n");
+                }
+                if (sg->deser_p && sg->deser_r &&
+                    (strcmp(sg->deser_p, "void *") != 0 || strcmp(sg->deser_r, "int64_t") != 0)) {
+                    snprintf(desers, sizeof desers, "%s_skd%d_%u", ce->fn_cn, id, i);
+                    buf_printf(ce->helpers, "static int64_t %s(void *b) {\n    %s r = %s(",
+                               desers, sg->deser_r, edeser);
+                    emit_scalar_word_conv(ce->helpers, "void *", sg->deser_p, "b");
+                    buf_puts(ce->helpers, ");\n    return ");
+                    emit_scalar_word_conv(ce->helpers, sg->deser_r, "int64_t", "r");
+                    buf_puts(ce->helpers, ";\n}\n");
+                }
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d,"
                     " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
                     "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
-                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, eser, edeser,
+                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, sers, desers,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             } else {
                 buf_printf(ce->helpers,

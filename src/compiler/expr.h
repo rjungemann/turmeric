@@ -1861,6 +1861,12 @@ struct Expr {
              * thunk. */
             uint64_t        carrier_erased_arg_mask;
             bool            carrier_erased_result;
+            /* fnsan-poly-carrier-named-wrapper: the declared result is an
+             * application headed by a type variable -- the `(m b)` of a
+             * Monad `bind` continuation -- which the carrier base reads as a
+             * word as well.  Separate from carrier_erased_result, whose
+             * readers (the float shims) only ever see a bare variable. */
+            bool            carrier_erased_result_hkt;
         } poly_wrap_;
         struct {
             struct Expr *inner;

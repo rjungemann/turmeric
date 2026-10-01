@@ -3144,6 +3144,10 @@ static void tur_scheduler_unpark(FiberBlock *f) {
     if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
+static void tur_scheduler_unpark_cb(void *f) {
+    tur_scheduler_unpark((FiberBlock *)f);
+}
+
 static TurTimerWheel *tur_timer_wheel_new(void) {
     TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
     if (!w) { fprintf(stderr, "timer wheel: oom\n"); abort(); }
@@ -5599,10 +5603,9 @@ static void __tur_fatbox_keep(void *__e) { (void)__e; }
 #endif
 TUR_FATBOX_DECL(__tur_fatbox_0);
 TUR_FATBOX_DECL(__tur_fatbox_1);
-static int64_t __tur_fat2word_const_char___int64_t(void *__e, int64_t a0) {
-    int64_t p0 = (int64_t)a0;
-    const char * r = ((const char * (*)(void *, int64_t))(intptr_t)((int64_t *)__e)[0])(__e, p0);
-    return (int64_t)(intptr_t)r;
+static int64_t __tur_adapt0_const_char___int64_t_as_int64_t_int64_t(void *__e, int64_t a0) {
+    const char * r = ((const char * (*)(void *, int64_t))(intptr_t)((int64_t *)__e)[0])(__e, a0);
+    return (int64_t)(intptr_t)(r);
 }
 typedef int64_t (*tur_thunk_int64_t_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
@@ -7138,7 +7141,7 @@ static int64_t show_hylens_un_undict_un53(int64_t __dict_54, int64_t __dict_56, 
         TUR_REGION_NOTE_WORDS(&(__t68->__dict_56), sizeof(__t68->__dict_56));
         void *__t70 = __t68;
         void *__t71 = (void *)(intptr_t)(__t70);
-        int64_t __ps_72 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_54)[0])(__ps_67, (tur_poly_fn_t){ __t71, __tur_fat2word_const_char___int64_t }));
+        int64_t __ps_72 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_54)[0])(__ps_67, (tur_poly_fn_t){ __t71, (int64_t(*)(void*,int64_t))__tur_adapt0_const_char___int64_t_as_int64_t_int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return __ps_72;
 }
@@ -7158,7 +7161,7 @@ static int64_t show_hylens_un_undict_un74(int64_t __dict_54, int64_t __dict_56, 
         TUR_REGION_NOTE_WORDS(&(__t74->__dict_56), sizeof(__t74->__dict_56));
         void *__t76 = __t74;
         void *__t77 = (void *)(intptr_t)(__t76);
-        int64_t __ps_78 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_54)[0])(__ps_73, (tur_poly_fn_t){ __t77, __tur_fat2word_const_char___int64_t }));
+        int64_t __ps_78 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_54)[0])(__ps_73, (tur_poly_fn_t){ __t77, (int64_t(*)(void*,int64_t))__tur_adapt0_const_char___int64_t_as_int64_t_int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return __ps_78;
 }
@@ -7178,7 +7181,7 @@ static int64_t show_hylens_un_undict_un88(int64_t __dict_54, int64_t __dict_56, 
         TUR_REGION_NOTE_WORDS(&(__t80->__dict_56), sizeof(__t80->__dict_56));
         void *__t82 = __t80;
         void *__t83 = (void *)(intptr_t)(__t82);
-        int64_t __ps_84 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_54)[0])(__ps_79, (tur_poly_fn_t){ __t83, __tur_fat2word_const_char___int64_t }));
+        int64_t __ps_84 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_54)[0])(__ps_79, (tur_poly_fn_t){ __t83, (int64_t(*)(void*,int64_t))__tur_adapt0_const_char___int64_t_as_int64_t_int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return __ps_84;
 }

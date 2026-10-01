@@ -3144,6 +3144,10 @@ static void tur_scheduler_unpark(FiberBlock *f) {
     if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
+static void tur_scheduler_unpark_cb(void *f) {
+    tur_scheduler_unpark((FiberBlock *)f);
+}
+
 static TurTimerWheel *tur_timer_wheel_new(void) {
     TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
     if (!w) { fprintf(stderr, "timer wheel: oom\n"); abort(); }
@@ -9763,7 +9767,7 @@ static void async_hysleep(int64_t ms) {
     if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
     int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
     tur_timer_wheel_insert(tur_global_timers, deadline,
-        (void(*)(void*))tur_scheduler_unpark, me);
+        tur_scheduler_unpark_cb, me);
     me->parked = 1;
     tur_fiber_block_yield(0);
     return;

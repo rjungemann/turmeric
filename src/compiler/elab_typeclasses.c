@@ -6300,6 +6300,11 @@ static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
     bool res_erased = r ? (r->kind == TY_TYVAR) : (pt->as.fn.result_kind == TY_TYVAR);
     wrap->as.poly_wrap_.carrier_erased_arg_mask = mask;
     wrap->as.poly_wrap_.carrier_erased_result = res_erased;
+    if (r && r->kind == TY_APP) {
+        const Type *h = r;
+        while (h && h->kind == TY_APP) h = h->as.app.fn;
+        wrap->as.poly_wrap_.carrier_erased_result_hkt = h && h->kind == TY_TYVAR;
+    }
 }
 
 /* same-method-name-in-two-classes-dispatches-by-declaration-order: are these

@@ -147,9 +147,9 @@
 #include <dirent.h>
 typedef struct __tur_io_fs {
     int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
-    int (*write_file)(const char* path, const unsigned char* data, int data_len);
+    int (*write_file)(const char* path, unsigned char* data, int data_len);
     int (*delete)(const char* path);
-    int (*list)(const char* path, char** entries, int max_entries, int* out_count);
+    int (*list)(const char* path, void* entries, int max_entries, int* out_count);
 } __tur_io_fs;
 
 static int __tur_io_fs_read_file(const char* path, unsigned char* buf, int buf_len, int* out_len) {
@@ -161,7 +161,8 @@ static int __tur_io_fs_read_file(const char* path, unsigned char* buf, int buf_l
     return 0;
 }
 
-static int __tur_io_fs_write_file(const char* path, const unsigned char* data, int data_len) {
+/* Spelled as stdlib/capability.tur's __tur_cap_fs callbacks (see there). */
+static int __tur_io_fs_write_file(const char* path, unsigned char* data, int data_len) {
     FILE* f = fopen(path, "wb");
     if (!f) return -1;
     size_t n = fwrite(data, 1, data_len, f);
@@ -173,7 +174,8 @@ static int __tur_io_fs_delete(const char* path) {
     return remove(path);
 }
 
-static int __tur_io_fs_list(const char* path, char** entries, int max_entries, int* out_count) {
+static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, int* out_count) {
+    char** entries = (char**)entries_v;
     DIR* d = opendir(path);
     if (!d) return -1;
     struct dirent* entry;

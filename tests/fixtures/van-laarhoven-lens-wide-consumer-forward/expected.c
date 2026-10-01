@@ -3144,6 +3144,10 @@ static void tur_scheduler_unpark(FiberBlock *f) {
     if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
+static void tur_scheduler_unpark_cb(void *f) {
+    tur_scheduler_unpark((FiberBlock *)f);
+}
+
 static TurTimerWheel *tur_timer_wheel_new(void) {
     TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
     if (!w) { fprintf(stderr, "timer wheel: oom\n"); abort(); }
@@ -5601,6 +5605,10 @@ static void __tur_fatbox_keep(void *__e) { (void)__e; }
 TUR_FATBOX_DECL(__tur_fatbox_0);
 TUR_FATBOX_DECL(__tur_fatbox_1);
 typedef tur_adt_Point * (*tur_thunk_tur_adt_Point___int64_t_t)(void *, int64_t);
+static int64_t __tur_adapt0_tur_adt_Point___int64_t_as_int64_t_int64_t(void *__e, int64_t a0) {
+    tur_adt_Point * r = ((tur_adt_Point * (*)(void *, int64_t))(intptr_t)((int64_t *)__e)[0])(__e, a0);
+    return (int64_t)(intptr_t)(r);
+}
 typedef int64_t (*tur_thunk_int64_t_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 #if defined(__GNUC__) && !defined(__clang__)
@@ -7095,7 +7103,7 @@ static int64_t point_hyx_un_undict_un49(int64_t __dict_50, int64_t g, int64_t s)
         TUR_REGION_NOTE_WORDS(&(__t67->s), sizeof(__t67->s));
         void *__t69 = __t67;
         void *__t70 = (void *)(intptr_t)(__t69);
-        int64_t __ps_71 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_50)[0])(__ps_66, (tur_poly_fn_t){ __t70, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t70)) }));
+        int64_t __ps_71 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_50)[0])(__ps_66, (tur_poly_fn_t){ __t70, (int64_t(*)(void*,int64_t))__tur_adapt0_tur_adt_Point___int64_t_as_int64_t_int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return __ps_71;
 }
@@ -7115,7 +7123,7 @@ static int64_t point_hyy_un_undict_un64(int64_t __dict_65, int64_t g, int64_t s)
         TUR_REGION_NOTE_WORDS(&(__t73->s), sizeof(__t73->s));
         void *__t75 = __t73;
         void *__t76 = (void *)(intptr_t)(__t75);
-        int64_t __ps_77 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_65)[0])(__ps_72, (tur_poly_fn_t){ __t76, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t76)) }));
+        int64_t __ps_77 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_65)[0])(__ps_72, (tur_poly_fn_t){ __t76, (int64_t(*)(void*,int64_t))__tur_adapt0_tur_adt_Point___int64_t_as_int64_t_int64_t }));
         if (tur_panicking) return ((int64_t)0);
         return __ps_77;
 }

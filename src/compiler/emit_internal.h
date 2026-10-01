@@ -1595,6 +1595,14 @@ char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
                               const char **pc, uint8_t n);
 char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,
                                  const char **pc, uint8_t n, bool bare);
+void emit_scalar_word_conv(Buf *out, const char *from, const char *to,
+                           const char *v);
+char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
+                                const char *crc, const char **cpc,
+                                const char *arc, const char **apc, uint8_t n);
+char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
+                             const char *crc, const char **cpc,
+                             const char *arc, const char **apc, uint8_t n);
 char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
                                    Type *param_types, uint8_t n_params,
                                    const char *rest_c);
@@ -1649,6 +1657,7 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
  * widening wrapper a capturing closure's slot 0 holds for such a result.  See
  * emit_module.c. */
 const char *thunk_result_slot_c_name(Type t);
+const char *thunk_param_slot_c_name(Type t);
 const char *thunk_result_slot_c_spelling(const char *rc);
 char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
                                  Type result_type, Type *param_types,
