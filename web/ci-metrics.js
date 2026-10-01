@@ -4,19 +4,24 @@
 // /ci route: Vite resolves the extensionless request to the module, not to
 // ci/index.html.
 //
-// Reads NDJSON from /api/ci-timings (worker.js proxies the `ci-metrics` orphan
-// branch) and renders it as hand-built SVG. No charting library: the site
-// bundles nothing from a CDN, and the shapes here are simple enough that a
-// dependency would cost more than it saves.
+// Reads NDJSON from /api/ci-timings and /api/ci-loc (worker.js proxies the
+// `ci-metrics` orphan branch) and renders it as hand-built SVG. No charting
+// library: the site bundles nothing from a CDN, and the shapes here are simple
+// enough that a dependency would cost more than it saves.
 //
 // THE ONE RULE THIS FILE ENFORCES: suite timings are only comparable within a
 // fixed (build_type, os, cc, nproc, jit) tuple. Rather than document that and
 // hope, the environment <select> is a hard lock — every view derives from
 // `state.env`, and nothing on the page ever aggregates across two of them.
+//
+// Line counts are the exception, and deliberately sit OUTSIDE that lock: a
+// count is a property of the commit, so it has no runner dimension to be
+// incomparable across. The env <select> therefore does not touch that panel.
 
 import './icons.js'; // <t-icon>
 
 const API = '/api/ci-timings';
+const LOC_API = '/api/ci-loc';
 
 // Fixed categorical order from vars.css. Assigned by suite name, never by
 // rank, so filtering the selection does not repaint the survivors. Five is the
@@ -33,7 +38,30 @@ const RANGES = [
   ['90d', 'Last 90 days'],
   ['30d', 'Last 30 days'],
   ['7d',  'Last 7 days'],
+  ['1d',  'Last 24 hours'],
 ];
+
+// A week is the window a regression is still worth chasing in: `main` takes
+// several pushes a day, so "all time" opens on hundreds of runs compressed into
+// 860px, where a 2% step change is one pixel and invisible. Omitted from the URL
+// (writeURL) so a bare /ci link means this, and ?range=all is a choice someone
+// made.
+const DEFAULT_RANGE = '7d';
+
+// The line-count series, in palette order. `code` and `test` are the two the
+// panel opens on -- the question is "how much product, how much test" -- and the
+// rest are there so the buckets add up to the repo rather than quietly
+// disappearing. `generated` is committed machine output (mostly the ~1.55M lines
+// of tests/fixtures/*/expected.c), which is why it is not folded into `test`:
+// nobody wrote it, and it moves by six figures whenever the emitter does.
+const LOC_SERIES = [
+  ['code_lines',      'Product code', '--chart-1'],
+  ['test_lines',      'Test code',    '--chart-2'],
+  ['bench_lines',     'Benchmarks',   '--chart-3'],
+  ['example_lines',   'Examples',     '--chart-4'],
+  ['generated_lines', 'Generated',    '--chart-5'],
+];
+const LOC_DEFAULT = ['code_lines', 'test_lines'];
 
 // ── STATE ───────────────────────────────────────────────────────────────────
 
@@ -46,11 +74,23 @@ const state = {
   // compacting would repaint every survivor when you remove a series.
   suites: new Array(MAX_SERIES).fill(null),
   statuses: new Set(STATUSES),
-  range: 'all',
+  range: DEFAULT_RANGE,
   scale: 'linear',
   sort: { col: 'delta', dir: 'desc' },
   sparkFilter: '',
   year: null,
+  // Line counts: a separate NDJSON file, one row per push to main, no env
+  // dimension. Empty when /api/ci-loc has nothing yet (the file does not exist
+  // until the first publish after this shipped), which the panel says out loud
+  // rather than drawing an empty axis.
+  loc: [],
+  locKeys: new Set(LOC_DEFAULT),
+  // 'lines' plots the counts; 'change' plots each series against its own first
+  // value in range. Two different questions — how big, and what moved — and on
+  // a shared zero-based axis the first one cannot answer the second: a week of
+  // pushes moves 408,000 lines by a few hundred, which is a third of a pixel.
+  locMode: 'lines',
+  locError: null,
 };
 
 // ── FORMATTING ──────────────────────────────────────────────────────────────
@@ -89,6 +129,30 @@ function fmtDateTime(ts) {
 function fmtPct(x) {
   const sign = x > 0 ? '+' : '';
   return `${sign}${Math.abs(x) < 10 ? x.toFixed(1) : Math.round(x)}%`;
+}
+
+function fmtCount(n) {
+  return n == null || Number.isNaN(n) ? '--' : Math.round(n).toLocaleString();
+}
+
+// Signed, and trimmed rather than fixed: tick steps here can be 0.05% or 5%
+// depending on the range, so a fixed precision is wrong at one end or the
+// other. The sign is what carries the meaning, so it is never dropped.
+function fmtSignedPct(x) {
+  const v = +x.toFixed(Math.abs(x) < 1 ? 2 : 1);
+  return `${v > 0 ? '+' : ''}${v}%`;
+}
+
+// Axis form for line counts, where `1,552,973` does not fit under a tick.
+// Decimals are kept rather than rounded away: on a cropped axis the ticks can
+// be 250 lines apart, and `406k / 406k / 407k` would read as a broken scale.
+function fmtCountTick(n) {
+  if (n === 0) return '0';
+  const trim = (x) => String(+x.toFixed(2));
+  const a = Math.abs(n);
+  if (a >= 1e6) return `${trim(n / 1e6)}M`;
+  if (a >= 1e3) return `${trim(n / 1e3)}k`;
+  return String(Math.round(n));
 }
 
 // `AppleClang-21.0.0` -> `AppleClang 21`, `GNU-13.3.0` -> `GNU 13.3`.
@@ -145,35 +209,66 @@ function buildEnvs(rows) {
   for (const r of rows) {
     const key = envKey(r);
     const cur = seen.get(key);
-    if (!cur) seen.set(key, { key, row: r, ts: r.ts });
-    else if (r.ts > cur.ts) cur.ts = r.ts;
+    if (!cur) seen.set(key, { key, row: r, ts: r.ts, suites: new Set([seriesName(r)]) });
+    else {
+      if (r.ts > cur.ts) cur.ts = r.ts;
+      cur.suites.add(seriesName(r));
+    }
   }
 
   const buildTypes = new Set(rows.map((r) => r.build_type));
-  const envs = [...seen.values()].map(({ key, row, ts }) => {
+  const envs = [...seen.values()].map(({ key, row, ts, suites }) => {
     const bits = [row.os, prettyCC(row.cc), `${row.nproc} cores`];
     if (row.jit) bits.push('JIT');
     if (buildTypes.size > 1) bits.unshift(row.build_type);
-    return { key, label: bits.join(' · '), ts };
+    return { key, label: bits.join(' · '), ts, breadth: suites.size };
   });
 
-  // Most recently active first, so the default is the freshest environment.
-  envs.sort((a, b) => b.ts - a.ts || a.label.localeCompare(b.label));
+  const newest = envs.reduce((m, e) => Math.max(m, e.ts), 0);
+
+  // Still-active environments first, then the BROADEST of those — not simply
+  // the freshest, which is how the page used to open on three sparklines.
+  //
+  // The JIT legs are their own environment (jit is part of the tuple) but
+  // register only ~3 ctest suites, and they publish seconds apart from the
+  // ~176-suite legs in the same workflow. Ordering on `ts` alone therefore
+  // decided the default view on which of two near-simultaneous uploads landed
+  // last: a coin flip between the whole dashboard and 2% of it.
+  //
+  // "Active" is a day rather than an exact tie because the macOS 5-core runner
+  // is a different image that appears intermittently; it should rank below
+  // today's runs without being hidden.
+  const DAY = 86400;
+  envs.sort((a, b) => (
+    (a.ts >= newest - DAY ? 0 : 1) - (b.ts >= newest - DAY ? 0 : 1)
+    || b.breadth - a.breadth
+    || b.ts - a.ts
+    || a.label.localeCompare(b.label)
+  ));
   return envs;
 }
 
-function rangeCutoff() {
+// Relative to the newest row in `rows`, not to wall-clock now: if CI has been
+// quiet for two days, "last 24 hours" must still show the last day that has
+// data rather than an empty chart. Each dataset therefore anchors on its own
+// latest row.
+function rangeCutoff(rows) {
   if (state.range === 'all') return -Infinity;
   const days = parseInt(state.range, 10);
-  const latest = state.rows.reduce((m, r) => Math.max(m, r.ts), 0);
+  const latest = rows.reduce((m, r) => Math.max(m, r.ts), 0);
   return latest - days * 86400;
 }
 
 // Every view starts here. Status filtering is deliberately NOT applied to the
 // env/run axis — a run where a suite failed is still a run.
 function envRows() {
-  const cutoff = rangeCutoff();
+  const cutoff = rangeCutoff(state.rows);
   return state.rows.filter((r) => envKey(r) === state.env && r.ts >= cutoff);
+}
+
+function locRows() {
+  const cutoff = rangeCutoff(state.loc);
+  return state.loc.filter((r) => r.ts >= cutoff);
 }
 
 // suite -> [{ ts, ms, status, sha, run_id }], ascending by ts.
@@ -263,6 +358,8 @@ function readURL() {
     statuses: q.get('status') ? q.get('status').split(',').filter(Boolean) : null,
     range: q.get('range'),
     scale: q.get('scale'),
+    loc: q.get('loc') ? q.get('loc').split(',').filter(Boolean) : null,
+    locMode: q.get('locmode'),
   };
 }
 
@@ -277,8 +374,12 @@ function writeURL() {
   if (state.statuses.size !== STATUSES.length) {
     q.set('status', [...state.statuses].join(','));
   }
-  if (state.range !== 'all') q.set('range', state.range);
+  if (state.range !== DEFAULT_RANGE) q.set('range', state.range);
   if (state.scale !== 'linear') q.set('scale', state.scale);
+  // Only when it differs from the default pair, so a bare link stays bare.
+  const loc = LOC_SERIES.map(([k]) => k).filter((k) => state.locKeys.has(k));
+  if (loc.join(',') !== LOC_DEFAULT.join(',')) q.set('loc', loc.join(','));
+  if (state.locMode !== 'lines') q.set('locmode', state.locMode);
   history.replaceState(null, '', q.toString() ? `?${q}` : location.pathname);
 }
 
@@ -322,6 +423,22 @@ function logTicks(lo, hi) {
     }
   }
   return out.length >= 2 ? out : [lo, hi];
+}
+
+// Counts, unlike durations, ARE decimal, so the ordinary 1/2/2.5/5 ladder is
+// the right one here — the TICK_STEPS_MS table above exists only because time
+// is not base ten.
+function decimalTicks(lo, hi, count) {
+  if (hi <= lo) return [lo];
+  const span = hi - lo;
+  const mag = Math.pow(10, Math.floor(Math.log10(span / count)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= count)
+    ?? mag * 10;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) {
+    out.push(v);
+  }
+  return out;
 }
 
 // ── RENDER: PROVENANCE + TILES ──────────────────────────────────────────────
@@ -471,52 +588,67 @@ function renderFilters() {
   }
 }
 
-// ── RENDER: MAIN CHART ──────────────────────────────────────────────────────
-
-function renderChart() {
-  const host = document.getElementById('ci-chart');
-  const sub = document.getElementById('ci-chart-sub');
-  const legend = document.getElementById('ci-legend');
-  const rows = envRows();
-  const series = bySuite(rows);
-
-  const drawn = selected()
-    .map((s) => ({ suite: s, pts: series.get(s) ?? [] }))
-    .filter((s) => s.pts.length);
-
-  sub.textContent = state.envs.find((e) => e.key === state.env)?.label ?? '';
-
-  if (!drawn.length) {
-    host.innerHTML = `<div class="ci-empty">
-      No data for the selected suites in this environment and range.
-    </div>`;
-    legend.innerHTML = '';
-    return;
-  }
-
-  // The x domain comes from every run in the environment, not just the
-  // selected suites, so the axis holds still while you swap series in and out.
-  const allTs = [...new Set(rows.map((r) => r.ts))].sort((a, b) => a - b);
-  const x0 = allTs[0];
-  const x1 = allTs[allTs.length - 1];
+// ── THE CHART ───────────────────────────────────────────────────────────────
+//
+// Both time-series charts on this page go through here. They differ only in
+// units and in what a point knows about itself; the axis conventions — the pixel
+// thinning on x, the tick ladder on y, the collision-avoiding direct labels, the
+// one-tooltip-per-x hover — are the part worth having exactly once. A second
+// hand-rolled chart is how a page ends up with two subtly different notions of
+// what a gridline means.
+//
+//   host      element to draw into (its clientWidth sets the viewBox width)
+//   tooltip   the absolutely-positioned tooltip element, a sibling of `host`
+//   idPrefix  namespaces the crosshair/hit-area ids, since two charts coexist
+//   series    [{ key, label, color, pts: [{ x, y, fail?, sha? }] }], ascending x
+//   xs        the full x domain, so the axis holds still as series come and go
+//   ticksY    (lo, hi) => number[]        -- used when `log` is false
+//   fmtY      (v) => string               -- tooltip values
+//   fmtTickY  (v) => string               -- axis labels
+//   footer    axis-title text under the plot
+//   label     the SVG's aria-label
+function drawLineChart({
+  host, tooltip, idPrefix, series, xs, log = false,
+  ticksY, fmtY, fmtTickY, footer, label,
+}) {
+  const x0 = xs[0];
+  const x1 = xs[xs.length - 1];
 
   const W = Math.max(360, host.clientWidth || 860);
   const H = 320;
-  const showLabels = drawn.length <= 4 && W >= 640;
+  const showLabels = series.length <= 4 && W >= 640;
   const pad = { t: 18, r: showLabels ? 128 : 24, b: 40, l: 62 };
   const iw = W - pad.l - pad.r;
   const ih = H - pad.t - pad.b;
 
-  const values = drawn.flatMap((s) => s.pts.map((p) => p.ms));
+  const values = series.flatMap((s) => s.pts.map((p) => p.y));
   const vmax = Math.max(...values);
   const vmin = Math.min(...values);
-  const log = state.scale === 'log';
 
-  // Log needs a positive floor; durations bottom out at 1 ms in practice.
-  const yLo = log ? Math.max(1, vmin * 0.7) : 0;
-  const yHi = log ? vmax * 1.3 : vmax * 1.08 || 1;
+  // Linear always includes zero. Not a style choice: a cropped axis is the
+  // oldest way to make noise look like a trend, and both series here are read
+  // against each other. Where the magnitudes are too far apart for that to say
+  // anything — a 408k line beside a 169k one barely moves in a week — the fix
+  // is to plot a different QUANTITY (the line-count panel's "Change" mode,
+  // which is relative by construction), not to quietly move the floor.
+  let yLo;
+  let yHi;
+  if (log) {
+    // Log needs a positive floor; durations and counts bottom out at 1.
+    yLo = Math.max(1, vmin * 0.7);
+    yHi = vmax * 1.3;
+  } else {
+    // Math.min/max with 0 so a series that goes negative (percent change) keeps
+    // its baseline on the chart; for all-positive data this is yLo = 0 and
+    // yHi = vmax * 1.08, as it has always been.
+    yLo = Math.min(0, vmin);
+    yHi = Math.max(0, vmax);
+    const slack = (yHi - yLo) * 0.08 || 1;
+    yHi += slack;
+    if (yLo < 0) yLo -= slack;
+  }
 
-  const sx = (ts) => (x1 === x0 ? pad.l + iw / 2 : pad.l + ((ts - x0) / (x1 - x0)) * iw);
+  const sx = (x) => (x1 === x0 ? pad.l + iw / 2 : pad.l + ((x - x0) / (x1 - x0)) * iw);
   const sy = (v) => {
     if (!log) return pad.t + ih - ((v - yLo) / (yHi - yLo)) * ih;
     const lv = Math.log10(Math.max(v, yLo));
@@ -526,14 +658,13 @@ function renderChart() {
   const parts = [];
 
   // Grid + y axis. Recessive: hairline rules, dim monospace labels.
-  const yTicks = log ? logTicks(yLo, yHi) : niceTicks(yLo, yHi, 5);
-  for (const t of yTicks) {
+  for (const t of (log ? logTicks(yLo, yHi) : ticksY(yLo, yHi))) {
     const y = sy(t);
     parts.push(svgEl('line', {
       class: 'ci-grid-line', x1: pad.l, x2: pad.l + iw, y1: y, y2: y,
     }));
     parts.push(`<text class="ci-axis-text" x="${pad.l - 10}" y="${y + 3}"
-      text-anchor="end">${esc(fmtTick(t))}</text>`);
+      text-anchor="end">${esc(fmtTickY(t))}</text>`);
   }
 
   // X axis: one tick per run, thinned by PIXEL distance. Thinning by index
@@ -541,45 +672,48 @@ function renderChart() {
   // pushes in an afternoon land almost on top of each other.
   const X_GAP = 62;
   const keep = [];
-  for (const ts of allTs) {
-    if (!keep.length || sx(ts) - sx(keep[keep.length - 1]) >= X_GAP) keep.push(ts);
+  for (const x of xs) {
+    if (!keep.length || sx(x) - sx(keep[keep.length - 1]) >= X_GAP) keep.push(x);
   }
   // The most recent run is the one worth labeling, so make room for it.
-  const lastTs = allTs[allTs.length - 1];
-  if (keep[keep.length - 1] !== lastTs) {
-    while (keep.length && sx(lastTs) - sx(keep[keep.length - 1]) < X_GAP) keep.pop();
-    keep.push(lastTs);
+  const lastX = xs[xs.length - 1];
+  if (keep[keep.length - 1] !== lastX) {
+    while (keep.length && sx(lastX) - sx(keep[keep.length - 1]) < X_GAP) keep.pop();
+    keep.push(lastX);
   }
-  for (const ts of keep) {
-    parts.push(`<text class="ci-axis-text" x="${sx(ts)}" y="${pad.t + ih + 18}"
-      text-anchor="middle">${esc(fmtDate(ts))}</text>`);
+  for (const x of keep) {
+    parts.push(`<text class="ci-axis-text" x="${sx(x)}" y="${pad.t + ih + 18}"
+      text-anchor="middle">${esc(fmtDate(x))}</text>`);
   }
   parts.push(`<text class="ci-axis-title" x="${pad.l}" y="${H - 4}">
-    ${allTs.length} run${allTs.length === 1 ? '' : 's'}${log ? ' · log scale' : ''}</text>`);
+    ${esc(footer)}${log ? ' · log scale' : ''}</text>`);
 
   // Series, in the fixed palette order.
   const labelSlots = [];
-  for (const { suite, pts } of drawn) {
-    const color = colorOf(suite);
-    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p.ts).toFixed(1)},${sy(p.ms).toFixed(1)}`).join(' ');
-    parts.push(`<path class="ci-series-line" d="${d}" style="stroke:${color}" />`);
+  for (const s of series) {
+    const d = s.pts
+      .map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`)
+      .join(' ');
+    parts.push(`<path class="ci-series-line" d="${d}" style="stroke:${s.color}" />`);
 
-    for (const p of pts) {
-      if (p.status === 'fail') {
+    for (const p of s.pts) {
+      if (p.fail) {
         // A red run is a fact about the trend line, so it gets its own mark.
         parts.push(svgEl('circle', {
-          class: 'ci-point-fail', cx: sx(p.ts), cy: sy(p.ms), r: 5,
+          class: 'ci-point-fail', cx: sx(p.x), cy: sy(p.y), r: 5,
         }));
       } else {
         parts.push(svgEl('circle', {
-          class: 'ci-point', cx: sx(p.ts), cy: sy(p.ms), r: 3.5,
-        }, `fill:${color}`));
+          class: 'ci-point', cx: sx(p.x), cy: sy(p.y), r: 3.5,
+        }, `fill:${s.color}`));
       }
     }
 
     if (showLabels) {
-      const last = pts[pts.length - 1];
-      labelSlots.push({ suite, color, y: sy(last.ms), x: sx(last.ts) + 10 });
+      const last = s.pts[s.pts.length - 1];
+      labelSlots.push({
+        text: s.label, color: s.color, y: sy(last.y), x: sx(last.x) + 10,
+      });
     }
   }
 
@@ -594,21 +728,136 @@ function renderChart() {
   const overflow = labelSlots.length && labelSlots[labelSlots.length - 1].y - (pad.t + ih);
   if (overflow > 0) for (const l of labelSlots) l.y -= overflow;
   for (const l of labelSlots) {
-    const name = l.suite.length > 17 ? `${l.suite.slice(0, 16)}…` : l.suite;
+    const name = l.text.length > 17 ? `${l.text.slice(0, 16)}…` : l.text;
     parts.push(`<text class="ci-direct-label" x="${l.x}" y="${l.y}"
       style="fill:${l.color}">${esc(name)}</text>`);
   }
 
   // Hover layer: one crosshair + one shared tooltip per run.
-  parts.push(svgEl('line', { class: 'ci-crosshair', id: 'ci-cross', x1: 0, x2: 0, y1: pad.t, y2: pad.t + ih, opacity: 0 }));
+  parts.push(svgEl('line', {
+    class: 'ci-crosshair', id: `${idPrefix}-cross`,
+    x1: 0, x2: 0, y1: pad.t, y2: pad.t + ih, opacity: 0,
+  }));
   parts.push(svgEl('rect', {
-    class: 'ci-hit', id: 'ci-hit', x: pad.l, y: pad.t, width: iw, height: ih,
+    class: 'ci-hit', id: `${idPrefix}-hit`,
+    x: pad.l, y: pad.t, width: iw, height: ih,
   }));
 
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
-    role="img" aria-label="Suite duration over time">${parts.join('')}</svg>`;
+    role="img" aria-label="${esc(label)}">${parts.join('')}</svg>`;
 
-  wireHover({ host, allTs, sx, series, drawn, pad, ih });
+  wireHover({ host, tooltip, idPrefix, series, xs, sx, fmtY, pad, ih });
+}
+
+function wireHover({ host, tooltip, idPrefix, series, xs, sx, fmtY, pad, ih }) {
+  const svg = host.querySelector('svg');
+  const hit = host.querySelector(`#${idPrefix}-hit`);
+  const cross = host.querySelector(`#${idPrefix}-cross`);
+  if (!svg || !hit) return;
+
+  const hide = () => {
+    tooltip.hidden = true;
+    cross.setAttribute('opacity', 0);
+  };
+
+  hit.addEventListener('mouseleave', hide);
+  hit.addEventListener('mousemove', (ev) => {
+    const box = svg.getBoundingClientRect();
+    // The SVG is width:100% with a fixed viewBox, so map client px back into
+    // user units before comparing against the scale.
+    const ux = ((ev.clientX - box.left) / box.width) * svg.viewBox.baseVal.width;
+
+    let best = xs[0];
+    let bestD = Infinity;
+    for (const x of xs) {
+      const d = Math.abs(sx(x) - ux);
+      if (d < bestD) { bestD = d; best = x; }
+    }
+
+    const cx = sx(best);
+    cross.setAttribute('x1', cx);
+    cross.setAttribute('x2', cx);
+    cross.setAttribute('opacity', 1);
+
+    const rows = [];
+    let sha = '';
+    for (const s of series) {
+      const p = s.pts.find((q) => q.x === best);
+      if (!p) continue;
+      if (p.sha) sha = p.sha;
+      rows.push(`
+        <div class="ci-tooltip-row">
+          <span class="dot" style="background:${s.color}"></span>
+          <span class="name">${esc(s.label)}</span>
+          <span class="val">${esc(fmtY(p.y))}</span>
+        </div>`);
+    }
+    if (!rows.length) { hide(); return; }
+
+    tooltip.innerHTML = `
+      <div class="ci-tooltip-head">
+        <span>${esc(fmtDateTime(best))}</span>
+        <span class="mono">${esc(sha.slice(0, 7))}</span>
+      </div>${rows.join('')}`;
+    tooltip.hidden = false;
+
+    // Keep the tooltip inside the panel; flip it left near the right edge.
+    const scale = box.width / svg.viewBox.baseVal.width;
+    const px = cx * scale;
+    const flip = px + tooltip.offsetWidth + 20 > box.width;
+    tooltip.style.left = `${flip ? px - tooltip.offsetWidth - 14 : px + 14}px`;
+    tooltip.style.top = `${Math.max(0, (pad.t + ih / 2) * scale - tooltip.offsetHeight / 2)}px`;
+  });
+}
+
+// ── RENDER: SUITE DURATIONS ─────────────────────────────────────────────────
+
+function renderChart() {
+  const host = document.getElementById('ci-chart');
+  const sub = document.getElementById('ci-chart-sub');
+  const legend = document.getElementById('ci-legend');
+  const rows = envRows();
+  const bucketed = bySuite(rows);
+
+  const drawn = selected()
+    .map((s) => ({ suite: s, pts: bucketed.get(s) ?? [] }))
+    .filter((s) => s.pts.length);
+
+  sub.textContent = state.envs.find((e) => e.key === state.env)?.label ?? '';
+
+  if (!drawn.length) {
+    host.innerHTML = `<div class="ci-empty">
+      No data for the selected suites in this environment and range.
+    </div>`;
+    legend.innerHTML = '';
+    return;
+  }
+
+  // The x domain comes from every run in the environment, not just the
+  // selected suites, so the axis holds still while you swap series in and out.
+  const xs = [...new Set(rows.map((r) => r.ts))].sort((a, b) => a - b);
+
+  drawLineChart({
+    host,
+    tooltip: document.getElementById('ci-tooltip'),
+    idPrefix: 'ci',
+    series: drawn.map(({ suite, pts }) => ({
+      key: suite,
+      label: suite,
+      color: colorOf(suite),
+      pts: pts.map((p) => ({
+        x: p.ts, y: p.ms, fail: p.status === 'fail', sha: p.sha,
+      })),
+    })),
+    xs,
+    log: state.scale === 'log',
+    ticksY: (lo, hi) => niceTicks(lo, hi, 5),
+    fmtY: fmtDuration,
+    fmtTickY: fmtTick,
+    footer: `${xs.length} run${xs.length === 1 ? '' : 's'}`,
+    label: 'Suite duration over time',
+  });
+
   renderLegend(drawn);
 }
 
@@ -622,7 +871,7 @@ function renderLegend(drawn) {
       <span class="x">×</span>
     </button>`).join('');
 
-  for (const b of document.querySelectorAll('.ci-legend-item')) {
+  for (const b of document.querySelectorAll('#ci-legend .ci-legend-item')) {
     b.onclick = () => {
       deselectSuite(b.dataset.suite);
       render();
@@ -630,66 +879,122 @@ function renderLegend(drawn) {
   }
 }
 
-function wireHover({ host, allTs, sx, series, drawn, pad, ih }) {
-  const svg = host.querySelector('svg');
-  const hit = host.querySelector('#ci-hit');
-  const cross = host.querySelector('#ci-cross');
-  const tip = document.getElementById('ci-tooltip');
-  if (!svg || !hit) return;
+// ── RENDER: LINE COUNTS ─────────────────────────────────────────────────────
 
-  const hide = () => {
-    tip.hidden = true;
-    cross.setAttribute('opacity', 0);
-  };
+function renderLoc() {
+  const host = document.getElementById('ci-loc-chart');
+  const legend = document.getElementById('ci-loc-legend');
+  const sub = document.getElementById('ci-loc-sub');
 
-  hit.addEventListener('mouseleave', hide);
-  hit.addEventListener('mousemove', (ev) => {
-    const box = svg.getBoundingClientRect();
-    // The SVG is width:100% with a fixed viewBox, so map client px back into
-    // user units before comparing against the scale.
-    const ux = ((ev.clientX - box.left) / box.width) * svg.viewBox.baseVal.width;
+  if (state.locError) {
+    host.innerHTML = `<div class="ci-empty">${esc(state.locError)}</div>`;
+    legend.innerHTML = '';
+    sub.textContent = '';
+    return;
+  }
 
-    let best = allTs[0];
-    let bestD = Infinity;
-    for (const ts of allTs) {
-      const d = Math.abs(sx(ts) - ux);
-      if (d < bestD) { bestD = d; best = ts; }
-    }
+  const rows = locRows();
+  const xs = rows.map((r) => r.ts);
+  const latest = state.loc[state.loc.length - 1];
 
-    const cx = sx(best);
-    cross.setAttribute('x1', cx);
-    cross.setAttribute('x2', cx);
-    cross.setAttribute('opacity', 1);
+  // The headline is the newest commit measured, not the newest in range: the
+  // range narrows the trend, never what the repo currently is.
+  sub.innerHTML = latest
+    ? `${esc(fmtCount(latest.code_lines))} product / ${esc(fmtCount(latest.test_lines))} test
+       tracked lines at
+       <a class="mono ci-link"
+          href="https://github.com/rjungemann/turmeric/commit/${esc(latest.sha ?? '')}"
+          >${esc((latest.sha ?? '').slice(0, 7))}</a>.
+       Blank lines and comments included; committed machine output is counted
+       separately.`
+    : '';
 
-    const rows = [];
-    let sha = '';
-    for (const { suite } of drawn) {
-      const p = (series.get(suite) ?? []).find((q) => q.ts === best);
-      if (!p) continue;
-      sha = p.sha;
-      rows.push(`
-        <div class="ci-tooltip-row">
-          <span class="dot" style="background:${colorOf(suite)}"></span>
-          <span class="name">${esc(suite)}</span>
-          <span class="val">${esc(fmtDuration(p.ms))}</span>
-        </div>`);
-    }
-    if (!rows.length) { hide(); return; }
+  // One point draws a dot and no line, which reads as a broken chart rather
+  // than as "one push so far", so say it instead -- and say which of the two
+  // it is, since widening the range only helps when there is more outside it.
+  if (rows.length < 2) {
+    host.innerHTML = `<div class="ci-empty">
+      ${state.loc.length > rows.length
+        ? 'Only one measurement in this range -- widen it to see a trend.'
+        : 'Only one push has been measured so far. A trend needs two.'}
+    </div>`;
+    renderLocLegend();
+    return;
+  }
 
-    tip.innerHTML = `
-      <div class="ci-tooltip-head">
-        <span>${esc(fmtDateTime(best))}</span>
-        <span class="mono">${esc(sha.slice(0, 7))}</span>
-      </div>${rows.join('')}`;
-    tip.hidden = false;
+  const change = state.locMode === 'change';
+  const series = LOC_SERIES
+    .filter(([key]) => state.locKeys.has(key))
+    .map(([key, label, cssVar]) => {
+      // Each series is indexed to its OWN first value in range, so a 500-line
+      // week shows up the same whether it landed in a 4,000-line bucket or a
+      // 400,000-line one. A zero base (an empty bucket) has no percentage, so
+      // it stays at zero rather than becoming Infinity.
+      const base = rows[0][key] || 0;
+      return {
+        key,
+        label,
+        color: `var(${cssVar})`,
+        pts: rows.map((r) => ({
+          x: r.ts,
+          y: change
+            ? (base ? ((r[key] ?? 0) - base) / base * 100 : 0)
+            : (r[key] ?? 0),
+          sha: r.sha,
+        })),
+      };
+    });
 
-    // Keep the tooltip inside the panel; flip it left near the right edge.
-    const scale = box.width / svg.viewBox.baseVal.width;
-    const px = cx * scale;
-    const flip = px + tip.offsetWidth + 20 > box.width;
-    tip.style.left = `${flip ? px - tip.offsetWidth - 14 : px + 14}px`;
-    tip.style.top = `${Math.max(0, (pad.t + ih / 2) * scale - tip.offsetHeight / 2)}px`;
+  drawLineChart({
+    host,
+    tooltip: document.getElementById('ci-loc-tooltip'),
+    idPrefix: 'ci-loc',
+    series,
+    xs,
+    ticksY: (lo, hi) => decimalTicks(lo, hi, 5),
+    fmtY: change ? fmtSignedPct : fmtCount,
+    fmtTickY: change ? fmtSignedPct : fmtCountTick,
+    footer: `${xs.length} commit${xs.length === 1 ? '' : 's'}`
+      + (change ? ` · change since ${fmtDate(rows[0].ts)}` : ''),
+    label: change
+      ? 'Change in tracked lines of code over the selected range'
+      : 'Tracked lines of code over time',
   });
+
+  renderLocLegend();
+}
+
+// Doubles as the series picker: the swatch and label identify, the number is
+// the latest value, and clicking toggles. Never color alone.
+function renderLocLegend() {
+  const latest = state.loc[state.loc.length - 1];
+  document.getElementById('ci-loc-legend').innerHTML = LOC_SERIES.map(
+    ([key, label, cssVar]) => {
+      const on = state.locKeys.has(key);
+      return `
+        <button type="button" class="ci-legend-item ci-legend-toggle"
+                data-loc="${esc(key)}" aria-pressed="${on}">
+          <span class="swatch" style="background:${on ? `var(${cssVar})` : 'var(--text-dim)'}"></span>
+          ${esc(label)}
+          <span class="count">${esc(latest ? fmtCount(latest[key]) : '--')}</span>
+        </button>`;
+    },
+  ).join('');
+
+  for (const b of document.querySelectorAll('#ci-loc-legend .ci-legend-toggle')) {
+    b.onclick = () => {
+      const key = b.dataset.loc;
+      if (state.locKeys.has(key)) {
+        // Never let the last one go — an empty picker is an empty chart, and
+        // an empty `loc` query param cannot round-trip through the URL.
+        if (state.locKeys.size > 1) state.locKeys.delete(key);
+      } else {
+        state.locKeys.add(key);
+      }
+      renderLoc();
+      writeURL();
+    };
+  }
 }
 
 // ── RENDER: SPARKLINE GRID ──────────────────────────────────────────────────
@@ -880,10 +1185,18 @@ function renderSkips() {
 
 // Top N by mean duration: the five biggest suites sit in the same magnitude
 // band, which is what lets the chart default to a linear axis and still read.
+//
+// Suites with a single run in range are ranked BELOW every suite that has a
+// history, however long that one run was. A new suite's first measurement is
+// usually its largest -- a cold cache, nothing warmed -- so by mean alone it
+// takes the top slot on the day it lands and draws a lone dot with no line.
+// Two ctest suites landing at once is enough to empty the default chart, which
+// is exactly what happened on 2026-10-01. They stay one click away in the
+// sparkline grid; they are just not what the page opens on.
 function defaultSuites() {
   const stats = suiteStats(bySuite(envRows()));
   const top = stats
-    .sort((a, b) => b.mean - a.mean)
+    .sort((a, b) => (a.runs > 1 ? 0 : 1) - (b.runs > 1 ? 0 : 1) || b.mean - a.mean)
     .slice(0, MAX_SERIES)
     .map((s) => s.suite);
   // Always MAX_SERIES long: slot index is the color, so the array is fixed
@@ -897,6 +1210,7 @@ function render() {
   renderTiles();
   renderFilters();
   renderChart();
+  renderLoc();
   renderSparks(stats);
   renderTable(stats);
   renderSkips();
@@ -912,23 +1226,61 @@ function fail(message) {
   el.innerHTML = `<t-icon name="circle-x"></t-icon><span>${esc(message)}</span>`;
 }
 
+// Wire one segmented control. Scoped by attribute so the two on the page
+// cannot each answer for the other's chart.
+function wireSegToggle(attr, apply) {
+  for (const b of document.querySelectorAll(`.ci-seg-btn[${attr}]`)) {
+    b.onclick = () => {
+      apply(b.getAttribute(attr));
+      for (const o of document.querySelectorAll(`.ci-seg-btn[${attr}]`)) {
+        o.classList.toggle('is-active', o === b);
+      }
+      writeURL();
+    };
+  }
+}
+
+async function fetchNDJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return {
+    year: res.headers.get('X-Metrics-Year'),
+    rows: parseNDJSON(await res.text()),
+  };
+}
+
 async function boot() {
-  let text;
-  try {
-    const res = await fetch(API);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    state.year = res.headers.get('X-Timings-Year');
-    text = await res.text();
-  } catch (e) {
-    fail(`Could not load CI timings (${e.message}). The data is published from
-          pushes to main; try again in a few minutes.`);
+  // Both files at once, and settled rather than raced: the line counts are a
+  // second, independent file, so they must neither delay the timings nor be
+  // able to take the page down with them. A fresh ci-metrics branch
+  // legitimately has no repo-loc file at all, and that costs one panel.
+  const [timings, loc] = await Promise.allSettled([
+    fetchNDJSON(API),
+    fetchNDJSON(LOC_API),
+  ]);
+
+  if (timings.status === 'rejected') {
+    fail(`Could not load CI timings (${timings.reason.message}). The data is
+          published from pushes to main; try again in a few minutes.`);
     return;
   }
 
-  state.rows = parseNDJSON(text);
+  state.year = timings.value.year;
+  state.rows = timings.value.rows;
   if (!state.rows.length) {
     fail('No timing rows have been published yet.');
     return;
+  }
+
+  if (loc.status === 'fulfilled') {
+    state.loc = loc.value.rows.sort((a, b) => a.ts - b.ts);
+    if (!state.loc.length) {
+      state.locError = 'No line counts have been published yet.';
+    }
+  } else {
+    state.locError = `Line counts are unavailable (${loc.reason.message}). They are`
+      + ' published on each push to main, starting with the first one after'
+      + ' this panel shipped.';
   }
 
   state.envs = buildEnvs(state.rows);
@@ -937,9 +1289,14 @@ async function boot() {
   state.env = state.envs.some((e) => e.key === url.env) ? url.env : state.envs[0].key;
   if (url.range && RANGES.some(([v]) => v === url.range)) state.range = url.range;
   if (url.scale === 'log') state.scale = 'log';
+  if (url.locMode === 'change') state.locMode = 'change';
   if (url.statuses) {
     const valid = url.statuses.filter((s) => STATUSES.includes(s));
     if (valid.length) state.statuses = new Set(valid);
+  }
+  if (url.loc) {
+    const valid = url.loc.filter((k) => LOC_SERIES.some(([key]) => key === k));
+    if (valid.length) state.locKeys = new Set(valid);
   }
 
   const known = new Set(state.rows.map(seriesName));
@@ -952,16 +1309,13 @@ async function boot() {
   document.getElementById('ci-state').hidden = true;
   document.getElementById('ci-body').hidden = false;
 
-  for (const b of document.querySelectorAll('.ci-seg-btn[data-scale]')) {
-    b.onclick = () => {
-      state.scale = b.dataset.scale;
-      for (const o of document.querySelectorAll('.ci-seg-btn[data-scale]')) {
-        o.classList.toggle('is-active', o === b);
-      }
-      renderChart();
-      writeURL();
-    };
+  for (const [attr, which] of [['data-scale', 'scale'], ['data-loc-mode', 'locMode']]) {
+    for (const b of document.querySelectorAll(`.ci-seg-btn[${attr}]`)) {
+      b.classList.toggle('is-active', b.getAttribute(attr) === state[which]);
+    }
   }
+  wireSegToggle('data-scale', (v) => { state.scale = v; renderChart(); });
+  wireSegToggle('data-loc-mode', (v) => { state.locMode = v; renderLoc(); });
 
   const search = document.getElementById('ci-spark-search');
   search.addEventListener('input', () => {
@@ -972,11 +1326,21 @@ async function boot() {
   render();
 
   // Re-render (rather than scale) on resize so text never distorts.
+  const redraw = new Map([
+    [document.getElementById('ci-chart'), renderChart],
+    [document.getElementById('ci-loc-chart'), renderLoc],
+  ]);
   let raf = 0;
-  new ResizeObserver(() => {
+  const pending = new Set();
+  const ro = new ResizeObserver((entries) => {
+    for (const e of entries) pending.add(redraw.get(e.target));
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(renderChart);
-  }).observe(document.getElementById('ci-chart'));
+    raf = requestAnimationFrame(() => {
+      for (const fn of pending) fn?.();
+      pending.clear();
+    });
+  });
+  for (const el of redraw.keys()) ro.observe(el);
 }
 
 boot();

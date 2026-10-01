@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CI Metrics -- Turmeric</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Test suite timings for the Turmeric compiler, published from CI on every push to main. Duration trends, per-suite sparklines, and the skip ledger.">
+<meta name="description" content="Test suite timings and line counts for the Turmeric compiler, published from CI on every push to main. Duration trends, per-suite sparklines, product-vs-test lines of code, and the skip ledger.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
@@ -42,7 +42,8 @@
   <header class="ci-head">
     <h1 class="ci-title">Suite timings</h1>
     <p class="section-desc">
-      Every push to <code>main</code> publishes each ctest suite's wall time to the
+      Every push to <code>main</code> publishes each ctest suite's wall time, and
+      the commit's tracked line counts, to the
       <a href="https://github.com/rjungemann/turmeric/tree/ci-metrics" class="ci-link">ci-metrics</a>
       branch.
     </p>
@@ -77,6 +78,31 @@
         <div class="ci-tooltip" id="ci-tooltip" hidden></div>
       </div>
       <div class="ci-legend" id="ci-legend"></div>
+    </section>
+
+    <!-- Outside the environment lock on purpose: a line count is a property of
+         the commit, so it has no (os, cc, nproc) dimension to be incomparable
+         across. The Range filter above still applies. -->
+    <section class="ci-panel">
+      <div class="ci-panel-head">
+        <div>
+          <h2 class="ci-panel-title">Lines of code</h2>
+          <p class="ci-panel-sub" id="ci-loc-sub"></p>
+        </div>
+        <!-- Not Linear/Log: a week moves 400k lines by a few hundred, which no
+             scale makes visible on a shared zero-based axis. "Change" plots a
+             different quantity -- each series against its own first value in
+             range -- which is the only honest way to see it. -->
+        <div class="ci-seg" role="group" aria-label="Line count chart mode">
+          <button type="button" class="ci-seg-btn is-active" data-loc-mode="lines">Lines</button>
+          <button type="button" class="ci-seg-btn" data-loc-mode="change">Change</button>
+        </div>
+      </div>
+      <div class="ci-chart-wrap">
+        <div class="ci-chart" id="ci-loc-chart"></div>
+        <div class="ci-tooltip" id="ci-loc-tooltip" hidden></div>
+      </div>
+      <div class="ci-legend" id="ci-loc-legend"></div>
     </section>
 
     <section class="ci-panel">

@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 #
-# Append suite timing rows to the `ci-metrics` orphan branch.
+# Append suite timing rows -- and optionally a repo line-count row -- to the
+# `ci-metrics` orphan branch.
 #
 # Phase 3A of docs/archive/suite-timing-trends-plan.md.  The branch carries no
-# source -- just one JSONL file per year -- so it never builds and never merges.
+# source -- just year-partitioned JSONL -- so it never builds and never merges.
 # CI does not run on it: .github/workflows/ci.yml triggers only on `main`, and
 # the commit message additionally carries [skip ci].
 #
-# Usage: publish-timings.sh timings.jsonl
+# Usage: publish-timings.sh timings.jsonl [--loc loc.jsonl]
+#
+# --loc goes in the SAME commit rather than through a second invocation.  Two
+# pushes to one branch from one job is two chances to be rejected and two
+# retry loops racing each other for the tip; one commit carrying both files
+# cannot half-land.
 #
 # Deliberate deviation from the plan: it specified a force-push.  A force-push
 # can silently discard rows another run appended between our fetch and our push,
@@ -18,18 +24,54 @@
 set -euo pipefail
 
 BRANCH="${TIMINGS_BRANCH:-ci-metrics}"
-INPUT="${1:?usage: publish-timings.sh <timings.jsonl>}"
 ATTEMPTS="${TIMINGS_PUSH_ATTEMPTS:-5}"
+YEAR="$(date -u +%Y)"
+
+INPUT=""
+LOC_INPUT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --loc)
+            LOC_INPUT="${2:?--loc needs a file}"
+            shift 2
+            ;;
+        -*)
+            echo "publish-timings: unknown option $1" >&2
+            exit 2
+            ;;
+        *)
+            INPUT="$1"
+            shift
+            ;;
+    esac
+done
+
+: "${INPUT:?usage: publish-timings.sh <timings.jsonl> [--loc <loc.jsonl>]}"
+
+abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
 
 if [ ! -s "$INPUT" ]; then
     echo "publish-timings: $INPUT is missing or empty; nothing to publish" >&2
     exit 0
 fi
 
-INPUT_ABS="$(cd "$(dirname "$INPUT")" && pwd)/$(basename "$INPUT")"
-YEAR="$(date -u +%Y)"
+INPUT_ABS="$(abspath "$INPUT")"
 FILE="suite-timings-${YEAR}.jsonl"
 ROWS="$(wc -l < "$INPUT_ABS" | tr -d ' ')"
+
+# A missing or empty --loc is a warning, not a failure: the timings are the
+# reason this job exists and must publish without the line counts.
+LOC_FILE="repo-loc-${YEAR}.jsonl"
+LOC_ABS=""
+LOC_ROWS=0
+if [ -n "$LOC_INPUT" ]; then
+    if [ -s "$LOC_INPUT" ]; then
+        LOC_ABS="$(abspath "$LOC_INPUT")"
+        LOC_ROWS="$(wc -l < "$LOC_ABS" | tr -d ' ')"
+    else
+        echo "publish-timings: $LOC_INPUT is missing or empty; skipping line counts" >&2
+    fi
+fi
 
 if [ -z "$(git config user.email || true)" ]; then
     git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -66,11 +108,14 @@ while [ "$attempt" -le "$ATTEMPTS" ]; do
 
 Data-only branch. No source, no build, no CI.
 
-`suite-timings-<year>.jsonl` holds one JSON object per CTest suite per CI run,
+`suite-timings-<year>.jsonl` holds one JSON object per CTest suite per CI run.
+`repo-loc-<year>.jsonl` holds one object per CI run with the tracked line counts
+of the commit, split product / test / bench / example / generated. Both are
 appended by `tools/ci/publish-timings.sh` on pushes to `main`. See
-`docs/archive/suite-timing-trends-plan.md` on `main` for the schema and the
-reason timings are only comparable within a fixed
-(build_type, os, cc, nproc, jit) tuple.
+`docs/archive/suite-timing-trends-plan.md` on `main` for the timings schema and
+the reason timings are only comparable within a fixed
+(build_type, os, cc, nproc, jit) tuple; line counts carry no such dimension,
+since they are a property of the commit rather than of the runner.
 
 Never merge this branch into `main`.
 EOF
@@ -78,21 +123,25 @@ EOF
     fi
 
     cat "$INPUT_ABS" >> "$WT/$FILE"
+    [ -n "$LOC_ABS" ] && cat "$LOC_ABS" >> "$WT/$LOC_FILE"
 
     (
         cd "$WT"
         git add "$FILE" README.md 2>/dev/null || git add "$FILE"
+        [ -n "$LOC_ABS" ] && git add "$LOC_FILE"
         if git diff --cached --quiet; then
             echo "publish-timings: no change to commit" >&2
             exit 0
         fi
         # [skip ci] is the second layer of the "this branch never builds"
         # guarantee; the workflow's own `branches: [main]` filter is the first.
-        git commit -q -m "ci-metrics: ${ROWS} suite rows from ${GITHUB_SHA:-local} [skip ci]"
+        git commit -q -m "ci-metrics: ${ROWS} suite rows, ${LOC_ROWS} loc row(s) from ${GITHUB_SHA:-local} [skip ci]"
     )
 
     if git -C "$WT" push origin "$BRANCH"; then
         echo "publish-timings: appended ${ROWS} rows to ${BRANCH}/${FILE}" >&2
+        [ -n "$LOC_ABS" ] \
+            && echo "publish-timings: appended ${LOC_ROWS} rows to ${BRANCH}/${LOC_FILE}" >&2
         exit 0
     fi
 
