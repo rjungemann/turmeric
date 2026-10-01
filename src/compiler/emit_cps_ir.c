@@ -1299,12 +1299,28 @@ static void cap_add_fn_scalar(CapSet *cs, const Binding *b) {
     cs->owning[cs->n] = false; cs->n++;
 }
 
+/* cps-evicts-handle-in-operand-positions: the fresh binders a CT_LETRAW of an
+ * EX_POLY_WRAP binds (`tur_poly_fn_t __t2`, see letraw_emits_poly_fn) in the
+ * function being emitted.  A lifted continuation that captures one sees only
+ * the free CVar -- its ptr<void> node type -- and spelled the env field
+ * `void *`, so the fill assigned a `tur_poly_fn_t` to it (invalid C): a rank-2
+ * argument atomized ahead of a `handle` in the same call.  Filled by
+ * emit_binder_decls, reset per function. */
+static uint32_t g_polyfn_cvar_ids[256];
+static uint32_t g_n_polyfn_cvars;
+static bool cvar_is_polyfn(uint32_t id) {
+    for (uint32_t i = 0; i < g_n_polyfn_cvars; i++)
+        if (g_polyfn_cvar_ids[i] == id) return true;
+    return false;
+}
+
 static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty, const Type *type) {
-    if (!cap_ty_ok(ty, type) || !name) { cs->ok = false; return; }
+    bool is_poly = cvar_is_polyfn(id);
+    if ((!is_poly && !cap_ty_ok(ty, type)) || !name) { cs->ok = false; return; }
     for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = false;
+    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly;
     cs->owning[cs->n] = false; cs->n++;
 }
 
@@ -6378,6 +6394,46 @@ static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
     return s;
 }
 
+/* atoms_csv_call for a RESOLVED clone (a mono-clone / re-resolved method):
+ * its parameters are the concrete types, which an atom usually already has --
+ * but not one the translator atomized out of a carrier-typed operand (a
+ * generic call's argument reinterpreted `cstr -> int` for the base ABI,
+ * passed on to the `g__spec__const_char__` clone).  Bridge a variable whose
+ * RECORDED C type differs from the clone's recorded parameter type across the
+ * word boundary; everything else passes as atoms_csv_call passes it. */
+static char *atoms_csv_call_clone(CE *ce, const CAtom *args, uint32_t n,
+                                  const char *clone) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        const char *pc = clone ? emit_sig_lookup_param_ctype(clone, i) : NULL;
+        const char *ac = (args[i].kind == CA_CVAR || args[i].kind == CA_VAR) &&
+                         emit_str_is_bare_ident(a)
+            ? emit_localvar_lookup_ctype(a) : NULL;
+        bool bridge = pc && ac && strcmp(pc, ac) != 0 &&
+                      (strcmp(ac, "int64_t") == 0 || strcmp(pc, "int64_t") == 0) &&
+                      !atom_is_fat_fn(&args[i]);
+        if (bridge) {
+            size_t PL = strlen(pc), AL = strlen(ac);
+            bool pp = PL && pc[PL - 1] == '*', ap = AL && ac[AL - 1] == '*';
+            if (pp || ap) emit_scalar_word_conv(&b, ac, pc, a);
+            else buf_puts(&b, a);
+        } else if (!atom_is_fat_fn(&args[i]) &&
+                   (args[i].kind == CA_VAR || args[i].kind == CA_CVAR) &&
+                   args[i].ty == TY_FN) {
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        } else {
+            buf_puts(&b, a);
+        }
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
 /* gcc14-int-conversion: the E2a threaded-fn-value dispatch calls through a
  * synthesized `int64_t (*)(int64_t..., DK *)` pointer, so EVERY argument slot is
  * the int64 carrier.  Unlike the ordinary call CSV (which passes each arg in its
@@ -7001,7 +7057,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             const EmitAbiSpecialization *lc_spec =
                 find_spec_by_clone_name(ce->ctx, fn);
             char *argv = (rr_lc || mclone_lc)
-                ? atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n)
+                ? atoms_csv_call_clone(ce, t->as.letcall.args, t->as.letcall.n, fn)
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
                                        t->as.letcall.fn, lc_spec);
             char *bn = cvar_cname(ce, t->as.letcall.x);
@@ -7963,8 +8019,11 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
                 : strdup(t->as.letraw.x.name);
             /* E2: a poly-wrap value is the fat `tur_poly_fn_t`, not the void*
              * carrier its ptr<void> node type would spell. */
-            if (letraw_emits_poly_fn(t))
+            if (letraw_emits_poly_fn(t)) {
                 ce_line(ce, "tur_poly_fn_t %s;", bn);
+                if (!t->as.letraw.x.bind && g_n_polyfn_cvars < 256)
+                    g_polyfn_cvar_ids[g_n_polyfn_cvars++] = t->as.letraw.x.id;
+            }
             else
                 { const char *__bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
@@ -10913,6 +10972,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * node's `__t0` redeclared the term's. */
     if (ctx->tmp_n >= 0 && (uint32_t)ctx->tmp_n < se->fresh_n)
         ctx->tmp_n = (int)se->fresh_n;
+    g_n_polyfn_cvars = 0;
     emit_binder_decls(&ce, se->term);
     /* cps-body-panic-not-propagated: every function this render produces -- the
      * `<fn>__cps` body, its join/frame/loop helpers -- returns the int64/intptr
