@@ -6421,6 +6421,13 @@ static const char *cps_call_param_ctype(CE *ce, const Binding *fn, uint32_t i) {
 /* `offs`, when non-NULL, receives each argument's start offset in the
  * returned string (n entries; ", " separates them), so a caller can take the
  * arguments one at a time -- the self tail call's backedge does. */
+/* Is `a` a bare C identifier whose recorded C type is a pointer? */
+static bool cps_atom_recorded_ptr(const char *a) {
+    if (!a || !emit_str_is_bare_ident(a)) return false;
+    const char *c = emit_localvar_lookup_ctype(a);
+    size_t L = c ? strlen(c) : 0;
+    return L >= 1 && c[L - 1] == '*';
+}
 static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
                                        const Binding *fn,
                                        const EmitAbiSpecialization *spec,
@@ -6571,6 +6578,17 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             char *w = emit_word_slot_bits(&ft, a);
             buf_puts(&b, w);
             free(w);
+        }
+        else if (param_is_i64 && !arg_is_byval_agg && !atom_is_fat_fn(&args[i]) &&
+                 (arg_is_c_ptr || cps_atom_recorded_ptr(a))) {
+            /* cps-typed-pointer-into-carrier-slot: the atom's elaborated kind
+             * can be the int carrier while its C binder is a typed pointer --
+             * `(let [v (vec-new)] ...)` at A := float binds
+             * `tur_adt_Vec__float * v`, then `vec-push-ex`'s `int64_t v` got
+             * it bare (arg_is_plain_int said "no cast"): a hard
+             * -Wint-conversion error under clang and gcc 14.  The C type
+             * decides, as in the direct emitter's argument chain. */
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         }
         else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
@@ -7875,21 +7893,21 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             if (is_byref_mut(t->as.letval.x.bind))
                 ce_line(ce, "%s%s;", byref_cell_ptr_ctype(ce->ctx, t->as.letval.x.bind), bn);
             else
-                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
+                { const char *__bct = binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letval.body);
             break;
         }
         case CT_LETPRIM: {
             char *bn = cvar_cname(ce, t->as.letprim.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letprim.x.ty, t->as.letprim.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.letprim.x.ty, t->as.letprim.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letprim.body);
             break;
         }
         case CT_LETCALL: {
             char *bn = cvar_cname(ce, t->as.letcall.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcall.x.ty, t->as.letcall.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.letcall.x.ty, t->as.letcall.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letcall.body);
             break;
@@ -7903,7 +7921,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             if (letraw_emits_poly_fn(t))
                 ce_line(ce, "tur_poly_fn_t %s;", bn);
             else
-                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
+                { const char *__bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.letraw.body);
             break;
@@ -7921,7 +7939,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
              * the CT_LETCONT emit in emit_term); the raw param.name would be an
              * invalid C identifier for a kebab-case `let` binder. */
             char *pn = cvar_cname(ce, t->as.letcont.param);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type), pn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type); ce_line(ce, "%s %s;", __bct, pn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(pn, __bct); }
             free(pn);
             emit_binder_decls(ce, t->as.letcont.body);
             emit_binder_decls(ce, t->as.letcont.jbody);
@@ -7954,21 +7972,21 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_AWAIT:   break;   /* F3: terminal; the continuation is lifted */
         case CT_RESUME: {
             char *bn = cvar_cname(ce, t->as.resume.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.resume.body);
             break;
         }
         case CT_CLONEABLE: {
             char *bn = cvar_cname(ce, t->as.cloneable.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.cloneable.body);
             break;
         }
         case CT_CALLCC: {
             char *bn = cvar_cname(ce, t->as.callcc.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type), bn);
+            { const char *__bct = binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
             emit_binder_decls(ce, t->as.callcc.body);
             break;

@@ -1,0 +1,23 @@
+;; A generic body handed to a HOF as an argument is CPS-colored (the HOF calls
+;; its function parameter), and the CPS backend binds `(vec-new)` to a typed
+;; pointer `tur_adt_Vec__float * v` in a spec -- while the atom's elaborated
+;; kind is the int carrier.  `vec-push-ex`'s `int64_t v` then got the pointer
+;; bare: -Wint-conversion, a hard error under clang and gcc 14 (a warning
+;; under gcc 13, which run.sh's cc-warning ratchet fails).  The CPS binder
+;; declarations now record their C types and the argument ladder converts by
+;; C type.  Found by the type fuzzer (gbody crossing over a Result of a struct).
+
+(defstruct B [a : float32])
+(defn app [C] [f : (fn [C] C) v : C] : C (f v))
+(defn k [A] [x : A] : A
+  (app (fn [y : A] : A y) (let [v (vec-new)] (vec-push! v x) (vec-get v 0))))
+(defn km [A] [x : A] : A
+  (app (fn [y : A] : A y)
+       (let [v (vec-new)] (vec-push! v (map-get (map-assoc (map-new) 1 x) 1)) (vec-get v 0))))
+
+(defn main [] : int
+  (println (.a (ok-val (k (:: (ok (B (:: 10.5 float32))) (Result B int))))))  ; 10.5
+  (println (k 7.1))                                                            ; 7.1
+  (println (unwrap-or (k (some 3)) 0))                                         ; 3
+  (println (.a (ok-val (km (:: (ok (B (:: 2.25 float32))) (Result B int)))))) ; 2.25
+  0)
