@@ -4365,6 +4365,42 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 
+/* if-merge-word-into-pointer-temp: the cast an `if` arm needs into its merge
+ * temp when one side is the int64 word and the other a pointer -- a
+ * `(Vec (fn [int] int))` element read by `vec-get` arrives as `int64_t` while
+ * the merge temp is the fn element's `void *` (-Wint-conversion, a hard error
+ * under clang and gcc 14), and the reverse.  Keyed on what the arm's temp was
+ * emitted as.  NULL when no cast is needed. */
+static const char *if_arm_word_ptr_cast(const char *temp_c, const char *arm) {
+    if (!temp_c || !arm || !emit_str_is_bare_ident(arm)) return NULL;
+    const char *ac = emit_localvar_lookup_ctype(arm);
+    if (!ac) return NULL;
+    size_t tl = strlen(temp_c), al = strlen(ac);
+    bool temp_ptr = tl > 0 && temp_c[tl - 1] == '*';
+    bool arm_ptr = al > 0 && ac[al - 1] == '*';
+    if (temp_ptr && strcmp(ac, "int64_t") == 0) return temp_c;
+    if (arm_ptr && strcmp(temp_c, "int64_t") == 0) return "int64_t";
+    return NULL;
+}
+
+/* The merge temp's C type as DECLARED (recorded by the temp decl), which can
+ * differ from type_c_name(e->type) -- an `A`-typed `if` in a spec spells its
+ * unresolved type as int64_t while the temp is declared at the resolved one. */
+static const char *if_merge_temp_ctype(const char *tmp, const char *fallback) {
+    const char *c = tmp ? emit_localvar_lookup_ctype(tmp) : NULL;
+    return c ? c : fallback;
+}
+
+/* A `match` arm's value into its merge temp, with the word<->pointer cast
+ * the two recorded C types call for (mapget/some/fn under clang: a `void *`
+ * arm temp into an `int64_t` merge temp). */
+static void emit_merge_assign_bridged(Buf *body, const char *tmp, const char *val) {
+    const char *cast = if_arm_word_ptr_cast(
+        tmp ? emit_localvar_lookup_ctype(tmp) : NULL, val);
+    if (cast) buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", tmp, cast, val);
+    else      buf_printf(body, "%s = %s;\n", tmp, val);
+}
+
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if branches contain return or throw */
     bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
@@ -4460,6 +4496,10 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else if (then_is_byptr_param) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = *(%s);\n", tmp, t);
+        } else if (if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c), t)) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", tmp,
+                       if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c), t), t);
         } else {
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, t);
@@ -4503,6 +4543,10 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else if (else_is_byptr_param) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = *(%s);\n", tmp, el);
+            } else if (if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c2), el)) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", tmp,
+                           if_arm_word_ptr_cast(if_merge_temp_ctype(tmp, temp_c2), el), el);
             } else {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);
@@ -10485,6 +10529,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             if (!lpc || strcmp(lpc, "int64_t") != 0) continue;
                             Type lat = emit_resolve_type(ctx, e->as.call_.args[i]->type);
                             const char *lac = emit_type_c_name(ctx, lat);
+                            /* What the argument was EMITTED as wins over its
+                             * type's spelling: a fn element spells `int64_t`
+                             * while its merge temp is declared `void *`
+                             * (mapget/lambda/fn under clang). */
+                            const char *rac = emit_str_is_bare_ident(arg_strs[i])
+                                ? emit_localvar_lookup_ctype(arg_strs[i]) : NULL;
+                            if (rac && strlen(rac) >= 1 && rac[strlen(rac) - 1] == '*') {
+                                lam_carrier_slot[i] = true;
+                                Buf _rb; buf_init(&_rb);
+                                buf_printf(&_rb, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                                buf_putc(&_rb, '\0');
+                                free(arg_strs[i]);
+                                arg_strs[i] = strdup(_rb.data);
+                                buf_free(&_rb);
+                                continue;
+                            }
                             if (!lac || strcmp(lac, "int64_t") == 0) continue;
                             lam_carrier_slot[i] = true;
                             if (lat.kind == TY_FLOAT || lat.kind == TY_FLOAT64 ||
@@ -13942,10 +14002,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     const char *sp = emit_sig_lookup_param_ctype(fn_name, i);
                     const char *rc = emit_localvar_lookup_ctype(raw);
                     size_t rL = rc ? strlen(rc) : 0;
+                    size_t sL = sp ? strlen(sp) : 0;
                     if (sp && strcmp(sp, "int64_t") == 0 && rL >= 1 &&
                         rc[rL - 1] == '*') {
                         Buf pb; buf_init(&pb);
                         buf_printf(&pb, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&pb, '\0');
+                        free(raw);
+                        raw = strdup(pb.data);
+                        buf_free(&pb);
+                    } else if (sp && sL >= 1 && sp[sL - 1] == '*' && rc &&
+                               strcmp(rc, "int64_t") == 0) {
+                        /* ...and the reverse: a word recorded `int64_t` (an
+                         * inline-C `vec-get` read of a fn element) into a
+                         * parameter emitted as a pointer (`some`'s spec at a
+                         * fn element takes `void *`). */
+                        Buf pb; buf_init(&pb);
+                        buf_printf(&pb, "(%s)(intptr_t)(%s)", sp, raw);
                         buf_putc(&pb, '\0');
                         free(raw);
                         raw = strdup(pb.data);
@@ -17912,6 +17985,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     tmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+                    emit_localvar_record_ctype(tmp, type_c_name(e->type));
                 }
                 /* Evaluate the scrutinee (returns the tag as int64_t). */
                 char *tag_val = emit_value(ctx, body, scrut);
@@ -17991,7 +18065,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);
@@ -18115,7 +18189,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);
@@ -18278,7 +18352,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                             char *bv = emit_value(ctx, body, arm->body);
                             indent_buf(body, ctx->indent);
-                            buf_printf(body, "%s = %s;\n", tmp, bv);
+                            emit_merge_assign_bridged(body, tmp, bv);
                             free(bv);
                         } else {
                             emit_stmt(ctx, body, arm->body);
@@ -18449,6 +18523,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "%s %s = {0};\n", type_c_name(res_ty), tmp);
                 else
                     buf_printf(body, "%s %s = 0;\n", type_c_name(res_ty), tmp);
+                /* Record the declared type: the arm assignments ask it
+                 * (emit_merge_assign_bridged). */
+                emit_localvar_record_ctype(tmp, type_c_name(res_ty));
             }
 
             /* Emit scrutinee */
@@ -18913,7 +18990,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);
@@ -19350,7 +19427,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
                     } else {
                         emit_stmt(ctx, body, arm->body);

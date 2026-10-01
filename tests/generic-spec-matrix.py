@@ -215,6 +215,14 @@ def one(cell, args, workdir, clang):
     env = dict(os.environ)
     env["ASAN_OPTIONS"] = "detect_leaks=0"
     env.pop("TUR_STDLIB_DIR", None)
+    # Compile with clang when there is one: gcc 13 only WARNS on
+    # -Wint-conversion, so a cell that passes a typed pointer into an int64
+    # slot printed the right answer and passed -- vecget/if/fn and
+    # vecget/some/fn were invalid C for clang and gcc 14 the whole time
+    # (docs/archive/generic-fn-element-word-pointer-crossings.md).  CC in the
+    # environment still wins.
+    if clang and "CC" not in os.environ:
+        env["CC"] = clang
     res = {"cell": cell, "problems": []}
 
     rc, out, err = run([args.tur, "check", path], env)

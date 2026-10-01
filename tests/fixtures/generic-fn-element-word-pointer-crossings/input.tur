@@ -1,0 +1,35 @@
+;; A fn element read by an inline-C container primitive (`vec-get`, `map-get`)
+;; is the int64 word, while a spec's own spelling of a fn element is `void *`
+;; (and a cstr thunk result is `const char *` into a CPS carrier binder).  Six
+;; joins had no cast -- -Wint-conversion, a hard error under clang and gcc 14
+;; (a warning under gcc 13, which run.sh's ratchet fails):
+;;   - an `if` merge temp declared `void *` took the word from each arm;
+;;   - a `match` arm's `void *` temp went into an `int64_t` merge temp;
+;;   - `some`'s spec (`void *` parameter) took the word as its argument;
+;;   - a lambda literal's carrier slot took the `void *` temp;
+;;   - a CPS raw-let put a cstr spec's `const char *` into an int64 binder.
+;; Found running tests/generic-spec-matrix.py under clang; the matrix had
+;; only ever compiled with gcc.
+
+(defn mx-true [] : bool true)
+(defn mx-id [A] [y : A] : A y)
+(defn pick-if [A] [v : (Vec A)] : A (if (mx-true) (vec-get v 0) (vec-get v 0)))
+(defn pick-some [A] [v : (Vec A)] : A
+  (match (some (vec-get v 0)) (Some q) q (None) (vec-get v 0)))
+(defn map-some [A] [m : (Map int A)] : A
+  (match (some (map-get m 1)) (Some q) q (None) (map-get m 1)))
+(defn map-lambda [A] [m : (Map int A)] : A ((fn [z : A] : A z) (map-get m 1)))
+(defn thunk-id [A] [f : (fn [] A)] : A (mx-id (f)))
+(defn thunk-pair [A] [f : (fn [] A)] : A (pair-fst (pair (f) 0)))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec (fn [int] int)))]
+    (vec-push! v (fn [n : int] : int (+ n 1)))
+    (println ((pick-if v) 41))       ; 42
+    (println ((pick-some v) 9)))     ; 10
+  (let [m (map-assoc (:: (map-new) (Map int (fn [int] int))) 1 (fn [n : int] : int (* n 2)))]
+    (println ((map-some m) 21))      ; 42
+    (println ((map-lambda m) 5)))    ; 10
+  (println (thunk-id (fn [] : cstr "hi")))    ; hi
+  (println (thunk-pair (fn [] : cstr "yo")))  ; yo
+  0)

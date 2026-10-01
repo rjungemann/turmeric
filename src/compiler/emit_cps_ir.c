@@ -7822,6 +7822,12 @@ static void emit_letraw(CE *ce, const CTerm *t) {
                 ce_line(ce, "%s = __dk_reap_ptr((intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; }));",
                         bn, rc, rc, rc, rhs);
                 bridged_ok = true;
+            } else if (rc && strlen(rc) >= 1 && rc[strlen(rc) - 1] == '*') {
+                /* A pointer (a cstr spec's `const char *` result) into the
+                 * carrier word: the word IS the pointer (thunk/ident/cstr
+                 * under clang). */
+                ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs);
+                bridged_ok = true;
             }
         }
         /* cps-letraw-pointer-binder-from-carrier: the binder is a concrete
