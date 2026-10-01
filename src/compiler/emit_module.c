@@ -1817,12 +1817,23 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
     if (!ctx || !out || !crc || !arc) return NULL;
     bool bare1 = callee == EMIT_ADAPT_BARE_SLOT1;
     if (bare1) callee = NULL;
-    if (!word_adapter_scalar_ok(crc) || !word_adapter_scalar_ok(arc)) return NULL;
+    /* A `void` callee read through a word-returning slot: a nil-result
+     * function instantiating an erased `(fn [...] A)` (`bt-scope` over a body
+     * run for effect).  The adapter calls it and answers the zero word the
+     * carrier reads as nil.  The other direction is never asked for. */
+    bool void_callee = strcmp(crc, "void") == 0;
+    if (void_callee && strcmp(arc, "void") == 0) void_callee = false;
+    if ((!void_callee && !word_adapter_scalar_ok(crc)) || !word_adapter_scalar_ok(arc))
+        return NULL;
     bool need = bare1 || strcmp(crc, arc) != 0;   /* bare: the env must go */
     for (uint8_t i = 0; i < n; i++) {
+        /* A position spelled the same on both sides passes through as it
+         * is, a by-value aggregate included; only a CONVERTED one has to be
+         * a scalar or pointer. */
+        if (cpc[i] && apc[i] && strcmp(cpc[i], apc[i]) == 0 && *cpc[i]) continue;
         if (!word_adapter_scalar_ok(cpc[i]) || !word_adapter_scalar_ok(apc[i]))
             return NULL;
-        if (strcmp(cpc[i], apc[i]) != 0) need = true;
+        need = true;
     }
     if (!need) return NULL;
     Buf nb; buf_init(&nb);
@@ -1863,15 +1874,16 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
     buf_printf(out, "static %s %s(void *__e", arc, name);
     for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s a%u", apc[i], (unsigned)i);
+    const char *bind = void_callee ? "" : " r =";
     if (callee) {
-        buf_printf(out, ") {\n    %s r = %s(__e", crc, callee);
+        buf_printf(out, ") {\n    %s%s %s(__e", void_callee ? "" : crc, bind, callee);
     } else if (bare1) {
-        buf_printf(out, ") {\n    %s r = ((%s (*)(", crc, crc);
+        buf_printf(out, ") {\n    %s%s ((%s (*)(", void_callee ? "" : crc, bind, crc);
         if (n == 0) buf_puts(out, "void");
         for (uint8_t i = 0; i < n; i++) buf_printf(out, i ? ", %s" : "%s", cpc[i]);
         buf_puts(out, "))(intptr_t)((int64_t *)__e)[1])(");
     } else {
-        buf_printf(out, ") {\n    %s r = ((%s (*)(void *", crc, crc);
+        buf_printf(out, ") {\n    %s%s ((%s (*)(void *", void_callee ? "" : crc, bind, crc);
         for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);
         buf_puts(out, "))(intptr_t)((int64_t *)__e)[0])(__e");
     }
@@ -1879,7 +1891,12 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
         char an[16];
         snprintf(an, sizeof an, "a%u", (unsigned)i);
         if (!bare1 || i) buf_puts(out, ", ");
-        emit_scalar_word_conv(out, apc[i], cpc[i], an);
+        if (strcmp(apc[i], cpc[i]) == 0) buf_puts(out, an);
+        else emit_scalar_word_conv(out, apc[i], cpc[i], an);
+    }
+    if (void_callee) {
+        buf_printf(out, ");\n    return (%s)0;\n}\n", arc);
+        return name;
     }
     buf_puts(out, ");\n    return ");
     emit_scalar_word_conv(out, crc, arc, "r");
@@ -2177,6 +2194,46 @@ char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
     }
     buf_puts(target, "    TUR_REGION_NOTE_WORDS(__b, sizeof *__b);\n");
     buf_puts(target, "    return (int64_t)(intptr_t)__b;\n}\n");
+    return name;
+}
+
+/* fnsan-nil-closure-into-erased-result: slot 0 of a { shim, handle } wrapper
+ * around a capturing closure that returns nil, for a slot whose consumers
+ * call it as `int64_t (*)(void *, int64_t...)` (its declared result is a type
+ * variable).  Calls the handle's own slot 0 at its `void` spelling and answers
+ * the zero word that reads back as nil.  All-word parameters only, as the
+ * boxres shim; anything else returns NULL and keeps the handle as it was. */
+char *ensure_nilres_fatshim(EmitCtx *ctx, Type *param_types, uint8_t n_params) {
+    if (!ctx) return NULL;
+    for (uint32_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc || strcmp(pc, "int64_t") != 0) return NULL;
+    }
+    char nm[64];
+    snprintf(nm, sizeof nm, "__tur_fatshim_nilres_fat%u", (unsigned)n_params);
+    char *name = strdup(nm);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", int64_t a%u", (unsigned)i);
+    buf_puts(target, ") {\n");
+    buf_puts(target, "    void *__tur_inner = (void *)(intptr_t)((int64_t *)__e)[1];\n");
+    buf_puts(target, "    ((void (*)(void *");
+    for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
+    buf_puts(target, "))(intptr_t)((int64_t *)__tur_inner)[0])(__tur_inner");
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+    buf_puts(target, ");\n    return 0;\n}\n");
     return name;
 }
 

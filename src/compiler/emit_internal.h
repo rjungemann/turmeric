@@ -313,6 +313,10 @@ typedef struct EmitCtx {
      * the declared type with `fat_box_sink_erased_*` marking the positions a
      * carrier base / inline-C body reads as words.  NULL otherwise. */
     const struct Type *fat_box_sink_type;
+    /* Depth of emit_cps_ir_try_fn: >0 while a DK (CPS) body is emitted.  A
+     * continuation may outlive the C frame, so nothing it can reach may live
+     * on that frame's stack. */
+    int in_cps_fn;
     uint64_t fat_box_sink_erased_mask;
     bool     fat_box_sink_erased_res;
     /* Phase 2: when emitting a function body, these are the parameter bindings
@@ -1625,6 +1629,7 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * when the signature does not qualify.  Caller-owned name. */
 char *ensure_boxres_fatshim(EmitCtx *ctx,
                             Type result_type, Type *param_types, uint8_t n_params);
+char *ensure_nilres_fatshim(EmitCtx *ctx, Type *param_types, uint8_t n_params);
 char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
                                Type *param_types, uint8_t n_params,
                                bool inner_is_fat);
