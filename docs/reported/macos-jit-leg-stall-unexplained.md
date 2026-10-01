@@ -86,6 +86,58 @@ closure condition below. It does mean a `***Timeout` on this test is first a
 question about throughput: check the fixture rate in the console before
 looking for a stuck fixture.
 
+## 2026-10-01: the second instrumented occurrence, same shape -- and a misreport
+
+[Run 36780743533](https://github.com/rjungemann/turmeric/actions/runs/36780743533)
+(rjungemann/turmeric#1002, a dependabot `setup-emsdk` v14 -> v16 bump) failed
+the leg with `tur_jit_fixture_tests ***Timeout 1500.38 sec`. The PR is not
+implicated: `setup-emsdk` is used only by the `test` job's `tur_refine_wasm`
+step and the web job, and all three checks that run it passed. This leg never
+touches emsdk.
+
+Again throughput, not a stall, by this report's own test -- and this time the
+comparison is clean, because the prelude fix above was already in the tested
+tree (it landed 2026-09-29, the PR base is 2026-09-30):
+
+| | fixture dirs done | wall | rate |
+| --- | --- | --- | --- |
+| #1002 (killed) | 2393 | 1500 s | **1.6/s** |
+| `main` 36901587136, same day, green | 3413 | 1102 s | **3.1/s** |
+
+The ratio holds at every milestone the step's filter lets through
+(`promise-linear` 814 s vs 477 s, `thread-local-basic` 1497 s vs 936 s), so the
+runner was uniformly ~1.9x slower for the whole run -- the 3-core vs 5-core
+`macos-latest` split, which point 3 above already named as context. What is new
+is that it is no longer only context: at 3413 dirs the FAST draw now takes
+1102 s, above the 940 s p90 the 1500 s bound was sized against, so the bound had
+quietly become a throughput assertion a slow draw must fail. That discharges
+point 3's "those may need revisiting if a legitimate run ever trips one":
+`TIMEOUT` is now 2400, the workflow's whole-ctest alarm 2550 s and the job's
+`timeout-minutes` 60, keeping the per-test bound the first to fire so it still
+names the target.
+
+**The occurrence also cost a triage pass to a misreport**, which is fixed in
+the same change. The run's other line was
+
+```
+117: FAIL r7rs-tail-calls -- stdout mismatch
+```
+
+which reads as a tail-call regression. It was not. The uploaded
+`jit-ctest-log-macos-latest` artifact shows the actual stdout was zero bytes
+(`@@ -1,4 +0,0 @@`), and the FAIL printed exactly 60 s after `jit.stdout` was
+created -- that fixture's own `expected.timeout`. It was killed, not wrong.
+`tests/run-jit.sh` captured the child's `rc` and then diffed `expected.stdout`
+without ever testing it, and `124` appeared nowhere in the file, so EVERY
+per-fixture timeout in this harness reported as a stdout mismatch. `run.sh` and
+`run-turi.sh` each grew that check after
+[docs/archive/ci-cps-tramp-turi-timeouts-under-load.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ci-cps-tramp-turi-timeouts-under-load.md);
+this harness was missed. It now reports `timed out (>Ns under the JIT engine)`.
+
+Note the two symptoms had one cause. A slow draw produces both a per-FIXTURE
+timeout and the per-TEST one, so on the next occurrence expect stray fixture
+FAILs alongside the `***Timeout` and do not triage them as separate bugs.
+
 ## What would close this
 
 A named stall with a cause, or a long enough quiet period on a leg that now

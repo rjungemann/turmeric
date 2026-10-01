@@ -346,6 +346,22 @@ run_jit_fixture() {
     local expected_exit="0"
     [ -f "$dir/expected.exit" ] && expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
 
+    # Report a timeout AS a timeout.  timeout(1) exits 124 when it kills the
+    # child, and the partial (usually empty) stdout that leaves behind would
+    # otherwise fall through to the diff below and be reported as "stdout
+    # mismatch" -- a claim about the answer when the only fact is the clock.
+    # run.sh and run-turi.sh each grew this check after that misreport cost a
+    # triage pass (docs/archive/ci-cps-tramp-turi-timeouts-under-load.md);
+    # this harness was missed, and the same misreport cost another one on
+    # 2026-10-01 (see docs/reported/macos-jit-leg-stall-unexplained.md, where
+    # a slow runner's killed r7rs-tail-calls read as a tail-call regression).
+    # This check must stay ahead of the stdout diff.
+    if [ "$rc" -eq 124 ] && [ "$expected_exit" != "124" ]; then
+        echo "FAIL $name -- timed out (>${fixture_timeout}s under the JIT engine)${fell_back:+ (via cc fallback)}"
+        echo "FAIL" > "$RESULTS_DIR/$rkey.result"
+        return
+    fi
+
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null 2>&1; then
             echo "FAIL $name -- stdout mismatch${fell_back:+ (via cc fallback)}"
