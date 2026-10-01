@@ -2464,6 +2464,16 @@ cmake floor sits exactly at CMake 4's cutoff.
 | --- | --- | --- |
 | [wasm-arm-suppresses-cmake-policy-min](wasm-arm-suppresses-cmake-policy-min.md) | medium | `pkg_cmake_build` guards `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` with `!wasm` (`src/compiler/pkg.c:4023`), so a `:cmake-deps` entry whose floor is below 3.5 configures natively and dies under `emcmake` with `Compatibility with CMake < 3.5 has been removed from CMake.` -- hiredis, the case pkg.c's own comment names, among others. Measured three ways (native+flag exit 0, wasm-no-flag exit 1, wasm+flag exit 0) with a 3-line repro. Fix: drop the `!wasm` conjunct; the `cmake_major_version() >= 4` test already handles the CMake 3.x noise the comment worried about |
 
+## Found adding a platform matrix to the turmeric-spices README (filed 2026-10-01)
+
+Found as four red `turmeric-spices` CI jobs on a README-only PR, which made the
+compiler the only candidate. Bisected to the day: the spices CI re-pins turmeric
+`main` per run, and the last green run predates PR #1007.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [forward-call-to-aggregate-result-types-as-carrier](forward-call-to-aggregate-result-types-as-carrier.md) | high | A call to a helper **defined later in the same module** whose return type is `(Result T E)` with `T` an opaque **imported from another module** is typed as the int64 carrier, so the enclosing function trips TUR-E0709 ("body returns int"). Moving the helpers above the caller compiles the identical code. Two-file 15-line repro; needs all three of cross-module payload type, caller-before-callee, and an aggregate return. Broke `secret` (2 files), `valkey` and `tourist-session-valkey` on 2026-10-01; clean on `a5edd6df8` the day before. Diagnostic site is `elab_fns.c:10474` and is faithful -- the defect is the forward call's placeholder type. Not narrowed to a commit: the `8bb60d016^1` build died on ENOSPC, do that first |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
