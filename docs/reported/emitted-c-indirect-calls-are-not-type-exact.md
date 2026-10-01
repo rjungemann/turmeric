@@ -9,7 +9,7 @@ silent-wrong-answer family, when the type that differs is a `double` or a
 16-byte tagged `any`. Filed 2026-09-30 with the P0 representation-confusion
 work.
 
-**Status: OPEN, being swept (66 trapping fixtures as of 2026-10-01).** The detector is armed in the four source
+**Status: OPEN, being swept (56 trapping fixtures as of 2026-10-01).** The detector is armed in the four source
 fuzzers (`tests/fuzz_arm.py`, report-only `FNPTR_TRAP` until this reaches
 zero). It is **not** yet a gate on the fixture suite.
 
@@ -63,11 +63,15 @@ run it under `gdb -batch`, and read frame 0 and its emitted C line. The 56
 fixtures that failed to LINK under clang (libturi is built with gcc's ASan)
 are environmental and not counted.
 
-Remaining clusters (66 traps, at `-O0`):
+A fifth pass (56): an E2a registry entry declared with a pointer or narrow
+parameter registers an adapter in the call site's word convention (`<fn>__e2w`).
+
+Remaining clusters (56 traps, at `-O0`):
 
 | Count | Site | Kind |
 | --- | --- | --- |
-| ~12 | `__tur_cps_lookup_checked(...)` cast to `int64_t (*)(int64_t, DK *)` for a callee whose `__cps` entry takes a `const char *` (an effectful typed fn-field / writer row) | CPS registry, pointer vs int |
+| ~10 | a typed fat-closure call (`TUR_APPLY1_T(tur_adt_Option__float, double, ...)`, `(void * (*)(void*, int64_t))f[0]`) whose slot 0 holds the generic word shim: the typed shim is declined for a <= 16-byte app result because rank-2 erased consumers call the SAME slot through the word cast -- two consumers, one slot, a design question rather than a missed bridge | typed vs erased consumer |
+| ~8 | fixtures' own inline C (`call-thin`, `call-s`, `call-pred`, `call-fat`) casting a closure to a signature of its choosing | user inline C |
 | 5 | `__inst_Functor_fmap_Identity`: `g.fn(g.env, x)` on a carrier whose fn is not all-word (a path the fat-box adapter does not see yet) | M4 |
 | ~10 | runtime callbacks: timer wheel, serializer `r->ser`, image registry `TUR_APPLY0`, `tur_async_fiber`, `fs-write` | runtime typedefs |
 | ~8 | `TUR_APPLY1_T` / thin `call-*` helpers in fixtures' own inline C | typed slot vs erased callee |
