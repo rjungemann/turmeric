@@ -1903,7 +1903,13 @@ struct Expr {
          * closure); the node wraps it in a { boxres shim, inner } box instead
          * of shimming a bare fn pointer.  Only set together with
          * erased_result. */
-        struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat; } fn_to_fat_;
+        /* `sink_fn_type`: the declared fn type of the `^fat` slot the box is
+         * headed for, when it is fully concrete (no type variable): its call
+         * sites cast slot 0 at exactly those types, so the box's shim must be
+         * spelled the same way (fnsan-concrete-sink-bare-fn).  NULL when not
+         * known or erased somewhere. */
+        struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat;
+                 const struct Type *sink_fn_type; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes

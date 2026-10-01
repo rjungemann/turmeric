@@ -9067,10 +9067,40 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
          * its emitted C is byte-identical to before.  (A serial k's own
          * spelling is read off the receiver's declared parameter.) */
         const char *kty = t->as.cloneable.serial ? serial_recv_kty(ce, t) : "int64_t";
+        /* fnsan-cont-receiver-result: and its RESULT at the receiver's recorded
+         * return type -- `const char *cl(int64_t)` for a `(cont cstr)`
+         * receiver was called as returning `int64_t`.  The value leaves as the
+         * word the trampoline carries (a float as its bits). */
+        const char *rty = NULL;
+        if (t->as.cloneable.receiver) {
+            char *rn = raw_name_for_binding(t->as.cloneable.receiver);
+            rty = rn ? emit_sig_lookup_ret_ctype(rn) : NULL;
+            free(rn);
+        }
+        if (rty && *rty) {
+            size_t RL = strlen(rty);
+            bool scalar = rty[RL - 1] == '*' || strcmp(rty, "double") == 0 ||
+                          strcmp(rty, "float") == 0 || strcmp(rty, "bool") == 0 ||
+                          strcmp(rty, "int8_t") == 0 || strcmp(rty, "int16_t") == 0 ||
+                          strcmp(rty, "int32_t") == 0 || strcmp(rty, "uint8_t") == 0 ||
+                          strcmp(rty, "uint16_t") == 0 || strcmp(rty, "uint32_t") == 0 ||
+                          strcmp(rty, "uint64_t") == 0;
+            if (!scalar) rty = NULL;   /* an aggregate keeps today's word call */
+        }
+        if (!rty) rty = "int64_t";
+        Buf rc; buf_init(&rc);
+        Buf call; buf_init(&call);
+        buf_printf(&call, "((%s (*)(%s))(intptr_t)env)((%s)(intptr_t)%s)",
+                   rty, kty, kty, cont_arg);
+        buf_putc(&call, '\0');
+        emit_scalar_word_conv(&rc, rty, "int64_t", call.data);
+        buf_putc(&rc, '\0');
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)((int64_t (*)(%s))(intptr_t)env)((%s)(intptr_t)%s);\n}\n",
-            bodyfn, cont_setup, kty, kty, cont_arg);
+            "    return (intptr_t)%s;\n}\n",
+            bodyfn, cont_setup, rc.data);
+        buf_free(&rc);
+        buf_free(&call);
     }
 }
 

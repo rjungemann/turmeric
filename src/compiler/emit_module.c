@@ -1794,13 +1794,18 @@ char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
 }
 
 /* `callee` NULL: the callee is slot 0 of the fat box the adapter receives as
- * its env -- a capturing closure's thunk, called with that box. */
+ * its env -- a capturing closure's thunk, called with that box.  `callee`
+ * EMIT_ADAPT_BARE_SLOT1: slot 1 holds a BARE function (an EX_FN_TO_FAT box),
+ * called with no env. */
+const char EMIT_ADAPT_BARE_SLOT1[] = "<bare-slot1>";
 char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
                              const char *crc, const char **cpc,
                              const char *arc, const char **apc, uint8_t n) {
     if (!ctx || !out || !crc || !arc) return NULL;
+    bool bare1 = callee == EMIT_ADAPT_BARE_SLOT1;
+    if (bare1) callee = NULL;
     if (!word_adapter_scalar_ok(crc) || !word_adapter_scalar_ok(arc)) return NULL;
-    bool need = strcmp(crc, arc) != 0;
+    bool need = bare1 || strcmp(crc, arc) != 0;   /* bare: the env must go */
     for (uint8_t i = 0; i < n; i++) {
         if (!word_adapter_scalar_ok(cpc[i]) || !word_adapter_scalar_ok(apc[i]))
             return NULL;
@@ -1814,7 +1819,7 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
     } else {
         /* Keyed on BOTH signatures: two thunks with one consumer signature
          * and different own signatures need different adapters. */
-        buf_puts(&nb, "__tur_adapt0_");
+        buf_puts(&nb, bare1 ? "__tur_adapt1_" : "__tur_adapt0_");
         append_sanitized_c_token(&nb, crc);
         for (uint8_t i = 0; i < n; i++) {
             buf_putc(&nb, '_');
@@ -1847,6 +1852,11 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
     for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s a%u", apc[i], (unsigned)i);
     if (callee) {
         buf_printf(out, ") {\n    %s r = %s(__e", crc, callee);
+    } else if (bare1) {
+        buf_printf(out, ") {\n    %s r = ((%s (*)(", crc, crc);
+        if (n == 0) buf_puts(out, "void");
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, i ? ", %s" : "%s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__e)[1])(");
     } else {
         buf_printf(out, ") {\n    %s r = ((%s (*)(void *", crc, crc);
         for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);
@@ -1855,7 +1865,7 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
     for (uint8_t i = 0; i < n; i++) {
         char an[16];
         snprintf(an, sizeof an, "a%u", (unsigned)i);
-        buf_puts(out, ", ");
+        if (!bare1 || i) buf_puts(out, ", ");
         emit_scalar_word_conv(out, apc[i], cpc[i], an);
     }
     buf_puts(out, ");\n    return ");

@@ -17107,7 +17107,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     rpc[i] = emit_sig_lookup_param_ctype(fnptr, i);
                     if (!rpc[i] || !*rpc[i]) have = false;
                 }
-                if (have)
+                /* fnsan-concrete-sink-bare-fn: when the slot is a CONCRETE fn
+                 * type, its call sites cast slot 0 at that type's thunk
+                 * spelling (the typed-thunk typedef, or the fat-call
+                 * fallback that spells the same thing) -- not all-word.  A
+                 * function-valued result (`(fn [int] (fn [int] int))`) or an
+                 * opaque application declines the typed shim above, and the
+                 * word adapter then disagreed with every one of those calls.
+                 * Spell the adapter as they do. */
+                const Type *sft = e->as.fn_to_fat_.sink_fn_type;
+                if (have && sft && sft->kind == TY_FN && sft->as.fn.arity == arity) {
+                    const char *apc[MAX_FN_ARITY];
+                    for (uint8_t i = 0; i < arity; i++) {
+                        Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sft, i));
+                        apc[i] = type_is_b4box_closure_slot(pt) ? "int64_t" : type_c_name(pt);
+                    }
+                    Type rt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sft));
+                    const char *arc = rt.kind == TY_NIL ? NULL
+                        : thunk_result_slot_c_spelling(type_c_name(rt));
+                    if (arc)
+                        typed_shim = ensure_call_adapter_ex(
+                            ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file,
+                            EMIT_ADAPT_BARE_SLOT1, rrc, rpc, arc, apc, (uint8_t)arity);
+                }
+                if (have && !typed_shim)
                     typed_shim = ensure_fat_word_adapter_ex(ctx, rrc, rpc,
                                                             (uint8_t)arity,
                                                             /*bare=*/true);

@@ -9605,6 +9605,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * must be boxed by slot 0's shim. */
                     shim->as.fn_to_fat_.erased_result =
                         sink_fn_result_is_hkt_erased(&fn_type, fn_arg_idx_fat);
+                    {
+                        const Type *sft = (fn_type.as.fn.arg_full_types &&
+                                           fn_arg_idx_fat < fn_type.as.fn.arity)
+                            ? fn_type.as.fn.arg_full_types[fn_arg_idx_fat] : NULL;
+                        if (sft && sft->kind == TY_FN && !call_type_has_named_tyvar(sft))
+                            shim->as.fn_to_fat_.sink_fn_type = sft;
+                    }
                     /* A normalized NOMINAL param never drops its argument --
                      * which is precisely why this shim leaked a box per call --
                      * so its box may be the shared file-scope one.

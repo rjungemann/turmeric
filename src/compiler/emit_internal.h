@@ -1600,6 +1600,7 @@ void emit_scalar_word_conv(Buf *out, const char *from, const char *to,
 char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
                                 const char *crc, const char **cpc,
                                 const char *arc, const char **apc, uint8_t n);
+extern const char EMIT_ADAPT_BARE_SLOT1[];
 char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
                              const char *crc, const char **cpc,
                              const char *arc, const char **apc, uint8_t n);
