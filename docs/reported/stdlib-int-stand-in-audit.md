@@ -483,8 +483,14 @@ same change: it builds an `Either` in inline C and should declare
 > generic map's by-value monomorph refuses its own arms in C. `(either-map inc
 > (Left 9))` reached cc, where the `int`-typed version runs it. The cause, and
 > `result-map`'s identical failure on `main` for a type-changing function, is
-> [generic-call-result-leaks-callee-tyvar-names](generic-call-result-leaks-callee-tyvar-names.md).
+> [generic-call-result-leaks-callee-tyvar-names](../archive/generic-call-result-leaks-callee-tyvar-names.md).
 > That is the blocker now.
+
+> **2026-10-01: that blocker is resolved** (archived).  A generic map over a
+> private `defdata` with both arm spellings -- constructor arms, and arms
+> through generic constructor helpers -- runs in both engines, including over
+> an open `(Left 9)`; `tests/fixtures/generic-call-result-binds-from-expected`
+> pins it.  The `either.tur` rewrite itself has not been redone.
 
 ## See also
 

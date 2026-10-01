@@ -5667,7 +5667,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * `(Vec A)` through `A -> (Option int)` -> `(Vec (Option int))`),
                  * so skip rehydration here; only a bare scalar/tyvar value is a
                  * genuine carrier collapse. */
-                if (bindings[i].name &&
+                /* generic-call-result-leaks-callee-tyvar-names: nor is a value
+                 * that is the ENCLOSING generic's own variable.  `(ok (f v))`
+                 * inside `result-map [A B E]` records ok's `B := E`; the name
+                 * `B` here is the CALLEE's, and the spec's `B := float` is
+                 * result-map's -- a different variable that happens to share
+                 * the spelling.  The composition below resolves the value
+                 * (`E := int`) by its own name, which is the answer. */
+                bool value_is_spec_tyvar = false;
+                if (bindings[i].type.kind == TY_TYVAR &&
+                    bindings[i].type.as.tyvar_.name) {
+                    for (uint8_t j = 0; j < aspec->n_bindings; j++)
+                        if (aspec->bindings[j].name &&
+                            strcmp(aspec->bindings[j].name,
+                                   bindings[i].type.as.tyvar_.name) == 0) {
+                            value_is_spec_tyvar = true;
+                            break;
+                        }
+                }
+                if (bindings[i].name && !value_is_spec_tyvar &&
                     bindings[i].type.kind != TY_APP &&
                     strcmp(type_c_name(bindings[i].type), "int64_t") == 0) {
                     for (uint8_t j = 0; j < aspec->n_bindings; j++) {
