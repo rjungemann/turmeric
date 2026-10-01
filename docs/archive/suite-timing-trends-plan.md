@@ -10,6 +10,12 @@
 > The `ci-metrics` branch README still names this plan's old path; it is
 > only ever written on the branch's first publish, so it is stale by one
 > directory and harmless.
+>
+> **Extended 2026-10-01**, outside this plan: `/ci` gained a line-count
+> panel, fed by a second file on the same branch (`repo-loc-<year>.jsonl`,
+> written by `tools/ci/collect-loc.py` through the same `publish-timings.sh`
+> commit) and proxied as `/api/ci-loc`. Unlike a suite duration, a line count
+> has no (os, cc, nproc) dimension, so it sits outside the environment lock.
 
 ## Execution record (2026-08-25; two-week readout added 2026-09-09)
 

@@ -62,7 +62,7 @@ individually").
   prelude made for one call and nobody could reach afterwards (the printer's
   spellings, `quotient`'s message, the bignum core's temporaries, the string
   re-encodings, `equal?`'s tables). See the T8 note in
-  docs/upcoming/r7rs-lang-plan.md for the table of what is freed.
+  docs/archive/r7rs-lang-plan.md for the table of what is freed.
 - Gated memory SAFETY rather than leaks: `tests/run-r7rs-sanitize.sh`
   (ctest `tur_r7rs_sanitize`) runs every Scheme fixture under ASan and UBSan
   with leak detection off, because of this report.

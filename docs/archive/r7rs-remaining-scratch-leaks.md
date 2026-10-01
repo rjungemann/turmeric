@@ -12,7 +12,7 @@ interpreter keeps its values for the life of the process by design
 **Severity:** low. A few prelude paths still allocate memory for one call and
 never free it. Each is small per call; the list is here so the next pass
 does not have to re-derive it. Found by r7rs-lang-plan T8's audit, after its
-fixes (see the T8 note in docs/upcoming/r7rs-lang-plan.md for what was fixed).
+fixes (see the T8 note in docs/archive/r7rs-lang-plan.md for what was fixed).
 
 Measured over the `r7rs-*` fixtures, compiled with ASan and run with
 LeakSanitizer on, 2026-09-25:

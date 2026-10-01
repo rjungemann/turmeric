@@ -382,13 +382,24 @@ extern bool g_opt_regions;
  * trait shared by every dynamic language, not Saffron's identity. */
 extern bool g_opt_dynamic_any;
 extern bool g_opt_saffron_gc;
-/* r7rs (docs/upcoming/r7rs-lang-plan.md): the `#lang r7rs` dialect's enable
- * bit.  Never set by a flag a user has to write -- lang_dialect_apply sets it
- * (through experiment_enable) the moment a `#lang r7rs` file is read, because
- * the directive is itself the enable (D11).  Nothing gates on it beyond the
- * lifecycle warning today: the dialect's semantics ride
- * LangTraits.dynamic (g_opt_dynamic_any) and its reader rides
- * SourceFile.reader_type == READER_R7RS, both per-file. */
+/* r7rs (docs/archive/r7rs-lang-plan.md): does this BUILD contain an r7rs TU?
+ * Never set by a flag a user has to write -- lang_dialect_apply sets it the
+ * moment a `#lang r7rs` file is read, because the directive is itself the
+ * enable (D11).
+ *
+ * It SURVIVED the dialect's graduation at 0.57.0 and keeps its name, the same
+ * call saffron's graduation made for g_opt_saffron/g_opt_dynamic_any and for
+ * the same reason: it was never only an enable bit.  emit_module.c's
+ * r7rs_gc_active reads it to pick which collector opt-out governs the
+ * program -- g_opt_r7rs_gc (TUR_R7RS_GC=0 / --no-r7rs-gc) when an r7rs TU is
+ * present, else Saffron's g_opt_saffron_gc -- and both dialects set
+ * g_opt_dynamic_any, so that bit cannot tell them apart.  `--enable=r7rs` is
+ * a TUR-W0063 no-op now, so the directive is the only writer.
+ *
+ * The dialect's SEMANTICS ride none of this: they are LangTraits.dynamic
+ * (g_opt_dynamic_any), LangTraits.scheme_truthiness and
+ * SourceFile.reader_type == READER_R7RS, all per-FILE, where this is
+ * per-build. */
 extern bool g_opt_r7rs;
 /* reflected-measures (docs/upcoming/reflected-measures-plan.md, RF0): the
  * `--enable=reflected-measures` bit.  When on, a `^reflect` defn is

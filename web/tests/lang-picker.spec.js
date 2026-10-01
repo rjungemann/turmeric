@@ -111,13 +111,15 @@ test.describe('language picker', () => {
                 { label: '#lang saffron',        value: 'saffron',        chip: false },
                 { label: '#lang saffron/sweet',  value: 'saffron/sweet',  chip: false },
             ] },
-            // Scheme is gated, so its rows -- and only its rows -- are badged.
-            // It gets a sweet row like the other two languages: sweet is one of
-            // the readers the picker offers (LANG_READERS_SHOWN), and v0.57.0
+            // Scheme graduated at v0.57.0, so no row is badged any more --
+            // the chip renders off the registry's `experiment` field, which is
+            // NULL on every base again (so this needed no JS change). It gets
+            // a sweet row like the other two languages: sweet is one of the
+            // readers the picker offers (LANG_READERS_SHOWN), and v0.57.0
             // added `#lang r7rs/sweet` to the registry.
             { name: 'Scheme', rows: [
-                { label: '#lang r7rs',           value: 'r7rs',           chip: true },
-                { label: '#lang r7rs/sweet',     value: 'r7rs/sweet',     chip: true },
+                { label: '#lang r7rs',           value: 'r7rs',           chip: false },
+                { label: '#lang r7rs/sweet',     value: 'r7rs/sweet',     chip: false },
             ] },
         ]);
     });

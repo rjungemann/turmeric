@@ -856,6 +856,16 @@ jobs:
           pattern: timings-*
           path: timings-artifacts
 
+      # Line counts are a property of the COMMIT, not of a runner, so they are
+      # measured here -- once, on the full checkout this job already has -- and
+      # not in a matrix leg, where every os x cc combination would publish its
+      # own identical row.  No build is needed: the collector only reads
+      # `git ls-files`.
+      - name: Collect line counts
+        run: |
+          set -euo pipefail
+          python3 tools/ci/collect-loc.py --explain > repo-loc.jsonl
+
       - name: Merge and publish
         run: |
           set -euo pipefail
@@ -869,7 +879,7 @@ jobs:
             exit 0
           fi
           echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
-          bash tools/ci/publish-timings.sh all-timings.jsonl
+          bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl
 
   windows:
     name: Windows build + suite ${{ matrix.shard }} (MSYS2/UCRT64)
@@ -1680,7 +1690,9 @@ jobs:
       # one level up. lsp.spec.js and the navigation specs
       # (try-turmeric-navigation-and-minimap-plan §8) were written against a
       # bundle CI is the first place to actually build, so they are named here
-      # rather than left to be discovered.
+      # rather than left to be discovered. ci.spec.js (the /ci dashboard) was
+      # itself an instance of that trap: it existed, passed locally, and had
+      # never run here.
       # Each non-blocking suite also writes JUnit (one <testcase> per test)
       # for the timings step below, so the suites get /ci rows like every
       # ctest suite -- including an honest `status: fail` on a run whose job
@@ -1697,7 +1709,7 @@ jobs:
           tests/docs-offline.spec.js tests/lsp.spec.js
           tests/minimap.spec.js tests/footer.spec.js
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
-          tests/security.spec.js
+          tests/security.spec.js tests/ci.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
         id: mobile

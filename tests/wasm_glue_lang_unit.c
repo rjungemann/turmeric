@@ -124,16 +124,18 @@ int main(void) {
               "the Saffron bases are offered");
         CHECK(strstr(reg, "\"experiment\":\"saffron\"") == NULL,
               "no base is badged with the graduated saffron experiment");
-        /* r7rs-lang-plan R1 / D11: `r7rs` is the first base to fill the
-         * `experiment` slot, and it is BADGED rather than hidden -- the
-         * `#lang` line is itself the enable, so the row stays selectable.
-         * Its rows (`r7rs`, `r7rs/sweet`) are the ones that carry a badge,
-         * and it names their own EXPERIMENTS[] row. */
+        /* r7rs GRADUATED at 0.57.0, so it is offered UNBADGED too -- the same
+         * two halves as saffron above.  `r7rs` was the base that filled the
+         * `experiment` slot for the first time (R1 / D11, badged rather than
+         * hidden because the `#lang` line is itself the enable); that slot is
+         * NULL on every trait row again, so a playground visitor sees no chip
+         * on `r7rs` or `r7rs/sweet`. */
         CHECK(strstr(reg, "\"name\":\"r7rs\"") != NULL,
-              "the r7rs base is offered (badged, not hidden)");
-        CHECK(strstr(reg, "\"language\":\"r7rs\",\"reader\":\"scheme\","
-                          "\"experiment\":\"r7rs\"") != NULL,
-              "the r7rs base is badged with the r7rs experiment");
+              "the r7rs bases are offered");
+        CHECK(strstr(reg, "\"experiment\":\"r7rs\"") == NULL,
+              "no base is badged with the graduated r7rs experiment");
+        CHECK(strstr(reg, "\"language\":\"r7rs\",\"reader\":\"scheme\"") != NULL,
+              "the r7rs base states its own language and reader");
         CHECK(strstr(reg, "\"label\":\"Scheme\"") != NULL,
               "the r7rs base carries a label for its own reader");
 
@@ -155,18 +157,30 @@ int main(void) {
             CHECK(strstr(reg, needle) != NULL,
                   "the registry's reader is lang_base_at's reader");
         }
+        /* With r7rs graduated, no base is gated.  The count is asserted at
+         * zero rather than the loop deleted: the `experiment` key is still
+         * emitted when a row carries one, and this is what proves the chip
+         * went away for every row at once rather than for the two spellings
+         * someone remembered to name. */
         size_t n_badged = 0;
         for (size_t i = 0; i < lang_bases_count(); i++) {
             LangBaseDescriptor d;
             if (!lang_base_at(i, &d)) continue;
-            if (d.experiment) {
-                n_badged++;
-                CHECK(strcmp(d.language, "r7rs") == 0 &&
-                      strcmp(d.experiment, "r7rs") == 0,
-                      "only the r7rs base is experiment-gated");
-            }
+            if (d.experiment) n_badged++;
         }
-        CHECK(n_badged == 2, "exactly two bases are badged (r7rs, r7rs/sweet)");
+        CHECK(n_badged == 0, "no base is experiment-gated (saffron and r7rs both graduated)");
+        /* The KEY is still emitted, as `null`, on every row -- that is
+         * deliberate, so a future gated dialect badges with no consumer
+         * change.  What must be absent is a QUOTED value, which is what the
+         * picker renders a chip from. */
+        CHECK(strstr(reg, "\"experiment\":\"") == NULL,
+              "no row carries a named experiment");
+        size_t n_keys = 0;
+        for (const char *q = reg; (q = strstr(q, "\"experiment\":")) != NULL; q++) {
+            n_keys++;
+        }
+        CHECK(n_keys == lang_bases_count(),
+              "every row still states its experiment slot (null), for a future gated base");
         CHECK(lang_bases_count() == 10,
               "ten bases: four turmeric, four saffron, two r7rs");
     }

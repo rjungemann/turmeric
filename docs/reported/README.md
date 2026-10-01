@@ -2357,7 +2357,7 @@ ran the fixture that shows it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [r7rs-reentrant-callcc-wrong-with-eval](r7rs-reentrant-callcc-wrong-with-eval.md) | medium | Compiled only: a `call/cc` whose continuation is stored and re-entered reads back a non-number for a variable `set!` between capture and re-entry (`error: +: not a number`) when the same unit also CALLS `eval` -- the import alone is fine, and `--interpret` is right. A later form changing an earlier result makes it a compile-time difference. `docs-r7rs-guide-examples` carries it locally (macOS 27 / Apple clang 21 / arm64, Debug) while `Test (macos-latest)` is green at bf31e725c, which wants reconciling first. **Narrowed 2026-09-29:** does not reproduce on Linux (gcc 13, clang 18, `tur jit`); the emitted `count-to` is identical with and without the `eval`, which adds only top-level forms, keyword records and the link of the embedded interpreter (ASan-instrumented in a Debug `tur`) -- so it is the link or startup, most likely that Mac's OS-ahead ASan runtime; next is the repro there with a Release or unsanitized `tur` |
+| ~~[r7rs-reentrant-callcc-wrong-with-eval](../archive/r7rs-reentrant-callcc-wrong-with-eval.md)~~ | medium | **RESOLVED 2026-10-01** (archived): fixed by `7c90e00b8`, which landed ~10 hours after the `bf31e725c` this was filed against and was never in it -- the re-entry path's thread-local stores were made through a stale address after `setjmp`'s second return. The report's closing hypothesis (the Mac's OS-ahead ASan runtime, not a code bug) is **wrong**: the repro still fails at `bf31e725c` under today's CLT, and at `main` the suspected configuration -- ASan-instrumented `libturi.a`, `libclang_rt.asan_osx_dynamic.dylib` loaded in the emitted binary -- prints the right answer. `eval` mattered only because linking the embedded interpreter moved where the stale store landed: value corruption at `bf31e725c`, SEGV in the capture at `7c90e00b8^`. `docs-r7rs-guide-examples` passes |
 
 ## Found fixing the captured-`^mut` copy (filed 2026-09-26)
 
@@ -2463,6 +2463,12 @@ cmake floor sits exactly at CMake 4's cutoff.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [wasm-arm-suppresses-cmake-policy-min](wasm-arm-suppresses-cmake-policy-min.md) | medium | `pkg_cmake_build` guards `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` with `!wasm` (`src/compiler/pkg.c:4023`), so a `:cmake-deps` entry whose floor is below 3.5 configures natively and dies under `emcmake` with `Compatibility with CMake < 3.5 has been removed from CMake.` -- hiredis, the case pkg.c's own comment names, among others. Measured three ways (native+flag exit 0, wasm-no-flag exit 1, wasm+flag exit 0) with a 3-line repro. Fix: drop the `!wasm` conjunct; the `cmake_major_version() >= 4` test already handles the CMake 3.x noise the comment worried about |
+
+## Found wiring the /ci spec into CI (filed 2026-10-01)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [docs-offline-cold-pane-never-boots](docs-offline-cold-pane-never-boots.md) | medium | `docs-offline.spec.js:145` (`docs browse offline on a cold pane`) fails on every run: with the origin stopped, `page.reload()` never reaches `window.turmericApp` and times out at 30s. The describe block is `mode: 'serial'`, so the two tests after it **did not run** -- three of the four offline-docs assertions are unexercised, not one. Verified on `main`'s own tip (run 36901587136, `8bb60d0`: 1 failed, 2 did not run, 128 passed) as well as on #1009, so it is not the PR's. Invisible because `Run broader smoke suite (desktop, non-blocking)` is `continue-on-error`: the step renders with a green check and only a `::warning` says otherwise -- the arrangement [try-turmeric-browser-suites-green-while-failing](../archive/try-turmeric-browser-suites-green-while-failing.md) describes, whose JUnit row does put an honest `status: fail` on `/ci`'s `web_desktop`. **Mechanism NOT established** -- filed from two CI runs; reproducing needs a production build (the spec skips without `dist/sw.js`). Leads in the report, starting with whether `sw.js`'s precache still covers the app shell after the Vite output moved to `dist/client/`. Either way the reporting wants fixing: a test that has failed every run for an unknown length of time makes the suite's failure count meaningless |
 
 ## Filing conventions
 

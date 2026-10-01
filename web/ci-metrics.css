@@ -382,6 +382,28 @@
 .ci-legend-item .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .ci-legend-item .x { color: var(--text-dim); font-size: 13px; line-height: 1; }
 
+/* The line-count legend is also the series picker, so it carries affordance
+ * (a chip outline) and the current value — a deselected series still has a
+ * number worth reading, which a plain legend has nowhere to put. */
+.ci-legend-toggle {
+  border: 1px solid var(--border-mid);
+  border-radius: 999px;
+  padding: 5px 11px;
+  gap: 8px;
+}
+.ci-legend-toggle:hover { background: var(--bg-hover); }
+.ci-legend-toggle[aria-pressed="true"] {
+  color: var(--text-primary);
+  border-color: var(--border-str);
+  background: var(--bg-hover);
+}
+.ci-legend-toggle .count {
+  font-family: 'Iosevka', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.ci-legend-toggle[aria-pressed="true"] .count { color: var(--text-sec); }
+
 /* ── SPARKLINE GRID ────────────────────── */
 
 .ci-sparks {
