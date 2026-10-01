@@ -6,6 +6,18 @@ existing overread was a live ASan abort until WP2 backed it out)
 **Found:** 2026-09-29, executing WP2 of
 [security-audit-plan](../upcoming/security-audit-plan.md).
 
+**Status: RESOLVED 2026-10-01** by fix direction 1. `buf_putc` and
+`buf_write` (so `buf_puts`) now reserve one byte past what they append and
+store a NUL there without counting it, which is what `buf_vprintf` did by
+accident; the invariant is written down on `Buf` in `src/runtime/buf.h`. A new
+`buf_truncate` shortens a Buf without breaking it, and the two direct
+`src_acc.len` writes in `src/turi/env.c` use it. `buf_put_quoted`
+(`src/main.c`) -- the helper WP2 had to keep on `buf_printf` with a warning
+comment -- is a plain `buf_puts` again, which is precisely the swap the repro
+below describes. Verified: `tests/spice-c-sources-tests.sh` passes 10/10 with
+it, and with the old `buf.c` restored the same run fails with the original
+`heap-buffer-overflow ... in strlen`.
+
 ## One line
 
 `buf_printf` reserves `n + 1` bytes and lets `vsnprintf` write its NUL, so a

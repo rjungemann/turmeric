@@ -804,7 +804,7 @@ nothing here waited on W0/W1). **The browser story is real.** Full results in
    finding 5).
 
 One bug fell out and is filed:
-[wasm-arm-suppresses-cmake-policy-min](../../reported/wasm-arm-suppresses-cmake-policy-min.md).
+[wasm-arm-suppresses-cmake-policy-min](../../archive/wasm-arm-suppresses-cmake-policy-min.md).
 raylib itself is immune (its floor is exactly 3.5), so W2 is not blocked on
 the fix -- but the second cmake dep will be.
 
@@ -987,7 +987,7 @@ still accepts -- which is why this has never been hit. The second cmake dep
 finds it; `hiredis` is named in pkg.c's own comment as the motivating case.
 
 Filed as
-[docs/reported/wasm-arm-suppresses-cmake-policy-min.md](../../reported/wasm-arm-suppresses-cmake-policy-min.md).
+[docs/archive/wasm-arm-suppresses-cmake-policy-min.md](../../archive/wasm-arm-suppresses-cmake-policy-min.md).
 Fix is dropping the `!wasm` conjunct: the `cmake_major_version() >= 4` test
 already handles the CMake 3.x noise the comment was guarding against, and it
 is arm-independent.

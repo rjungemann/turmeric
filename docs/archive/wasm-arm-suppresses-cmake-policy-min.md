@@ -5,7 +5,13 @@
 `cmake_minimum_required(VERSION <3.5)`, with an error the spice author cannot
 act on. Native builds of the same manifest succeed.
 
-**Status:** open. Verified 2026-09-30 with a minimal repro (below).
+**Status:** **RESOLVED 2026-09-30** by a5edd6df ("wasm target: make the
+cmake-dep web arm reachable"), which dropped the `!wasm` conjunct exactly as
+the fix direction below says; the line now reads
+`if (cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))` and
+its comment records why (`src/compiler/pkg.c`, `pkg_cmake_build`). The report
+was left in `docs/reported/` when that commit landed and was archived
+2026-10-01. Originally verified 2026-09-30 with a minimal repro (below).
 
 ## Summary
 

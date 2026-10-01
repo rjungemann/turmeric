@@ -20,7 +20,7 @@
 > fixes turned out not to exist -- corrected in **section 2b** before the work
 > started. D-1 through D-9 are closed, pinned by `tests/run-security-driver.sh`
 > (27 assertions, ctest `tur_security_driver`). One finding of WP2's own is
-> filed: `docs/reported/buf-puts-breaks-the-incidental-nul-invariant.md`.
+> filed: `docs/archive/buf-puts-breaks-the-incidental-nul-invariant.md`.
 >
 > **WP3 landed 2026-09-30**, branched from WP1's PR (`1d5f533e`). Its research
 > pass is section 2c: S-1 reproduced from an embedder AND from `tur check`

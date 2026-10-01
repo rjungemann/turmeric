@@ -2441,7 +2441,7 @@ carries a witness parameter and ships no generic helpers.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [buf-puts-breaks-the-incidental-nul-invariant](buf-puts-breaks-the-incidental-nul-invariant.md) | medium | (filed 2026-09-29, open) `buf_vprintf` reserves `n + 1` bytes and lets `vsnprintf` write its NUL, so a `Buf` built only out of `buf_printf` is *incidentally* a C string -- and `link_command_run` reads `aux_includes->data` / `aux_sources->data` that way, neither of which its producer terminates. `buf_puts` and `buf_write` reserve exactly `n`. Swapping one for the other in `collect_spice_aux_c` was a heap-buffer-overflow ASan caught in `tests/spice-c-sources-tests.sh` while all 3405 fixtures stayed green (no fixture builds a spice with vendored `:c-sources`). Preferred fix: make `buf_write` reserve `n + 1` and store the NUL without counting it, so the invariant every caller already assumes becomes real |
+| ~~[buf-puts-breaks-the-incidental-nul-invariant](../archive/buf-puts-breaks-the-incidental-nul-invariant.md)~~ | medium | **RESOLVED 2026-10-01** (archived): the preferred direction landed -- `buf_putc`/`buf_write` reserve the extra byte and store the NUL uncounted, so every Buf append keeps `data[len] == '\0'` and `buf.h` documents it; `buf_truncate` shortens without breaking it. `buf_put_quoted` is a plain `buf_puts` again, the exact swap that was the repro: `tests/spice-c-sources-tests.sh` passes 10/10 with it and fails on the old `buf.c` with the original `strlen` overread |
 
 ## Found executing security-audit-plan WP5 (filed 2026-09-30)
 
@@ -2462,7 +2462,7 @@ cmake floor sits exactly at CMake 4's cutoff.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [wasm-arm-suppresses-cmake-policy-min](wasm-arm-suppresses-cmake-policy-min.md) | medium | `pkg_cmake_build` guards `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` with `!wasm` (`src/compiler/pkg.c:4023`), so a `:cmake-deps` entry whose floor is below 3.5 configures natively and dies under `emcmake` with `Compatibility with CMake < 3.5 has been removed from CMake.` -- hiredis, the case pkg.c's own comment names, among others. Measured three ways (native+flag exit 0, wasm-no-flag exit 1, wasm+flag exit 0) with a 3-line repro. Fix: drop the `!wasm` conjunct; the `cmake_major_version() >= 4` test already handles the CMake 3.x noise the comment worried about |
+| ~~[wasm-arm-suppresses-cmake-policy-min](../archive/wasm-arm-suppresses-cmake-policy-min.md)~~ | medium | **RESOLVED 2026-09-30** (archived 2026-10-01): a5edd6df dropped the `!wasm` conjunct, so `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` reaches `emcmake` too on CMake >= 4. The report was left behind when the fix landed |
 
 ## Found wiring the /ci spec into CI (filed 2026-10-01)
 
