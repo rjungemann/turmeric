@@ -1,11 +1,43 @@
 # A generic call's unbound result variable takes the caller's variable of the same name
 
+**RESOLVED 2026-10-01.** Three changes, one per place the name leaked:
+
+1. **Elab, binding (`elab_call.c`).** A global generic call whose arguments
+   bound SOME of its result variables now binds the rest from the expected
+   type, on a scratch set adopted whole or not at all.  In `result-map`'s
+   return position `(ok (f v))` is `(Result B E)` and `(err e)` is `(Result B
+   E)`, so the match joins two agreeing arms.
+2. **Emit, composition (`emit_module.c`).** The carrier-collapse rehydration
+   looked a callee binding up by the CALLEE's name in the enclosing spec:
+   `ok`'s `B := E` became result-map's `B := float`, so the arms were minted
+   `ok__spec__Result__float__float`.  A binding whose value is a variable the
+   active spec already binds is now left to the composition, which resolves
+   it by the value's own name (`E := int`).
+3. **Elab, naming (`elab_call.c`).** A result variable still unbound after
+   both -- no argument, no expected type -- is renamed apart in the call's
+   TYPE only (`ok.B`, an open slot) when it collides with the enclosing
+   signature.  `(sink (ok x))` inside `[A B E]` now reports `(Result B
+   ok.B)`, not `(Result B B)`.  The ABI bindings are untouched, and a
+   recursive call keeps its names (they ARE the enclosing signature's).
+
+`result-map` with a type-changing function runs in both engines, and both
+spellings of a generic `Either` map (constructor arms, and arms routed
+through generic constructor helpers) run, including `(ei-map inc (Lf 9))`
+over an open `Left`.  Pinned by
+`tests/fixtures/generic-call-result-binds-from-expected`.  Suite 3478/0.
+
+What this does NOT do: land the generic `stdlib/either.tur`.  The blocker
+[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md) S3
+recorded is gone; the rewrite itself is that audit's work.
+
+---
+
 **Severity: medium.** A program the checker accepts fails in cc. It happens
 whenever a generic body's type variables share names with a generic callee's
 unbound ones, and `A`/`B`/`E` are what everyone writes. No wrong answer has
 been seen; the collision surfaces as a representation mismatch in C. Filed
 2026-09-29 while making `stdlib/either.tur` generic
-([stdlib-int-stand-in-audit](stdlib-int-stand-in-audit.md), S3). It
+([stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md), S3). It
 reproduces unchanged on `main` from before that work.
 
 ## Repro
@@ -73,7 +105,7 @@ reached cc ("returning `tur_adt_Option__fn1_int__int` but
 `tur_adt_Option__fnc1_int__int` was expected").
 
 So the generic `either.tur` that
-[stdlib-int-stand-in-audit](stdlib-int-stand-in-audit.md) S3 describes is
+[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md) S3 describes is
 still not landed. The `fmap` blocker it recorded is resolved. What is left is
 this report.
 
@@ -81,7 +113,7 @@ this report.
 
 - Give a generic call's unbound result variables their own identity. The
   `tyvar_.open_slot` bit that
-  [fmap-over-underdetermined-constructor-is-a-defless-shell](../archive/fmap-over-underdetermined-constructor-is-a-defless-shell.md)
+  [fmap-over-underdetermined-constructor-is-a-defless-shell](fmap-over-underdetermined-constructor-is-a-defless-shell.md)
   added marks exactly this case for a constructor, so `(ok x)` could be
   `(Result B ?B)`. A `match` join would then need to combine complementary
   open slots, `(Result B ?)` with `(Result ? E)`, into `(Result B E)`. Today

@@ -11786,7 +11786,65 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             ctx->sum_drop_admit = ac;
                     }
                 }
+                /* fnsan-sink-aware-fat-box: a bare fn boxed for this
+                 * argument is called by the callee THIS call selects -- a
+                 * spec clone at the spec's types, a carrier base or inline-C
+                 * body at words wherever the parameter's fn type has a type
+                 * variable.  Hand the box that spelling (see EX_FN_TO_FAT). */
+                const Type *fbs_prev_t = ctx->fat_box_sink_type;
+                uint64_t fbs_prev_m = ctx->fat_box_sink_erased_mask;
+                bool fbs_prev_r = ctx->fat_box_sink_erased_res;
+                ctx->fat_box_sink_type = NULL;
+                {
+                    const Expr *fb = emit_arg;
+                    while (fb && fb->kind == EX_ASCRIBE) fb = fb->as.ascribe_.inner;
+                    uint32_t pi = (fn_binding && fn_binding->closure_fn_binding) ? i + 1 : i;
+                    const Type *decl = (fb && fb->kind == EX_FN_TO_FAT && fn_binding &&
+                                        fn_binding->type.kind == TY_FN &&
+                                        fn_binding->type.as.fn.arg_full_types &&
+                                        pi < fn_binding->type.as.fn.arity)
+                        ? fn_binding->type.as.fn.arg_full_types[pi] : NULL;
+                    /* An UNTYPED `^fat` parameter (`vec-eq?`'s `cmp-fn`) has
+                     * no fn type to read: an inline-C body may call it at
+                     * words (TUR_APPLY) or typed (TUR_APPLY1_T(double, ...)),
+                     * so nothing here can say which -- it keeps the default. */
+                    if (decl && decl->kind == TY_FN &&
+                               !emit_repr_type_mentions_tyvar(decl)) {
+                        /* A concrete parameter type: every callee reads it so. */
+                        ctx->fat_box_sink_type = decl;
+                        ctx->fat_box_sink_erased_mask = 0;
+                        ctx->fat_box_sink_erased_res = false;
+                    } else
+                    if (decl && decl->kind == TY_FN && emit_repr_type_mentions_tyvar(decl)) {
+                        if (matched_spec && !fn_binding->body_is_inline_c) {
+                            Type *rt = (Type *)arena_alloc(ctx->type_arena, sizeof(Type));
+                            *rt = emit_type_through_spec(ctx, decl, matched_spec);
+                            if (rt->kind == TY_FN && !emit_repr_type_mentions_tyvar(rt)) {
+                                ctx->fat_box_sink_type = rt;
+                                ctx->fat_box_sink_erased_mask = 0;
+                                ctx->fat_box_sink_erased_res = false;
+                            }
+                        } else if (!matched_spec || fn_binding->body_is_inline_c) {
+                            uint64_t m = 0;
+                            for (uint32_t k = 0; k < decl->as.fn.arity; k++)
+                                if (emit_repr_type_mentions_tyvar(
+                                        decl->as.fn.arg_full_types
+                                            ? decl->as.fn.arg_full_types[k] : NULL) ||
+                                    (decl->as.fn.arg_kinds &&
+                                     decl->as.fn.arg_kinds[k] == TY_TYVAR))
+                                    m |= ARG_IDX_BIT(k);
+                            ctx->fat_box_sink_type = decl;
+                            ctx->fat_box_sink_erased_mask = m;
+                            ctx->fat_box_sink_erased_res =
+                                emit_repr_type_mentions_tyvar(decl->as.fn.result_full_type) ||
+                                decl->as.fn.result_kind == TY_TYVAR;
+                        }
+                    }
+                }
                 char *raw = emit_value(ctx, body, emit_arg);
+                ctx->fat_box_sink_type = fbs_prev_t;
+                ctx->fat_box_sink_erased_mask = fbs_prev_m;
+                ctx->fat_box_sink_erased_res = fbs_prev_r;
                 ctx->sum_drop_admit = admit_prev;
                 if (rgn_erased && raw) {
                     if (emit_str_is_bare_ident(raw)) {
@@ -14925,6 +14983,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
                 case TY_INT32: case TY_UINT32: case TY_INT16: case TY_UINT16:
                 case TY_INT8: case TY_UINT8:
+                /* fnsan-async-nil-payload: a `nil` body is a `void` function,
+                 * and the plain spawn calls it as `int64_t (*)(void)` -- an
+                 * indirect call through the wrong function type (a
+                 * -fsanitize=function trap, a call_indirect trap on WASM). */
+                case TY_NIL:
                     apl_typed = true; break;
                 default: break;
             }
@@ -14964,6 +15027,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     else
                         buf_printf(pbuf, "static int64_t %s(void *);\n", wname);
                     buf_printf(pbuf, "static int64_t %s(void *__env) {\n", wname);
+                    if (apl->kind == TY_NIL) {
+                        /* A `void` body: call it at that type, resolve with 0. */
+                        if (fn_expr->type.as.fn.boxed)
+                            buf_puts(pbuf, "    void (*__f)(void *) = *(void (**)(void *))__env;\n"
+                                           "    __f(__env);\n");
+                        else
+                            buf_puts(pbuf, "    void (*__f)(void) = (void (*)(void))(intptr_t)__env;\n"
+                                           "    __f();\n");
+                        buf_puts(pbuf, "    return 0;\n}\n\n");
+                    } else {
                     if (fn_expr->type.as.fn.boxed) {
                         /* narrow-closure-result-read-through-int64-carrier:
                          * slot 0 returns a narrow result widened. */
@@ -14978,6 +15051,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(pbuf, "    return %s;\n", wbits);
                     free(wbits);
                     buf_puts(pbuf, "}\n\n");
+                    }
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "void *%s = (void *)%s(%s, (void *)(intptr_t)%s);\n",
                                tmp, e->as.async_.on_thread ? "tur_async_thread_via"
@@ -16407,6 +16481,57 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 e->as.poly_wrap_.carrier_erased_result);
                             fat_spill_cast = fat_spill != NULL;
                         }
+                        /* fnsan-poly-carrier-named-wrapper, the capturing
+                         * twin: slot 0 is the lambda's thunk at its own
+                         * signature (`tur_adt_Point *(void *, int64_t)`),
+                         * while a FORALL sink or an erased carrier-base sink
+                         * calls `.fn` at the consumer's -- all-word, narrow
+                         * phase F, or word at just the erased positions (see
+                         * the named-wrapper arm below).  Carry an adapter at
+                         * the consumer's signature that calls slot 0 at the
+                         * thunk's. */
+                        bool c_erased_res = e->as.poly_wrap_.carrier_erased_result ||
+                                            e->as.poly_wrap_.carrier_erased_result_hkt;
+                        bool c_erased_sink = !e->as.poly_wrap_.boxes_aggregate &&
+                            ctx->poly_wrap_callee_carrier &&
+                            (e->as.poly_wrap_.carrier_erased_arg_mask || c_erased_res);
+                        Type c_res = emit_resolve_type(ctx, thunk_result);
+                        if (!fat_spill && thunk_arity >= 1 && c_res.kind != TY_FN &&
+                            c_res.kind != TY_NIL &&
+                            (e->as.poly_wrap_.boxes_aggregate || c_erased_sink)) {
+                            const char *cpc[MAX_FN_ARITY], *apc[MAX_FN_ARITY];
+                            const char *npc[MAX_FN_ARITY];
+                            bool c_ok = true;
+                            bool c_phase_f = !c_erased_sink &&
+                                             type_kind_is_poly_concrete(c_res.kind);
+                            for (uint8_t i = 0; i < thunk_arity; i++) {
+                                Type pt = emit_resolve_type(ctx, thunk_params[i]);
+                                if (pt.kind == TY_FN || pt.kind == TY_FORALL) c_ok = false;
+                                if (!type_kind_is_poly_concrete(pt.kind)) c_phase_f = false;
+                                cpc[i] = thunk_param_slot_c_name(thunk_params[i]);
+                                npc[i] = emit_type_c_name(ctx, pt);
+                            }
+                            /* Slot 0 widens a narrow result (thunk_result_slot_c_name);
+                             * a phase-F call site reads it at the narrow type. */
+                            const char *crc = thunk_result_slot_c_name(thunk_result);
+                            const char *arc = "int64_t";
+                            for (uint8_t i = 0; i < thunk_arity; i++) {
+                                if (c_erased_sink)
+                                    apc[i] = (e->as.poly_wrap_.carrier_erased_arg_mask &
+                                              ARG_IDX_BIT(i)) ? "int64_t" : cpc[i];
+                                else
+                                    apc[i] = c_phase_f ? npc[i] : "int64_t";
+                            }
+                            if (c_erased_sink) arc = c_erased_res ? "int64_t" : crc;
+                            else if (c_phase_f) arc = emit_type_c_name(ctx, c_res);
+                            if (c_ok) {
+                                fat_spill = ensure_call_adapter_ex(
+                                    ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs
+                                                             : ctx->file,
+                                    NULL, crc, cpc, arc, apc, thunk_arity);
+                                fat_spill_cast = fat_spill != NULL;
+                            }
+                        }
                     }
                     /* let-bound-noncapturing-lambda-segfaults-as-fn-arg: a
                      * `:fn` value has three lowerings, and this branch assumed
@@ -16613,6 +16738,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Phase F: cast to int64_t(*)(void*,int64_t) to match the field type;
              * concrete call sites reverse this cast via the concrete dispatch path. */
             char *wn = raw_name_for_binding(e->as.poly_wrap_.wrapper_binding);
+            bool wn_is_variant = false;   /* an all-word spec variant (below) */
             /* constrained-generic-as-fn-value-collapses: the elaboration-time
              * wrapper hardcodes the generic's BASE entry, so every
              * specialization that passes the same generic as a value reached
@@ -16631,7 +16757,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (clone && ivb->type.kind == TY_FN) {
                         char *variant = ensure_poly_wrap_spec_variant(
                             ctx, clone, ivb->type.as.fn.arity);
-                        if (variant) { free(wn); wn = variant; }
+                        if (variant) { free(wn); wn = variant; wn_is_variant = true; }
                     }
                 }
             }
@@ -16755,13 +16881,104 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
             }
+            /* fnsan-poly-carrier-named-wrapper: a FORALL sink (boxes_aggregate)
+             * calls `.fn` through one of two signatures, decided at the call
+             * site from the instantiated kinds (the rank-2 arm of emit_expr's
+             * EX_CALL): every position a sub-64-bit integer or bool ("phase
+             * F") casts to that exact narrow signature; anything else calls the
+             * all-word `int64_t (*)(void *, int64_t...)`, reading a pointer
+             * through intptr_t and a float as its bits.  The wrapper is defined
+             * at neither in general -- `int32_t __poly_8(void *, int64_t)`,
+             * `const char *__poly_12(void *, int64_t)` -- an indirect call
+             * through the wrong function type (a -fsanitize=function trap, a
+             * call_indirect trap on WASM) that is ABI-benign on SysV only for
+             * the integer register class.  Store an adapter at the consumer's
+             * signature instead.  A monomorphic inner pins the instantiation,
+             * so the wrapper's own kinds are the call site's. */
+            /* The same holds for an ERASED typeclass-method sink (`k : (fn [a]
+             * (m b))`) whose callee is the carrier base: the erased positions
+             * are read as words -- `void *__poly_314(void *, int64_t)` handed
+             * to `__inst_Monad_bind_Parser`, which calls it all-word.  The
+             * float positions of that sink are the float-carrier shim's
+             * (above); this covers the pointer and narrow ones, keeping every
+             * non-erased position at the wrapper's own type. */
+            bool erased_res = e->as.poly_wrap_.carrier_erased_result ||
+                              e->as.poly_wrap_.carrier_erased_result_hkt;
+            bool erased_sink = !e->as.poly_wrap_.boxes_aggregate &&
+                ctx->poly_wrap_callee_carrier &&
+                (e->as.poly_wrap_.carrier_erased_arg_mask || erased_res);
+            char *named_adapt = NULL;
+            if (!spill && !wn_is_variant &&
+                (e->as.poly_wrap_.boxes_aggregate || erased_sink) &&
+                ctx->pending_handler_fns && wbnd && wbnd->type.kind == TY_FN &&
+                wbnd->type.as.fn.arity >= 2 &&
+                wbnd->type.as.fn.arity - 1 <= MAX_FN_ARITY) {
+                uint8_t wn_n = (uint8_t)(wbnd->type.as.fn.arity - 1);
+                Type wres = wbnd->type.as.fn.result_full_type
+                    ? *wbnd->type.as.fn.result_full_type
+                    : emit_type_from_kind(wbnd->type.as.fn.result_kind);
+                wres = emit_resolve_type(ctx, wres);
+                /* The call site decides from the INSTANTIATED kinds, which a
+                 * monomorphic inner pins: the inner's own, not the wrapper's
+                 * (which widens a narrow argument to the int64 carrier).  A
+                 * wrapper with leading dictionary slots never qualifies --
+                 * the call site passes each dictionary as a word. */
+                const Expr *pin2 = e->as.poly_wrap_.inner;
+                while (pin2 && (pin2->kind == EX_ASCRIBE || pin2->kind == EX_FN_TO_FAT))
+                    pin2 = (pin2->kind == EX_ASCRIBE) ? pin2->as.ascribe_.inner
+                                                      : pin2->as.fn_to_fat_.inner;
+                const Binding *ib = (pin2 && pin2->kind == EX_VAR)
+                    ? pin2->as.var.binding : NULL;
+                if (ib && ib->source_binding) ib = ib->source_binding;
+                bool inner_ok = ib && ib->type.kind == TY_FN &&
+                                ib->type.as.fn.arity == wn_n;
+                bool phase_f = !erased_sink && inner_ok &&
+                               type_kind_is_poly_concrete(wres.kind);
+                const char *cpc[MAX_FN_ARITY], *apc[MAX_FN_ARITY];
+                /* A function type's C spelling is not its value's (a fat
+                 * handle, a bare pointer); everything else is decided by the
+                 * spelling -- a by-value aggregate is not a scalar and makes
+                 * ensure_named_call_adapter decline, a pointer-carried
+                 * application (`(Parser b)` is `void *`) is one. */
+                bool scalar = wres.kind != TY_FN;
+                for (uint8_t i = 0; i < wn_n; i++) {
+                    Type pt = emit_resolve_type(ctx,
+                        emit_fn_arg_type_from_type(wbnd->type, (uint8_t)(i + 1)));
+                    if (pt.kind == TY_FN || pt.kind == TY_FORALL)
+                        scalar = false;
+                    cpc[i] = emit_type_c_name(ctx, pt);
+                    apc[i] = "int64_t";
+                    if (inner_ok) {
+                        Type it = emit_resolve_type(ctx,
+                            emit_fn_arg_type_from_type(ib->type, i));
+                        if (!type_kind_is_poly_concrete(it.kind)) phase_f = false;
+                        else apc[i] = emit_type_c_name(ctx, it);
+                    }
+                }
+                if (scalar) {
+                    const char *crc = emit_type_c_name(ctx, wres);
+                    const char *arc = phase_f ? crc : "int64_t";
+                    if (erased_sink) {
+                        for (uint8_t i = 0; i < wn_n; i++)
+                            apc[i] = (e->as.poly_wrap_.carrier_erased_arg_mask &
+                                      ARG_IDX_BIT(i)) ? "int64_t" : cpc[i];
+                        arc = erased_res ? "int64_t" : crc;
+                    } else if (!phase_f) {
+                        for (uint8_t i = 0; i < wn_n; i++) apc[i] = "int64_t";
+                    }
+                    named_adapt = ensure_named_call_adapter(
+                        ctx, ctx->pending_handler_fns, wn, crc, cpc, arc, apc, wn_n);
+                }
+            }
             Buf out; buf_init(&out);
+            const char *slot_fn = spill ? spill : (named_adapt ? named_adapt : wn);
             if (fn_cps_name)
                 buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s, %s }",
-                           spill ? spill : wn, fn_cps_name);
+                           slot_fn, fn_cps_name);
             else
                 buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s }",
-                           spill ? spill : wn);
+                           slot_fn);
+            free(named_adapt);
             buf_putc(&out, '\0');
             free(wn);
             free(spill);
@@ -16882,6 +17099,50 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                               fnt_params,
                                                               (uint8_t)arity, rest_c);
             }
+            /* fnsan-sink-aware-fat-box: the call site that boxes this fn
+             * knows which callee reads the slot (ctx->fat_box_sink_type, set
+             * in the call-argument loop) -- a spec clone at its types, or a
+             * carrier base / inline-C body at words where the parameter's fn
+             * type is a variable.  When the box's default choice (the typed
+             * shim at the FUNCTION's own types, else all words) would spell
+             * slot 0 differently, store an adapter at the reader's spelling.
+             * Scalar and pointer positions only; aggregates keep their shims. */
+            if (!typed_shim && ctx->fat_box_sink_type &&
+                ctx->fat_box_sink_type->kind == TY_FN &&
+                ctx->fat_box_sink_type->as.fn.arity == arity &&
+                !fnty.as.fn.is_variadic && !e->as.fn_to_fat_.erased_result &&
+                arity <= MAX_FN_ARITY && fnptr && emit_str_is_bare_ident(fnptr)) {
+                const Type *sk = ctx->fat_box_sink_type;
+                const char *rrc = emit_sig_lookup_ret_ctype(fnptr);
+                const char *rpc[MAX_FN_ARITY], *apc[MAX_FN_ARITY], *dpc[MAX_FN_ARITY];
+                bool have = rrc && *rrc;
+                for (uint8_t i = 0; i < arity && have; i++) {
+                    rpc[i] = emit_sig_lookup_param_ctype(fnptr, i);
+                    if (!rpc[i] || !*rpc[i]) have = false;
+                }
+                Type srt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sk));
+                if (have && srt.kind != TY_NIL) {
+                    bool typed_ok = use_typed_thunk_abi(fnt_result, fnt_params, arity);
+                    bool differs = false;
+                    for (uint8_t i = 0; i < arity; i++) {
+                        Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sk, i));
+                        apc[i] = (ctx->fat_box_sink_erased_mask & ARG_IDX_BIT(i))
+                                     ? "int64_t"
+                                     : (type_is_b4box_closure_slot(pt) ? "int64_t"
+                                                                       : type_c_name(pt));
+                        dpc[i] = typed_ok ? thunk_param_slot_c_name(fnt_params[i]) : "int64_t";
+                        if (strcmp(apc[i], dpc[i]) != 0) differs = true;
+                    }
+                    const char *arc = ctx->fat_box_sink_erased_res
+                        ? "int64_t" : thunk_result_slot_c_spelling(type_c_name(srt));
+                    const char *drc = typed_ok ? thunk_result_slot_c_name(fnt_result) : "int64_t";
+                    if (strcmp(arc, drc) != 0) differs = true;
+                    if (differs)
+                        typed_shim = ensure_call_adapter_ex(
+                            ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file,
+                            EMIT_ADAPT_BARE_SLOT1, rrc, rpc, arc, apc, (uint8_t)arity);
+                }
+            }
             /* An erased-result sink reads slot 0's result as a carrier: box a
              * by-value aggregate result there
              * (hkt-generic-forwarded-bind-continuation-segfaults). */
@@ -16948,7 +17209,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     rpc[i] = emit_sig_lookup_param_ctype(fnptr, i);
                     if (!rpc[i] || !*rpc[i]) have = false;
                 }
-                if (have)
+                /* fnsan-concrete-sink-bare-fn: when the slot is a CONCRETE fn
+                 * type, its call sites cast slot 0 at that type's thunk
+                 * spelling (the typed-thunk typedef, or the fat-call
+                 * fallback that spells the same thing) -- not all-word.  A
+                 * function-valued result (`(fn [int] (fn [int] int))`) or an
+                 * opaque application declines the typed shim above, and the
+                 * word adapter then disagreed with every one of those calls.
+                 * Spell the adapter as they do. */
+                const Type *sft = e->as.fn_to_fat_.sink_fn_type;
+                if (have && sft && sft->kind == TY_FN && sft->as.fn.arity == arity) {
+                    const char *apc[MAX_FN_ARITY];
+                    for (uint8_t i = 0; i < arity; i++) {
+                        Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sft, i));
+                        apc[i] = type_is_b4box_closure_slot(pt) ? "int64_t" : type_c_name(pt);
+                    }
+                    Type rt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sft));
+                    const char *arc = rt.kind == TY_NIL ? NULL
+                        : thunk_result_slot_c_spelling(type_c_name(rt));
+                    if (arc)
+                        typed_shim = ensure_call_adapter_ex(
+                            ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file,
+                            EMIT_ADAPT_BARE_SLOT1, rrc, rpc, arc, apc, (uint8_t)arity);
+                }
+                if (have && !typed_shim)
                     typed_shim = ensure_fat_word_adapter_ex(ctx, rrc, rpc,
                                                             (uint8_t)arity,
                                                             /*bare=*/true);

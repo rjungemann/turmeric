@@ -1861,6 +1861,12 @@ struct Expr {
              * thunk. */
             uint64_t        carrier_erased_arg_mask;
             bool            carrier_erased_result;
+            /* fnsan-poly-carrier-named-wrapper: the declared result is an
+             * application headed by a type variable -- the `(m b)` of a
+             * Monad `bind` continuation -- which the carrier base reads as a
+             * word as well.  Separate from carrier_erased_result, whose
+             * readers (the float shims) only ever see a bare variable. */
+            bool            carrier_erased_result_hkt;
         } poly_wrap_;
         struct {
             struct Expr *inner;
@@ -1897,7 +1903,13 @@ struct Expr {
          * closure); the node wraps it in a { boxres shim, inner } box instead
          * of shimming a bare fn pointer.  Only set together with
          * erased_result. */
-        struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat; } fn_to_fat_;
+        /* `sink_fn_type`: the declared fn type of the `^fat` slot the box is
+         * headed for, when it is fully concrete (no type variable): its call
+         * sites cast slot 0 at exactly those types, so the box's shim must be
+         * spelled the same way (fnsan-concrete-sink-bare-fn).  NULL when not
+         * known or erased somewhere. */
+        struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat;
+                 const struct Type *sink_fn_type; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes

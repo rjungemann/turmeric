@@ -307,6 +307,14 @@ typedef struct EmitCtx {
      * ABI with the SELECTED entry point instead of guessing from receiver
      * abstractness (result-monad-bind-typed-boundary-miscompiles). */
     bool  poly_wrap_callee_carrier;
+    /* fnsan-sink-aware-fat-box: while emitting an EX_FN_TO_FAT argument, the
+     * declared fn type of the parameter it is headed for, as the CALLEE that
+     * this call selects reads it -- instantiated through a matched spec, or
+     * the declared type with `fat_box_sink_erased_*` marking the positions a
+     * carrier base / inline-C body reads as words.  NULL otherwise. */
+    const struct Type *fat_box_sink_type;
+    uint64_t fat_box_sink_erased_mask;
+    bool     fat_box_sink_erased_res;
     /* Phase 2: when emitting a function body, these are the parameter bindings
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
@@ -1595,6 +1603,18 @@ char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
                               const char **pc, uint8_t n);
 char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,
                                  const char **pc, uint8_t n, bool bare);
+void emit_scalar_word_conv(Buf *out, const char *from, const char *to,
+                           const char *v);
+char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
+                                const char *crc, const char **cpc,
+                                const char *arc, const char **apc, uint8_t n);
+extern const char EMIT_ADAPT_BARE_SLOT1[];
+struct EmitAbiSpecialization;
+Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
+                            const struct EmitAbiSpecialization *spec);
+char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
+                             const char *crc, const char **cpc,
+                             const char *arc, const char **apc, uint8_t n);
 char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
                                    Type *param_types, uint8_t n_params,
                                    const char *rest_c);
@@ -1649,6 +1669,7 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
  * widening wrapper a capturing closure's slot 0 holds for such a result.  See
  * emit_module.c. */
 const char *thunk_result_slot_c_name(Type t);
+const char *thunk_param_slot_c_name(Type t);
 const char *thunk_result_slot_c_spelling(const char *rc);
 char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
                                  Type result_type, Type *param_types,

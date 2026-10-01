@@ -529,7 +529,7 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
  * fatshims -- agree with the thunks by construction.  Narrow aggregates
  * (<= 8 bytes) and results are untouched: both have working by-value
  * conventions. */
-static const char *thunk_param_slot_c_name(Type t) {
+const char *thunk_param_slot_c_name(Type t) {
     if (type_is_b4box_closure_slot(t)) return "int64_t";
     return type_c_name(t);
 }
@@ -1733,6 +1733,158 @@ char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,
 char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
                               const char **pc, uint8_t n) {
     return ensure_fat_word_adapter_ex(ctx, rc, pc, n, false);
+}
+
+/* Convert a scalar C value `v` of type `from` to type `to` across the word
+ * boundary the carriers use: a pointer through intptr_t, a float kind as its
+ * BITS (never a value conversion -- 7.1 must not become 7), every other
+ * integer by a plain cast.  Both spellings must pass word_adapter_scalar_ok. */
+void emit_scalar_word_conv(Buf *out, const char *from, const char *to,
+                           const char *v) {
+    size_t FL = strlen(from), TL = strlen(to);
+    bool fp = FL && from[FL - 1] == '*', tp = TL && to[TL - 1] == '*';
+    if (strcmp(from, to) == 0) { buf_puts(out, v); return; }
+    if (tp) {
+        if (fp) buf_printf(out, "(%s)(%s)", to, v);
+        else    buf_printf(out, "(%s)(intptr_t)(%s)", to, v);
+        return;
+    }
+    if (strcmp(to, "double") == 0) {
+        if (strcmp(from, "int64_t") == 0)
+            buf_printf(out, "((union { int64_t i; double d; }){ .i = (%s) }).d", v);
+        else
+            buf_printf(out, "(double)(%s)", v);
+        return;
+    }
+    if (strcmp(to, "float") == 0) {
+        if (strcmp(from, "int64_t") == 0)
+            buf_printf(out, "((union { uint32_t u; float f; }){ .u = (uint32_t)(%s) }).f", v);
+        else
+            buf_printf(out, "(float)(%s)", v);
+        return;
+    }
+    if (strcmp(to, "int64_t") == 0) {
+        if (fp)
+            buf_printf(out, "(int64_t)(intptr_t)(%s)", v);
+        else if (strcmp(from, "double") == 0)
+            buf_printf(out, "((union { double d; int64_t i; }){ .d = (%s) }).i", v);
+        else if (strcmp(from, "float") == 0)
+            buf_printf(out, "(int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", v);
+        else
+            buf_printf(out, "(int64_t)(%s)", v);
+        return;
+    }
+    if (fp) buf_printf(out, "(%s)(intptr_t)(%s)", to, v);
+    else    buf_printf(out, "(%s)(%s)", to, v);
+}
+
+/* fnsan-poly-carrier-named-wrapper: a function stored into a carrier slot is
+ * called through the CONSUMER's signature (`arc (*)(void *, apc...)`), but it
+ * is defined at its own (`crc callee(void *, cpc...)`).  This adapter has the
+ * consumer's signature and calls the named callee at its own, converting each
+ * position across the word boundary (emit_scalar_word_conv).  `out` must be a
+ * file-scope buffer that lands after the callee's forward declaration.
+ * Returns NULL when no position differs or one is not a scalar or pointer
+ * (an aggregate is the spill shims' job).  The name is caller-owned. */
+char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
+                                const char *crc, const char **cpc,
+                                const char *arc, const char **apc, uint8_t n) {
+    if (!callee) return NULL;
+    return ensure_call_adapter_ex(ctx, out, callee, crc, cpc, arc, apc, n);
+}
+
+static Type emit_abi_instantiate_type(const Type *t,
+                                      const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                      Arena *arena);
+/* A type instantiated through a matched spec's own bindings (the CALLEE's,
+ * not the active spec's that emit_resolve_type applies). */
+Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
+                            const struct EmitAbiSpecialization *spec) {
+    if (!t) return emit_type_from_kind(TY_UNKNOWN);
+    if (!spec || spec->n_bindings == 0) return *t;
+    return emit_abi_instantiate_type(t, spec->bindings, spec->n_bindings,
+                                     ctx->type_arena);
+}
+
+/* `callee` NULL: the callee is slot 0 of the fat box the adapter receives as
+ * its env -- a capturing closure's thunk, called with that box.  `callee`
+ * EMIT_ADAPT_BARE_SLOT1: slot 1 holds a BARE function (an EX_FN_TO_FAT box),
+ * called with no env. */
+const char EMIT_ADAPT_BARE_SLOT1[] = "<bare-slot1>";
+char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
+                             const char *crc, const char **cpc,
+                             const char *arc, const char **apc, uint8_t n) {
+    if (!ctx || !out || !crc || !arc) return NULL;
+    bool bare1 = callee == EMIT_ADAPT_BARE_SLOT1;
+    if (bare1) callee = NULL;
+    if (!word_adapter_scalar_ok(crc) || !word_adapter_scalar_ok(arc)) return NULL;
+    bool need = bare1 || strcmp(crc, arc) != 0;   /* bare: the env must go */
+    for (uint8_t i = 0; i < n; i++) {
+        if (!word_adapter_scalar_ok(cpc[i]) || !word_adapter_scalar_ok(apc[i]))
+            return NULL;
+        if (strcmp(cpc[i], apc[i]) != 0) need = true;
+    }
+    if (!need) return NULL;
+    Buf nb; buf_init(&nb);
+    if (callee) {
+        buf_puts(&nb, "__tur_adapt_");
+        append_sanitized_c_token(&nb, callee);
+    } else {
+        /* Keyed on BOTH signatures: two thunks with one consumer signature
+         * and different own signatures need different adapters. */
+        buf_puts(&nb, bare1 ? "__tur_adapt1_" : "__tur_adapt0_");
+        append_sanitized_c_token(&nb, crc);
+        for (uint8_t i = 0; i < n; i++) {
+            buf_putc(&nb, '_');
+            append_sanitized_c_token(&nb, cpc[i]);
+        }
+        buf_puts(&nb, "_as");
+    }
+    buf_putc(&nb, '_');
+    append_sanitized_c_token(&nb, arc);
+    for (uint8_t i = 0; i < n; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, apc[i]);
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_printf(out, "static %s %s(void *__e", arc, name);
+    for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s a%u", apc[i], (unsigned)i);
+    if (callee) {
+        buf_printf(out, ") {\n    %s r = %s(__e", crc, callee);
+    } else if (bare1) {
+        buf_printf(out, ") {\n    %s r = ((%s (*)(", crc, crc);
+        if (n == 0) buf_puts(out, "void");
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, i ? ", %s" : "%s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__e)[1])(");
+    } else {
+        buf_printf(out, ") {\n    %s r = ((%s (*)(void *", crc, crc);
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__e)[0])(__e");
+    }
+    for (uint8_t i = 0; i < n; i++) {
+        char an[16];
+        snprintf(an, sizeof an, "a%u", (unsigned)i);
+        if (!bare1 || i) buf_puts(out, ", ");
+        emit_scalar_word_conv(out, apc[i], cpc[i], an);
+    }
+    buf_puts(out, ");\n    return ");
+    emit_scalar_word_conv(out, crc, arc, "r");
+    buf_puts(out, ";\n}\n");
+    return name;
 }
 
 char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
@@ -5667,7 +5819,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * `(Vec A)` through `A -> (Option int)` -> `(Vec (Option int))`),
                  * so skip rehydration here; only a bare scalar/tyvar value is a
                  * genuine carrier collapse. */
-                if (bindings[i].name &&
+                /* generic-call-result-leaks-callee-tyvar-names: nor is a value
+                 * that is the ENCLOSING generic's own variable.  `(ok (f v))`
+                 * inside `result-map [A B E]` records ok's `B := E`; the name
+                 * `B` here is the CALLEE's, and the spec's `B := float` is
+                 * result-map's -- a different variable that happens to share
+                 * the spelling.  The composition below resolves the value
+                 * (`E := int`) by its own name, which is the answer. */
+                bool value_is_spec_tyvar = false;
+                if (bindings[i].type.kind == TY_TYVAR &&
+                    bindings[i].type.as.tyvar_.name) {
+                    for (uint8_t j = 0; j < aspec->n_bindings; j++)
+                        if (aspec->bindings[j].name &&
+                            strcmp(aspec->bindings[j].name,
+                                   bindings[i].type.as.tyvar_.name) == 0) {
+                            value_is_spec_tyvar = true;
+                            break;
+                        }
+                }
+                if (bindings[i].name && !value_is_spec_tyvar &&
                     bindings[i].type.kind != TY_APP &&
                     strcmp(type_c_name(bindings[i].type), "int64_t") == 0) {
                     for (uint8_t j = 0; j < aspec->n_bindings; j++) {
@@ -14934,6 +15104,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) return;\n");
     buf_puts(out, "    f->parked = 0;\n");
     buf_puts(out, "    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);\n");
+    buf_puts(out, "}\n\n");
+    /* fnsan-timer-callback: the timer wheel calls `void (*)(void *)`.
+     * Handing it `(void(*)(void*))tur_scheduler_unpark` is an indirect call
+     * through the wrong function type (a -fsanitize=function trap, a
+     * call_indirect trap on WASM); this is the callback at the wheel's own
+     * type. */
+    buf_puts(out, "static void tur_scheduler_unpark_cb(void *f) {\n");
+    buf_puts(out, "    tur_scheduler_unpark((FiberBlock *)f);\n");
     buf_puts(out, "}\n\n");
 
     /* Phase T24: Timer wheel function implementations

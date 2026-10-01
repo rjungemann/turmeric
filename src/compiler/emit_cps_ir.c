@@ -1299,12 +1299,28 @@ static void cap_add_fn_scalar(CapSet *cs, const Binding *b) {
     cs->owning[cs->n] = false; cs->n++;
 }
 
+/* cps-evicts-handle-in-operand-positions: the fresh binders a CT_LETRAW of an
+ * EX_POLY_WRAP binds (`tur_poly_fn_t __t2`, see letraw_emits_poly_fn) in the
+ * function being emitted.  A lifted continuation that captures one sees only
+ * the free CVar -- its ptr<void> node type -- and spelled the env field
+ * `void *`, so the fill assigned a `tur_poly_fn_t` to it (invalid C): a rank-2
+ * argument atomized ahead of a `handle` in the same call.  Filled by
+ * emit_binder_decls, reset per function. */
+static uint32_t g_polyfn_cvar_ids[256];
+static uint32_t g_n_polyfn_cvars;
+static bool cvar_is_polyfn(uint32_t id) {
+    for (uint32_t i = 0; i < g_n_polyfn_cvars; i++)
+        if (g_polyfn_cvar_ids[i] == id) return true;
+    return false;
+}
+
 static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty, const Type *type) {
-    if (!cap_ty_ok(ty, type) || !name) { cs->ok = false; return; }
+    bool is_poly = cvar_is_polyfn(id);
+    if ((!is_poly && !cap_ty_ok(ty, type)) || !name) { cs->ok = false; return; }
     for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = false;
+    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly;
     cs->owning[cs->n] = false; cs->n++;
 }
 
@@ -6378,6 +6394,46 @@ static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
     return s;
 }
 
+/* atoms_csv_call for a RESOLVED clone (a mono-clone / re-resolved method):
+ * its parameters are the concrete types, which an atom usually already has --
+ * but not one the translator atomized out of a carrier-typed operand (a
+ * generic call's argument reinterpreted `cstr -> int` for the base ABI,
+ * passed on to the `g__spec__const_char__` clone).  Bridge a variable whose
+ * RECORDED C type differs from the clone's recorded parameter type across the
+ * word boundary; everything else passes as atoms_csv_call passes it. */
+static char *atoms_csv_call_clone(CE *ce, const CAtom *args, uint32_t n,
+                                  const char *clone) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        const char *pc = clone ? emit_sig_lookup_param_ctype(clone, i) : NULL;
+        const char *ac = (args[i].kind == CA_CVAR || args[i].kind == CA_VAR) &&
+                         emit_str_is_bare_ident(a)
+            ? emit_localvar_lookup_ctype(a) : NULL;
+        bool bridge = pc && ac && strcmp(pc, ac) != 0 &&
+                      (strcmp(ac, "int64_t") == 0 || strcmp(pc, "int64_t") == 0) &&
+                      !atom_is_fat_fn(&args[i]);
+        if (bridge) {
+            size_t PL = strlen(pc), AL = strlen(ac);
+            bool pp = PL && pc[PL - 1] == '*', ap = AL && ac[AL - 1] == '*';
+            if (pp || ap) emit_scalar_word_conv(&b, ac, pc, a);
+            else buf_puts(&b, a);
+        } else if (!atom_is_fat_fn(&args[i]) &&
+                   (args[i].kind == CA_VAR || args[i].kind == CA_CVAR) &&
+                   args[i].ty == TY_FN) {
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        } else {
+            buf_puts(&b, a);
+        }
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
 /* gcc14-int-conversion: the E2a threaded-fn-value dispatch calls through a
  * synthesized `int64_t (*)(int64_t..., DK *)` pointer, so EVERY argument slot is
  * the int64 carrier.  Unlike the ordinary call CSV (which passes each arg in its
@@ -7001,7 +7057,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             const EmitAbiSpecialization *lc_spec =
                 find_spec_by_clone_name(ce->ctx, fn);
             char *argv = (rr_lc || mclone_lc)
-                ? atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n)
+                ? atoms_csv_call_clone(ce, t->as.letcall.args, t->as.letcall.n, fn)
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
                                        t->as.letcall.fn, lc_spec);
             char *bn = cvar_cname(ce, t->as.letcall.x);
@@ -7963,8 +8019,11 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
                 : strdup(t->as.letraw.x.name);
             /* E2: a poly-wrap value is the fat `tur_poly_fn_t`, not the void*
              * carrier its ptr<void> node type would spell. */
-            if (letraw_emits_poly_fn(t))
+            if (letraw_emits_poly_fn(t)) {
                 ce_line(ce, "tur_poly_fn_t %s;", bn);
+                if (!t->as.letraw.x.bind && g_n_polyfn_cvars < 256)
+                    g_polyfn_cvar_ids[g_n_polyfn_cvars++] = t->as.letraw.x.id;
+            }
             else
                 { const char *__bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type); ce_line(ce, "%s %s;", __bct, bn); /* cps-binder-ctype-recorded: the direct emitter's carrier rules (a typed pointer into an int64 slot) read this. */ emit_localvar_record_ctype(bn, __bct); }
             free(bn);
@@ -8836,6 +8895,23 @@ static int sk_tag_for_frame(const CloneFrame *fr) {
  * and true, or false if no instance.  Mirrors emit_cps.c's sk_find_serializable
  * name path, kept in the native path so the CT-IR serial emitter owns its env
  * marshaling (the runtime Sk registry already encodes SK_ENV_SER). */
+/* fnsan-serial-registry-hooks: the C types of the instance's methods, so the
+ * registry can hold adapters at its own fixed slot types (`void *(*)(int64_t)`,
+ * `int64_t (*)(void *)`) instead of the methods cast to them -- an indirect
+ * call through the wrong function type (a -fsanitize=function trap, a
+ * call_indirect trap on WASM) for every env type that is not an int64. */
+typedef struct SerSigs { const char *ser_p, *ser_r, *deser_p, *deser_r; } SerSigs;
+static SerSigs g_serial_env_sigs;
+static Type ser_sig_arg0(Type ft) {
+    if (ft.as.fn.arg_full_types && ft.as.fn.arg_full_types[0])
+        return *ft.as.fn.arg_full_types[0];
+    return emit_type_from_kind(ft.as.fn.arg_kinds[0]);
+}
+static Type ser_sig_result(Type ft) {
+    if (ft.as.fn.result_full_type) return *ft.as.fn.result_full_type;
+    return emit_type_from_kind(ft.as.fn.result_kind);
+}
+
 static bool serial_env_ser_names(CE *ce, const Type *t,
                                  char **ser_out, char **deser_out) {
     const Expr *program = ce->ctx->program_root;
@@ -8858,9 +8934,29 @@ static bool serial_env_ser_names(CE *ce, const Type *t,
             if (!inst->method_impls[j] || !inst->method_impls[j]->binding) continue;
             const char *mn = tc->methods[j].name ? tc->methods[j].name->name : "";
             char *cn = raw_name_for_binding(inst->method_impls[j]->binding);
-            if (strcmp(mn, "serialize") == 0) ser = cn;
-            else if (strcmp(mn, "deserialize") == 0) deser = cn;
-            else free(cn);
+            /* The binding's type keeps the class variable; the parameter
+             * itself carries the instance's type, which is what the method is
+             * emitted at. */
+            const FnDef *mfd = inst->method_impls[j];
+            Type mt = mfd->binding->type;
+            const char *pc = NULL;
+            if (mfd->n_params >= 1 && mfd->params && mfd->params[0])
+                pc = emit_type_c_name(ce->ctx, emit_resolve_type(ce->ctx,
+                         mfd->param_types ? mfd->param_types[0] : mfd->params[0]->type));
+            else if (mt.kind == TY_FN && mt.as.fn.arity >= 1)
+                pc = emit_type_c_name(ce->ctx, emit_resolve_type(ce->ctx,
+                         ser_sig_arg0(mt)));
+            const char *rc = mt.kind == TY_FN
+                ? emit_type_c_name(ce->ctx, emit_resolve_type(ce->ctx,
+                      ser_sig_result(mt)))
+                : NULL;
+            if (strcmp(mn, "serialize") == 0) {
+                ser = cn;
+                g_serial_env_sigs.ser_p = pc; g_serial_env_sigs.ser_r = rc;
+            } else if (strcmp(mn, "deserialize") == 0) {
+                deser = cn;
+                g_serial_env_sigs.deser_p = pc; g_serial_env_sigs.deser_r = rc;
+            } else free(cn);
         }
         if (ser && deser) { *ser_out = ser; *deser_out = deser; return true; }
         free(ser); free(deser);
@@ -9030,10 +9126,40 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
          * its emitted C is byte-identical to before.  (A serial k's own
          * spelling is read off the receiver's declared parameter.) */
         const char *kty = t->as.cloneable.serial ? serial_recv_kty(ce, t) : "int64_t";
+        /* fnsan-cont-receiver-result: and its RESULT at the receiver's recorded
+         * return type -- `const char *cl(int64_t)` for a `(cont cstr)`
+         * receiver was called as returning `int64_t`.  The value leaves as the
+         * word the trampoline carries (a float as its bits). */
+        const char *rty = NULL;
+        if (t->as.cloneable.receiver) {
+            char *rn = raw_name_for_binding(t->as.cloneable.receiver);
+            rty = rn ? emit_sig_lookup_ret_ctype(rn) : NULL;
+            free(rn);
+        }
+        if (rty && *rty) {
+            size_t RL = strlen(rty);
+            bool scalar = rty[RL - 1] == '*' || strcmp(rty, "double") == 0 ||
+                          strcmp(rty, "float") == 0 || strcmp(rty, "bool") == 0 ||
+                          strcmp(rty, "int8_t") == 0 || strcmp(rty, "int16_t") == 0 ||
+                          strcmp(rty, "int32_t") == 0 || strcmp(rty, "uint8_t") == 0 ||
+                          strcmp(rty, "uint16_t") == 0 || strcmp(rty, "uint32_t") == 0 ||
+                          strcmp(rty, "uint64_t") == 0;
+            if (!scalar) rty = NULL;   /* an aggregate keeps today's word call */
+        }
+        if (!rty) rty = "int64_t";
+        Buf rc; buf_init(&rc);
+        Buf call; buf_init(&call);
+        buf_printf(&call, "((%s (*)(%s))(intptr_t)env)((%s)(intptr_t)%s)",
+                   rty, kty, kty, cont_arg);
+        buf_putc(&call, '\0');
+        emit_scalar_word_conv(&rc, rty, "int64_t", call.data);
+        buf_putc(&rc, '\0');
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)((int64_t (*)(%s))(intptr_t)env)((%s)(intptr_t)%s);\n}\n",
-            bodyfn, cont_setup, kty, kty, cont_arg);
+            "    return (intptr_t)%s;\n}\n",
+            bodyfn, cont_setup, rc.data);
+        buf_free(&rc);
+        buf_free(&call);
     }
 }
 
@@ -9188,6 +9314,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
              * the captured operand's type. */
             int ekc = 0;
             char *eser = NULL, *edeser = NULL;
+            memset(&g_serial_env_sigs, 0, sizeof g_serial_env_sigs);
             if (has_env) {
                 if (fr->operand.ty == TY_CSTR) ekc = 1;
                 else if (fr->operand.type
@@ -9239,12 +9366,38 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 side = "$L";
             }
             if (ekc == 2) {
-                /* SER env: carry the instance serialize/deserialize fn pointers. */
+                /* SER env: carry the instance serialize/deserialize fns, each
+                 * behind an adapter at the registry's slot type when its own
+                 * signature differs (fnsan-serial-registry-hooks). */
+                const SerSigs *sg = &g_serial_env_sigs;
+                char sers[160], desers[160];
+                snprintf(sers, sizeof sers, "%s", eser);
+                snprintf(desers, sizeof desers, "%s", edeser);
+                if (sg->ser_p && sg->ser_r &&
+                    (strcmp(sg->ser_p, "int64_t") != 0 || strcmp(sg->ser_r, "void *") != 0)) {
+                    snprintf(sers, sizeof sers, "%s_sks%d_%u", ce->fn_cn, id, i);
+                    buf_printf(ce->helpers, "static void *%s(int64_t e) {\n    %s r = %s(",
+                               sers, sg->ser_r, eser);
+                    emit_scalar_word_conv(ce->helpers, "int64_t", sg->ser_p, "e");
+                    buf_puts(ce->helpers, ");\n    return ");
+                    emit_scalar_word_conv(ce->helpers, sg->ser_r, "void *", "r");
+                    buf_puts(ce->helpers, ";\n}\n");
+                }
+                if (sg->deser_p && sg->deser_r &&
+                    (strcmp(sg->deser_p, "void *") != 0 || strcmp(sg->deser_r, "int64_t") != 0)) {
+                    snprintf(desers, sizeof desers, "%s_skd%d_%u", ce->fn_cn, id, i);
+                    buf_printf(ce->helpers, "static int64_t %s(void *b) {\n    %s r = %s(",
+                               desers, sg->deser_r, edeser);
+                    emit_scalar_word_conv(ce->helpers, "void *", sg->deser_p, "b");
+                    buf_puts(ce->helpers, ");\n    return ");
+                    emit_scalar_word_conv(ce->helpers, sg->deser_r, "int64_t", "r");
+                    buf_puts(ce->helpers, ";\n}\n");
+                }
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d,"
                     " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
                     "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
-                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, eser, edeser,
+                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, sers, desers,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             } else {
                 buf_printf(ce->helpers,
@@ -10819,6 +10972,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * node's `__t0` redeclared the term's. */
     if (ctx->tmp_n >= 0 && (uint32_t)ctx->tmp_n < se->fresh_n)
         ctx->tmp_n = (int)se->fresh_n;
+    g_n_polyfn_cvars = 0;
     emit_binder_decls(&ce, se->term);
     /* cps-body-panic-not-propagated: every function this render produces -- the
      * `<fn>__cps` body, its join/frame/loop helpers -- returns the int64/intptr

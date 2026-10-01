@@ -9605,6 +9605,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * must be boxed by slot 0's shim. */
                     shim->as.fn_to_fat_.erased_result =
                         sink_fn_result_is_hkt_erased(&fn_type, fn_arg_idx_fat);
+                    {
+                        const Type *sft = (fn_type.as.fn.arg_full_types &&
+                                           fn_arg_idx_fat < fn_type.as.fn.arity)
+                            ? fn_type.as.fn.arg_full_types[fn_arg_idx_fat] : NULL;
+                        if (sft && sft->kind == TY_FN && !call_type_has_named_tyvar(sft))
+                            shim->as.fn_to_fat_.sink_fn_type = sft;
+                    }
                     /* A normalized NOMINAL param never drops its argument --
                      * which is precisely why this shim leaked a box per call --
                      * so its box may be the shared file-scope one.
@@ -10023,6 +10030,45 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                          *saved_expected_return,
                                          type_bindings, &n_type_bindings);
     }
+    /* generic-call-result-leaks-callee-tyvar-names: a call whose arguments
+     * bound SOME of its result variables but not all -- `(ok (f v))` binds
+     * `ok`'s A and leaves its B, `(err e)` the reverse.  The branches above
+     * all decline (the expected type is the enclosing body's own `(Result B
+     * E)`, and arguments did bind something), so the unbound variable
+     * survived the instantiation below BY NAME and read as the caller's
+     * same-named variable: inside `result-map [A B E]`, `(ok (f v))` was
+     * `(Result B B)` and `(err e)` was `(Result A E)`, and each float spec
+     * assigned a `Result__float__float` into the match's `Result__int__int`
+     * temp (a cc error).  Bind only the still-unbound variables, from the
+     * expected type, on a scratch set adopted whole or not at all. */
+    else if (saved_expected_return && fn_type.kind == TY_FN &&
+             fn_binding && fn_binding->is_global &&
+             n_type_bindings > 0 &&
+             fn_type.as.fn.result_full_type &&
+             fn_type.as.fn.result_full_type->kind == TY_APP &&
+             saved_expected_return->kind == TY_APP &&
+             !type_has_open_slot(saved_expected_return)) {
+        const char *rnames[16];
+        uint8_t n_rnames = 0;
+        call_collect_tyvar_names(fn_type.as.fn.result_full_type, rnames, &n_rnames, 16);
+        bool any_unbound = false;
+        for (uint8_t ri = 0; ri < n_rnames && !any_unbound; ri++) {
+            uint8_t idx = 0;
+            if (!call_find_type_binding(type_bindings, n_type_bindings, rnames[ri], &idx))
+                any_unbound = true;
+        }
+        if (any_unbound) {
+            CallTypeBinding scratch[16];
+            uint8_t n_scratch = n_type_bindings;
+            for (uint8_t s = 0; s < n_scratch; s++) scratch[s] = type_bindings[s];
+            if (call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                           *saved_expected_return,
+                                           scratch, &n_scratch)) {
+                for (uint8_t s = 0; s < n_scratch; s++) type_bindings[s] = scratch[s];
+                n_type_bindings = n_scratch;
+            }
+        }
+    }
 
     /* D8 Q3, the third face of one Saffron rule ("an undetermined type
      * argument is `any`"): a RESULT type variable that no argument bound.
@@ -10075,6 +10121,46 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 n_type_bindings > 0) {
                 result_type = call_instantiate_type(e, fn_type.as.fn.result_full_type,
                                                     type_bindings, n_type_bindings);
+                /* generic-call-result-leaks-callee-tyvar-names: a result
+                 * variable nothing bound -- not an argument, not the expected
+                 * type above -- is still the CALLEE's, so it must not read as
+                 * the enclosing signature's variable of the same spelling:
+                 * `(ok x)` inside `[A B E]` was `(Result B B)`.  Rename it
+                 * apart (`ok.B`, an open slot) in the call's type only; the
+                 * ABI bindings, which say what the call was specialized at,
+                 * are untouched.  Not for a recursive call, whose variables
+                 * ARE the enclosing signature's. */
+                if (fn_binding && fn_binding->is_global && fn_binding->name &&
+                    fn_binding->name != e->current_fn_name &&
+                    e->n_sig_tyvars > 0) {
+                    const char *rn[16];
+                    uint8_t n_rn = 0;
+                    call_collect_tyvar_names(fn_type.as.fn.result_full_type, rn, &n_rn, 16);
+                    /* One instantiation of the callee's own result over both
+                     * sets: renaming the already-substituted type would also
+                     * rename a caller variable a binding put there. */
+                    CallTypeBinding apart[32];
+                    uint8_t n_apart = 0;
+                    for (uint8_t bi = 0; bi < n_type_bindings; bi++)
+                        apart[n_apart++] = type_bindings[bi];
+                    uint8_t n_bound = n_apart;
+                    for (uint8_t ri = 0; ri < n_rn && n_apart < 32; ri++) {
+                        uint8_t idx = 0;
+                        if (call_find_type_binding(type_bindings, n_type_bindings, rn[ri], &idx))
+                            continue;
+                        if (!ng_tyvar_in_sig(e, rn[ri])) continue;
+                        char nm[96];
+                        snprintf(nm, sizeof nm, "%s.%s", fn_binding->name->name, rn[ri]);
+                        const Symbol *ns = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+                        apart[n_apart].name = rn[ri];
+                        apart[n_apart].type = type_tyvar_named(ns->name);
+                        apart[n_apart].type.as.tyvar_.open_slot = true;
+                        n_apart++;
+                    }
+                    if (n_apart > n_bound)
+                        result_type = call_instantiate_type(e, fn_type.as.fn.result_full_type,
+                                                            apart, n_apart);
+                }
             } else {
                 result_type = *fn_type.as.fn.result_full_type;
             }

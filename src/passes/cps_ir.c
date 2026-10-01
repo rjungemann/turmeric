@@ -271,6 +271,10 @@ static const char *cps_form_name(const Expr *e) {
         case EX_CATCH_PANIC_OF:return "EX_CATCH_PANIC_OF";
         case EX_CLONEABLE_SHIFT: return "EX_CLONEABLE_SHIFT";
         case EX_SERIAL_SHIFT:  return "EX_SERIAL_SHIFT";
+        case EX_REINTERPRET:   return "EX_REINTERPRET";
+        case EX_CALL:          return "EX_CALL";
+        case EX_GET_FIELD:     return "EX_GET_FIELD";
+        case EX_DICT:          return "EX_DICT";
         default:               return NULL;   /* caller prints numeric kind */
     }
 }
@@ -279,7 +283,20 @@ static const char *cps_form_name(const Expr *e) {
 static CTerm *unsupported_form(CpsB *b, const Expr *e) {
     CTerm *t = new_term(b, CT_UNSUPPORTED);
     const char *nm = cps_form_name(e);
-    if (nm) {
+    if (nm && e->kind == EX_REINTERPRET) {
+        /* cps-evicts-handle-in-operand-positions: name what the reinterpret
+         * converts and what it wraps -- the wrapped form is the one that made
+         * it non-delegatable. */
+        const Expr *in = e->as.reinterpret_.expr;
+        const char *inm = in ? cps_form_name(in) : NULL;
+        char ib[24];
+        if (!inm) { snprintf(ib, sizeof ib, "EX_#%d", in ? (int)in->kind : -1); inm = ib; }
+        char buf[160];
+        snprintf(buf, sizeof(buf), "unsupported form: EX_REINTERPRET %s -> %s of %s",
+                 typekind_to_string(e->as.reinterpret_.source_kind),
+                 typekind_to_string(e->as.reinterpret_.target_kind), inm);
+        t->as.unsupported.why = arena_strdup(b->a, buf, strlen(buf));
+    } else if (nm) {
         char buf[64];
         snprintf(buf, sizeof(buf), "unsupported form: %s", nm);
         t->as.unsupported.why = arena_strdup(b->a, buf, strlen(buf));
@@ -503,6 +520,7 @@ typedef struct { PendItem items[32]; uint32_t n; } Pending;
 /* forward decls */
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
+static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest);
 
 /* An owning-value operation on a local rc handle (`rc/of`, `rc/clone`, `rc/drop`,
@@ -1974,6 +1992,14 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * inline-C as a CT_LETRAW.  Unconditional since cps-tramp-resume
          * graduated (2026-07-19). */
         case EX_INLINE_C:  return true;
+        /* cps-evicts-handle-in-operand-positions: a reinterpret is a pure value
+         * conversion the direct emitter lowers in place, so it is exactly as
+         * delegatable as the value it converts.  A generic call whose result
+         * the elaborator re-typed to its instantiation -- `(g2 "s")` as the
+         * argument of an effectful fn-field call under a `handle` -- is
+         * wrapped in one, and evicted the whole function. */
+        case EX_REINTERPRET:
+            return safe_to_delegate(b, e->as.reinterpret_.expr);
         default:
             return false;   /* conservative: unrecognized form -> not delegatable */
     }
@@ -3546,6 +3572,96 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
  * handler clause that eviction had no recovery: the clause's `perform` reached
  * the direct emitter, which aborts.  See
  * docs/archive/handler-clause-statement-if-ices-emitter.md. */
+/* An EX_VAR naming fresh binder y (its Binding synthesized and attached, so
+ * the delegated Expr and the binder's declaration spell the same C name). */
+static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp) {
+    Binding *yb = arena_alloc(b->a, sizeof(Binding));
+    memset(yb, 0, sizeof(Binding));
+    Symbol *ys = arena_alloc(b->a, sizeof(Symbol));
+    memset(ys, 0, sizeof(Symbol));
+    ys->name = y->name;
+    ys->len = (uint32_t)strlen(y->name);
+    yb->name = ys;
+    yb->type = *ty;
+    yb->id = y->id;
+    y->bind = yb;
+    Expr *yv = arena_alloc(b->a, sizeof(Expr));
+    memset(yv, 0, sizeof(Expr));
+    yv->kind = EX_VAR;
+    yv->type = *ty;
+    yv->span = sp;
+    yv->as.var.binding = yb;
+    return yv;
+}
+/* `x := reinterpret(e')` where e' carries control: bind e' to a fresh binder y
+ * of e''s own type (any translation the operand needs), then x from a
+ * synthesized reinterpret of y -- atomic, so delegated to the direct emitter,
+ * which spells the retype (pointer through intptr_t, a narrowing cast). */
+static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    Expr *inner = e->as.reinterpret_.expr;
+    CVar y = fresh_cvar(b, &inner->type);
+    Expr *yv = cvar_expr(b, &y, &inner->type, e->span);
+    Expr *re = arena_alloc(b->a, sizeof(Expr));
+    *re = *e;
+    re->as.reinterpret_.expr = yv;
+    return cps_bind(b, inner, y, build_letraw(b, re, x, rest));
+}
+
+/* cps-evicts-handle-in-operand-positions: an INDIRECT call (a fn value, a
+ * rank-2 poly param) whose arguments are not all literals -- `(l (handle ...))`
+ * -- was refused outright.  The call itself never joins the caller's
+ * delimited-control chain (see the arms that use this), so it is delegatable
+ * once its arguments are: bind each non-atomic argument first, left to right
+ * (any translation its control needs), and delegate the call over binders of
+ * those values.  NULL when an argument cannot be bound that way. */
+static CTerm *delegate_call_atomized(CpsB *b, Expr *e, CVar x, CTerm *rest,
+                                     bool tail) {
+    uint32_t n = e->as.call_.n_args;
+    if (n == 0 || n > 32) return NULL;
+    /* Only for an argument that CARRIES CONTROL (the `handle`): a call whose
+     * arguments are merely non-literal keeps the function's eviction, which
+     * also keeps a TAIL indirect call a tail call -- delegated, it becomes a
+     * bind and a return, and the r7rs programs that recurse through closures
+     * ran out of stack.  And only scalar / pointer binders: a by-value
+     * aggregate argument comes back from a carrier-returning call as a word,
+     * and the binder would need the direct emitter's unbox. */
+    bool any_control = false, all_scalar = true;
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.call_.args[i];
+        const Expr *pa = ascribe_peel(a);
+        if (is_atomic(a) || is_widened_literal(a) || (pa && pa->kind == EX_DICT))
+            continue;
+        if (!safe_to_delegate(b, a)) any_control = true;
+        TypeKind k = a->type.kind;
+        if (!(tierA_scalar_kind(k) || k == TY_FLOAT || k == TY_FLOAT64 ||
+              k == TY_FLOAT32))
+            all_scalar = false;
+    }
+    /* In BIND position nothing is lost by delegating the whole call when its
+     * arguments are themselves delegatable (`(.app s (g "x"))` ahead of a
+     * `handle` in the same body); the tail rule above is about tail calls. */
+    if (!any_control) return tail ? NULL : build_letraw(b, e, x, rest);
+    if (!all_scalar) return NULL;
+    Pending p = {0};
+    Expr **nargs = arena_alloc(b->a, n * sizeof(Expr *));
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.call_.args[i];
+        const Expr *pa = ascribe_peel(a);
+        if (is_atomic(a) || is_widened_literal(a) || (pa && pa->kind == EX_DICT)) {
+            nargs[i] = a;
+            continue;
+        }
+        if (p.n >= 32) return NULL;
+        CVar y = fresh_cvar(b, &a->type);
+        nargs[i] = cvar_expr(b, &y, &a->type, a->span);
+        p.items[p.n].expr = a; p.items[p.n].x = y; p.n++;
+    }
+    Expr *call = arena_alloc(b->a, sizeof(Expr));
+    *call = *e;
+    call->as.call_.args = nargs;
+    return fold_pending(b, &p, build_letraw(b, call, x, rest));
+}
+
 static CTerm *cps_tail_unit(CpsB *b, CKont kont) {
     if (kont.kind == KK_LOOP) return make_continue(b);
     CTerm *t = new_term(b, CT_APPCONT);
@@ -3713,6 +3829,11 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     return t;
                 }
                 if (!call_args_literal(e)) {
+                    CVar x = fresh_cvar(b, &e->type);
+                    CTerm *ac = new_term(b, CT_APPCONT);
+                    ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                    CTerm *d = delegate_call_atomized(b, e, x, ac, true);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -3761,6 +3882,11 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * above: delegate with atomic args, otherwise evict. */
             if (!fn->source_fn_def && !callee_colored(b, fn)) {
                 if (!call_args_literal(e)) {
+                    CVar x = fresh_cvar(b, &e->type);
+                    CTerm *ac = new_term(b, CT_APPCONT);
+                    ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                    CTerm *d = delegate_call_atomized(b, e, x, ac, true);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -4124,6 +4250,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
+            /* As cps_bind's default arm: a Tier A reinterpret over a control-
+             * bearing operand. */
+            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return cps_bind_reinterp(b, e, x, ac);
+            }
             return unsupported_form(b, e);
         }
     }
@@ -4231,6 +4365,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     return t;
                 }
                 if (!call_args_literal(e)) {
+                    CTerm *d = delegate_call_atomized(b, e, x, rest, false);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -4267,6 +4403,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * VALUE callee never takes the named CT_LETCALL arm. */
             if (!fn->source_fn_def && !callee_colored(b, fn)) {
                 if (!call_args_literal(e)) {
+                    CTerm *d = delegate_call_atomized(b, e, x, rest, false);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -4503,6 +4641,13 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * direct emitter (binds x, continues rest). */
             if (safe_to_delegate(b, e))
                 return build_letraw(b, e, x, rest);
+            /* cps-evicts-handle-in-operand-positions: a same-size Tier A
+             * reinterpret is a bit-identical retype whose OPERAND carries a
+             * control op (a generic call with a `handle` in its arguments).
+             * Translate the operand into a binder of its own type, then retype
+             * it into x through a delegated reinterpret of that binder. */
+            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr)
+                return cps_bind_reinterp(b, e, x, rest);
             return unsupported_form(b, e);
         }
     }
