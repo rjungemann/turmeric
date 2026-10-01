@@ -9097,6 +9097,25 @@ resolved_user_fallback:;
                 cm->return_type.as.tyvar_.name &&
                 strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
             if (recv_is_cv && res_is_cv) result_type = obj->type;
+            /* class-var-applied-result-untyped-in-constrained-generic: the
+             * same rule for a result that mentions the class variable INSIDE
+             * an application -- `(co [x : a] : (Option a))`.  The
+             * representative's result kind is TY_APP with no structure, the
+             * def-less `(? ?)` that unifies with anything: `(unwrap-or (co x)
+             * x)` was refused, `(match (co x) (Some q) q ...)` bound `q` as
+             * int, and a `: cstr` return of `(co x)` was accepted.  Kind-*
+             * classes only: an HKT class's application head is a constructor
+             * variable, which the M7 path below grounds. */
+            else if (recv_is_cv && cm->return_type.kind == TY_APP &&
+                     !(rtc->type_param_kinds &&
+                       rtc->type_param_kinds[0] != KIND_STAR)) {
+                const Symbol *cvs[1] = { rtc->type_params[0] };
+                Type rt = elab_subst_class_tyvars(e->arena, cm->return_type,
+                                                  cvs, 1, &obj->type, 1);
+                const Type *hd = &rt;
+                while (hd->kind == TY_APP && hd->as.app.fn) hd = hd->as.app.fn;
+                if (hd->kind == TY_ADT && hd->as.adt_.def) result_type = rt;
+            }
             break;
         }
     }

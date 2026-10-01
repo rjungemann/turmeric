@@ -344,12 +344,33 @@ bool dict_slot_param_is_word_scalar(const TypeClass *tc, int slot,
  * 7.1 answered 3.45846e-323).  Such a slot's wrapper returns the word -- bits
  * for a float kind -- and the dispatch site reads `int64_t`.  Returns the
  * impl's C result spelling through `*impl_rc` when it holds. */
+static bool dsr_mentions_tyvar(const Type *t, const char *name, int depth) {
+    if (!t || depth > 32) return false;
+    if (t->kind == TY_TYVAR)
+        return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+    if (t->kind == TY_APP)
+        return dsr_mentions_tyvar(t->as.app.fn, name, depth + 1) ||
+               dsr_mentions_tyvar(t->as.app.arg, name, depth + 1);
+    return false;
+}
 bool dict_slot_result_is_word_scalar(const TypeClass *tc, int slot,
                                      const FnDef *mi, const char **impl_rc) {
     if (!tc || slot < 0 || slot >= tc->n_methods || !mi || !mi->binding ||
         mi->binding->type.kind != TY_FN)
         return false;
-    if (tc->methods[slot].return_type.kind != TY_TYVAR) return false;
+    const Type *crt = &tc->methods[slot].return_type;
+    /* class-var-applied-result: a kind-* class whose result mentions its
+     * variable inside an application -- `(co [x : a] : (Option a))`.  Each
+     * instance's impl returns its OWN by-value monomorph (`tur_adt_Option__float`,
+     * `tur_adt_Option__cstr`), and a dispatch site cast to the representative's
+     * struct read another instance's payload from the wrong register.  The
+     * carrier spells an open `(Option A)` as a word pointing at the aggregate,
+     * so the slot hands back exactly that: the impl's result, boxed. */
+    bool cv_app = crt->kind == TY_APP && tc->n_type_params >= 1 &&
+                  tc->type_params && tc->type_params[0] &&
+                  !(tc->type_param_kinds && tc->type_param_kinds[0] != KIND_STAR) &&
+                  dsr_mentions_tyvar(crt, tc->type_params[0]->name, 0);
+    if (crt->kind != TY_TYVAR && !cv_app) return false;
     const Type *rft = mi->binding->type.as.fn.result_full_type;
     Type rt = rft ? *rft : emit_type_from_kind(mi->binding->type.as.fn.result_kind);
     const char *c = type_c_name(rt);
@@ -359,6 +380,13 @@ bool dict_slot_result_is_word_scalar(const TypeClass *tc, int slot,
      * the convention the carrier call's result unbox already expects. */
     bool agg = strncmp(c, "tur_adt_", 8) == 0 && c[L - 1] != '*' &&
                !type_is_heap_adt(rt) && !type_is_heap_struct(rt);
+    if (cv_app) {
+        /* Only the by-value aggregate: a :heap app is already a pointer word,
+         * and an impl whose result rides the carrier returns int64_t now. */
+        bool ok_app = agg && !type_uses_carrier_abi(rt);
+        if (ok_app && impl_rc) *impl_rc = c;
+        return ok_app;
+    }
     bool ok = agg || (c[L - 1] == '*') ||
               strcmp(c, "double") == 0 || strcmp(c, "float") == 0 ||
               strcmp(c, "bool") == 0 || strcmp(c, "int8_t") == 0 ||

@@ -1580,6 +1580,11 @@ bool carrier_fatshim_applies(Type result_type, const Type *param_types,
 struct TypeClass;
 bool dict_slot_param_is_word_scalar(const struct TypeClass *tc, int slot,
                                     const FnDef *mi, uint32_t j);
+/* Does `t` mention a type variable anywhere (through applications)? */
+bool emit_abi_type_is_open(const struct Type *t);
+/* True when `call` dispatches through a runtime dict slot that returns the
+ * int64 word (see dict_slot_result_is_word_scalar). */
+bool emit_call_dispatches_word_result(struct EmitCtx *ctx, const struct Expr *call);
 bool dict_slot_result_is_word_scalar(const struct TypeClass *tc, int slot,
                                      const FnDef *mi, const char **impl_rc);
 char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,

@@ -1020,6 +1020,37 @@ static bool type_is_byvalue_product_app(EmitCtx *ctx, Type t) {
     return adt_app_is_byvalue_product(rt);
 }
 
+/* class-var-applied-result: a class-method call whose ELABORATED result is
+ * still open -- `(co x)` types `(Option a)` -- but which the base carrier
+ * clone of a constrained generic resolves statically to its representative
+ * instance, whose impl returns a concrete by-value monomorph
+ * (`tur_adt_Option__float`).  The open type's C spelling is the carrier word
+ * (a pointer to the aggregate), so the call hoist boxes the aggregate at
+ * production and every consumer -- let-init, match scrutinee, argument, tail
+ * -- sees that word.  `out` receives the concrete monomorph.  The dict-clone
+ * path never reaches this: its slot already hands back the word. */
+static bool call_open_class_result_boxed(EmitCtx *ctx, const Expr *e, Type *out) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!ctx || !e || e->kind != EX_CALL || !e->as.call_.dict_arg ||
+        e->as.call_.dict_arg->kind != EX_DICT)
+        return false;
+    if (emit_call_dispatches_word_result(ctx, e)) return false;
+    const Binding *fb = e->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.result_full_type ||
+        fb->body_is_inline_c)
+        return false;
+    Type et = emit_resolve_type(ctx, e->type);
+    if (et.kind != TY_APP || !emit_abi_type_is_open(&et)) return false;
+    Type rt = emit_resolve_type(ctx, *fb->type.as.fn.result_full_type);
+    if (rt.kind != TY_APP || emit_abi_type_is_open(&rt) ||
+        type_is_heap_adt(rt) || type_is_heap_struct(rt))
+        return false;
+    const char *cn = emit_type_c_name(ctx, rt);
+    if (!cn || strncmp(cn, "tur_adt_", 8) != 0 || strchr(cn, '*')) return false;
+    if (out) *out = rt;
+    return true;
+}
+
 static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
     if (!e) return false;
@@ -1048,6 +1079,12 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
                    strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0;
         }
         if (!type_uses_carrier_abi(e->type)) return false;
+        /* A dict slot that returns the word hands back the carrier box, not
+         * the representative instance's by-value aggregate; and an open-typed
+         * representative call is boxed at production. */
+        if (emit_call_dispatches_word_result(ctx, e) ||
+            call_open_class_result_boxed(ctx, e, NULL))
+            return false;
         return call_returns_byvalue_aggregate(ctx, e);
     }
     /* See type_is_byvalue_product_app: such a var answers "no" to
@@ -1650,6 +1687,11 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         case EX_LETREC:
             return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.let_.body);
         default:
+            /* class-var-applied-result: a word-returning dict slot, or an
+             * open-typed representative call boxed at production. */
+            if (emit_call_dispatches_word_result(ctx, e) ||
+                call_open_class_result_boxed(ctx, e, NULL))
+                return false;
             if (call_emits_byval_concrete_aggregate(ctx, e, NULL))
                 return true;
             if (call_ordinary_defn_byval_aggregate(ctx, e, NULL))
@@ -5056,6 +5098,15 @@ static Type call_arg_spill_type(EmitCtx *ctx, const Expr *arg, Type fallback) {
         Type r = emit_resolve_type(ctx, st);
         if (type_is_byvalue_adt_product(r)) return r;
     }
+    /* class-var-applied-result: the stated type can still be OPEN -- `(co x)`
+     * types `(Option a)` in a constrained generic's carrier base, which calls
+     * the representative instance and gets its by-value `(Option cstr)` back.
+     * Spill what the producer emits, not the open type (which the carrier
+     * spells as a word, so there would be nothing to spill). */
+    if (ctx && arg && emit_abi_type_is_open(&fallback)) {
+        Type pt = fn_body_tail_byvalue_carrier_type(ctx, arg);
+        if (pt.kind != TY_UNKNOWN && !emit_abi_type_is_open(&pt)) return pt;
+    }
     return fallback;
 }
 
@@ -6909,6 +6960,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     return agg;
                 }
             }
+        }
+    }
+    /* class-var-applied-result: the mirror of the bridge above -- an OPEN
+     * elaborated type over a by-value aggregate the representative returned.
+     * Box it now (escaping: the word may be returned), so the value matches
+     * its type's carrier spelling at every consumer. */
+    {
+        Type agg_t;
+        if (ret_ct && strncmp(ret_ct, "tur_adt_", 8) == 0 &&
+            call_open_class_result_boxed(ctx, e, &agg_t)) {
+            char *w = emit_carrier_bridge_escaping(ctx, body, strdup(tmp),
+                                                   CK_CONCRETE, CK_CARRIER, agg_t);
+            char *word = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = %s;\n", word, w);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "TUR_REGION_NOTE_WORDS((void *)(intptr_t)%s, sizeof(%s));\n",
+                       word, ret_ct);
+            free(w);
+            emit_localvar_record_ctype(word, "int64_t");
+            return word;
         }
     }
     return strdup(tmp);

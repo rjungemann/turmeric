@@ -3684,19 +3684,19 @@ static char *call_name_plain(EmitCtx *ctx, const Binding *b) {
 
 /* A row-kinded variable (`^&` rows) never changes the C ABI, exactly as
  * emit_abi_type_has_concrete_named_tyvar says; every other tyvar does. */
-static bool emit_type_mentions_tyvar(const Type *t) {
+bool emit_abi_type_is_open(const Type *t) {
     if (!t) return false;
     if (t->kind == TY_TYVAR) return t->hkt_kind != KIND_TYPEROW;
     if (t->kind == TY_APP)
-        return emit_type_mentions_tyvar(t->as.app.fn) ||
-               emit_type_mentions_tyvar(t->as.app.arg);
+        return emit_abi_type_is_open(t->as.app.fn) ||
+               emit_abi_type_is_open(t->as.app.arg);
     return false;
 }
 
 bool emit_expr_abstract_under_active_spec(EmitCtx *ctx, const Expr *e) {
     if (!ctx || !ctx->current_abi_specialization || !e) return false;
     Type rt = emit_resolve_type(ctx, e->type);
-    return emit_type_mentions_tyvar(&rt);
+    return emit_abi_type_is_open(&rt);
 }
 
 bool emit_call_abstract_under_active_spec(EmitCtx *ctx, const Expr *call) {
@@ -3705,6 +3705,34 @@ bool emit_call_abstract_under_active_spec(EmitCtx *ctx, const Expr *call) {
     for (uint32_t ai = 0; ai < call->as.call_.n_args; ai++)
         if (emit_expr_abstract_under_active_spec(ctx, call->as.call_.args[ai]))
             return true;
+    return false;
+}
+
+/* class-var-applied-result: does this call dispatch through a runtime dict
+ * slot that hands back the WORD (dict_slot_result_is_word_scalar)?  Then its
+ * C value is an int64 -- for an applied class result, the box the carrier
+ * spells `(Option A)` with -- and no consumer may treat it as a by-value
+ * aggregate to spill.  The dict source and slot are resolved exactly as
+ * emit_call_name resolves them below. */
+bool emit_call_dispatches_word_result(EmitCtx *ctx, const Expr *call) {
+    if (!ctx || !call || call->kind != EX_CALL || !call->as.call_.dict_arg ||
+        call->as.call_.dict_arg->kind != EX_DICT)
+        return false;
+    int ddk = emit_call_dict_param_dispatch_index(ctx, call);
+    int dek = ddk >= 0 ? -1 : emit_call_dict_env_dispatch_index(ctx, call);
+    const TypeClass *tc = ddk >= 0 ? ctx->dict_dispatch_classes[ddk]
+                        : dek >= 0 ? ctx->cur_dict_env_classes[dek] : NULL;
+    if (!tc) return false;
+    const char *mname = call->as.call_.dict_arg->as.dict_.method_name;
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        char mm[64];
+        tur_mangle_ident(tc->methods[i].name->name, mm, sizeof(mm));
+        if (strcmp(mm, mname) != 0) continue;
+        const TypeClassInstance *repr = call->as.call_.dict_arg->as.dict_.instance;
+        const FnDef *mimpl = (repr && i < repr->n_method_impls)
+            ? repr->method_impls[i] : NULL;
+        return dict_slot_result_is_word_scalar(tc, (int)i, mimpl, NULL);
+    }
     return false;
 }
 
