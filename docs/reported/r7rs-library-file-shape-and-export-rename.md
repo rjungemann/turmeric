@@ -7,7 +7,7 @@ says the library's name is its path. What is left is several libraries in one
 file and a name independent of the path -- see *Still open* below.
 
 **Held by decision 2026-09-26.** One library per file, named after the file,
-stays for now (docs/upcoming/r7rs-lang-plan.md, Section 8, question 7): no
+stays for now (docs/archive/r7rs-lang-plan.md, Section 8, question 7): no
 work on the two file-shape restrictions until a port needs them. This report
 stays as the record of what lifting them would take.
 

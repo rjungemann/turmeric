@@ -34,11 +34,45 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **`#lang r7rs` graduated.** R7RS-small Scheme is an ordinary base dialect
+  now, on the same footing as `#lang turmeric` and `#lang saffron`: no
+  `EXPERIMENTS[]` row, nothing to enable, no `TUR-W0061` lifecycle warning on
+  every compile, and no way for a project manifest to refuse a directive the
+  file itself carries. `tur dialects` reports all ten bases as `stable`,
+  `tur experiments` no longer lists `r7rs`, and Try Turmeric drops the
+  `experimental` chip from the two Scheme rows. `--enable=r7rs` is accepted as
+  a `TUR-W0063` no-op for a minor line, so a `build.tur` or
+  `experiments.tur` that named it keeps working.
+
+  Emitted code is unchanged: the one side effect the gate carried
+  incidentally -- `g_opt_r7rs`, which the emitter reads to pick which
+  collector opt-out governs the program (`--no-r7rs-gc` versus Saffron's
+  `--no-saffron-gc`) -- now comes from a `LangTraits.scheme_runtime` bit set
+  at the same moment, when the `#lang` line is read. The emitted C is
+  byte-identical across all six cells of {r7rs, saffron} x {default,
+  `--no-r7rs-gc`, `--no-saffron-gc`}.
+
+  The dialect was a prototype from 0.52.0, beta from 0.56.0, and graduated on
+  its advisory `expires_at` of 0.57.0 rather than past it. The plan is
+  archived at [docs/archive/r7rs-lang-plan.md](docs/archive/r7rs-lang-plan.md).
+
 - **`httpd` servers bind 127.0.0.1 by default.** Call
   `(httpd-set-bind-any! true)` or set `TUR_HTTPD_BIND_ANY=1` to listen on
   every interface. A body shorter than its `Content-Length` now drops the
   connection instead of reaching the handler truncated. See the httpd guide's
   "Binding and request limits".
+
+### Fixed
+
+- **`#lang r7rs`: a re-entrant `call/cc` no longer gives a wrong value when
+  the unit also calls `eval`.** Fixed by `7c90e00b8`: the re-entry path's
+  thread-local stores were made through a stale address after `setjmp`'s
+  second return, so a variable `set!` between the capture and the re-entry
+  read back as a non-number (`error: +: not a number`) or, on another base,
+  faulted inside the capture. `(scheme eval)` mattered only because linking
+  the embedded interpreter changed where the stale store landed.
+  `tests/fixtures/docs-r7rs-guide-examples` covers it. Report archived at
+  [docs/archive/r7rs-reentrant-callcc-wrong-with-eval.md](docs/archive/r7rs-reentrant-callcc-wrong-with-eval.md).
 
 ## [0.57.0] -- 2026-09-30
 

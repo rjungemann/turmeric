@@ -36,11 +36,13 @@ static const LangTraits LANG_TRAITS[] = {
     /* LANG_TURMERIC */
     { "turmeric", READER_TURMERIC, /*reader_axis_free=*/true,
       /*dynamic=*/false, /*scheme_truthiness=*/false,
+      /*scheme_runtime=*/false,
       /*prelude=*/NULL, /*experiment=*/NULL },
     /* LANG_SAFFRON: the dynamic substrate.  An unannotated parameter or
      * return defaults to `any`; the prelude adapts the typed stdlib. */
     { "saffron",  READER_TURMERIC, /*reader_axis_free=*/true,
       /*dynamic=*/true,  /*scheme_truthiness=*/false,
+      /*scheme_runtime=*/false,
       /*prelude=*/"saffron/prelude.tur", /*experiment=*/NULL },
     /* LANG_R7RS: Saffron's substrate under a Scheme reader (r7rs-lang-plan
      * thesis, Section 1).  `dynamic` is the whole inheritance: unannotated
@@ -52,11 +54,13 @@ static const LangTraits LANG_TRAITS[] = {
      * only `#f` is false.  The prelude is `stdlib/r7rs/prelude.tur` -- R2's core
      * procedures, spelled `r7rs-<name>` and reached through
      * scheme_lower.c's rename table; R7 grows it into `(scheme base)` and
-     * its siblings.  `experiment` is the EXPERIMENTS[] row that gates the
-     * dialect; the `#lang` line is itself the enable (D11). */
+     * its siblings.  `experiment` was the EXPERIMENTS[] row that gated the
+     * dialect, with the `#lang` line as its own enable (D11); r7rs GRADUATED
+     * at 0.57.0, so it is NULL again and this is an ordinary base. */
     { "r7rs",     READER_R7RS,     /*reader_axis_free=*/false,
       /*dynamic=*/true,  /*scheme_truthiness=*/true,
-      /*prelude=*/"r7rs/prelude.tur", /*experiment=*/"r7rs" },
+      /*scheme_runtime=*/true,
+      /*prelude=*/"r7rs/prelude.tur", /*experiment=*/NULL },
 };
 
 const LangTraits *lang_traits(LangDialect d) {
@@ -225,6 +229,12 @@ bool lang_span_is_scheme(Span sp) {
  * (TUR-W0060/W0061) then fires once per compile from here, which is the
  * dialect's elaboration entry point as far as the registry is concerned.
  *
+ * r7rs GRADUATED at 0.57.0, so `experiment` is NULL on every trait row again
+ * and this block is dormant -- as it was between saffron's graduation and
+ * r7rs's arrival.  It is KEPT rather than deleted for the same reason the
+ * bool return is: it is the shape the next gated dialect needs, and the
+ * r7rs row proved the design works end to end (plan 3.7).
+ *
  * Returns bool, and every caller still checks it, because that is the shape a
  * future gated dialect needs; today no dialect can fail. */
 bool lang_dialect_apply(LangDialect d, const char *path) {
@@ -235,5 +245,6 @@ bool lang_dialect_apply(LangDialect d, const char *path) {
         experiment_warn_if_used(t->experiment);
     }
     if (t->dynamic) g_opt_dynamic_any = true;
+    if (t->scheme_runtime) g_opt_r7rs = true;
     return true;
 }

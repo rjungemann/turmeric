@@ -1,9 +1,14 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **every stage has landed -- R0 through R10 2026-09-23/24, Section 9's
-T0-T7 2026-09-24 and T8 2026-09-25 -- and the one step left is graduating the
-`r7rs` row, which has been beta since 2026-09-27 (0.56.0, `expires_at`
-0.57.0); see "Where it stands" at the end of this block.** `#lang r7rs` is a base
+Status: **DONE and ARCHIVED 2026-10-01 at 0.57.0.** Every stage landed -- R0
+through R10 2026-09-23/24, Section 9's T0-T7 2026-09-24 and T8 2026-09-25 --
+and the last step, graduating the `r7rs` row, is done: prototype from 0.52.0,
+beta from 2026-09-27 (0.56.0), graduated on its advisory `expires_at` of
+0.57.0 rather than past it. `#lang r7rs` is an ordinary base dialect now, on
+the same footing as `#lang turmeric` and `#lang saffron` -- no `EXPERIMENTS[]`
+row, no enable, no TUR-W0061 per compile, no manifest able to refuse it, and
+`tur dialects` reports all ten bases as `stable`. See "Graduation" at the end
+of this block. `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -71,23 +76,67 @@ named as the graduation checklist --
 `r7rs-type-errors-are-uncatchable-panics` and `r7rs-turmeric-syntax-leaks`
 -- all closed 2026-09-27 and are in docs/archive/, as are
 `r7rs-programs-compile-slowly` (the prelude split, 2026-09-28) and T8's
-memory reports. **What keeps this file in docs/upcoming/** is graduation
-itself, after the one-release soak: move `r7rs` to `GRADUATED[]`, drop the
-row, and archive this plan in the same change, as r7rs-gc's plan was
-(`00b09ad40`); until then the row's `plan_path` points here. Decided rather
+memory reports. Decided rather
 than open: one library per file, named after the file (Section 8, Q7, held
 in docs/reported/r7rs-library-file-shape-and-export-rename.md); an
 `r7rs/sweet` base (Q5, landed 2026-09-29,
 docs/archive/r7rs-sweet-base-dialect-missing.md); Q2 is moot, since `quote`
-builds at run time (R3's deviation from D4). Open reports that bear on the
-dialect, none of them a stage of this plan: `r7rs-reentrant-callcc-wrong-with-eval`
-(a compiled wrong answer, seen on one macOS host and not in CI -- the one
-open report of the kind the checklist was made of),
-`r7rs-callcc-memory-never-freed` (the interpreter's re-entrant images only),
-`r7rs-prelude-split-gc-seam-on-macos` and
-`r7rs-prelude-split-wrong-symbols-on-windows` (the split stays Linux-only
-until each closes), and `cps-self-tail-call-relies-on-sibling-call` (every
-dialect). SRFI work continues in [../archive/r7rs-srfi-plan.md](../archive/r7rs-srfi-plan.md).
+builds at run time (R3's deviation from D4). SRFI work continues in
+[r7rs-srfi-plan.md](r7rs-srfi-plan.md).
+
+**Graduation (2026-10-01, 0.57.0).** The checklist the beta note was built
+from -- *a conforming program getting a wrong answer or failing to build* --
+is empty, which is what graduation claims and the whole of what it claims.
+The four reports it named closed 2026-09-27; the one report of that kind
+still open at beta,
+[r7rs-reentrant-callcc-wrong-with-eval](r7rs-reentrant-callcc-wrong-with-eval.md),
+closed 2026-10-01. It was fixed by `7c90e00b8`, which landed about ten hours
+after the `bf31e725c` it was filed against and was never in it: the re-entry
+path's thread-local stores went through a stale address after `setjmp`'s
+second return. Its own closing hypothesis -- that this was the Mac's
+OS-ahead ASan runtime rather than a code bug -- was **wrong**, and the
+measurement it asked for is what settled it: the repro still fails at
+`bf31e725c` under today's Command Line Tools, and at `main` the configuration
+it suspected (an ASan-instrumented `libturi.a`, `libclang_rt.asan` loaded in
+the emitted binary) prints the right answer.
+
+R10's exit criterion holds: `tur_r7rs_conformance` runs chibi-scheme's R7RS
+suite and 1223 test invocations pass on both back ends, 2 are settled as
+differences kept on purpose (T7), none fail.
+
+What graduation does **not** claim is that nothing is open. Four `#lang r7rs`
+reports are, and none of them is a wrong answer:
+[r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)
+(the interpreter retains a re-entrant continuation's stack image for the life
+of the process -- deliberate for its closures elsewhere too),
+[r7rs-conformance-program-emits-megabytes-of-c](../reported/r7rs-conformance-program-emits-megabytes-of-c.md)
+(build cost and CI wall-clock; nothing is miscompiled),
+[r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md)
+(the decided design question above, held as a report) and
+[r7rs-prelude-split-wrong-symbols-on-windows](../reported/r7rs-prelude-split-wrong-symbols-on-windows.md)
+(fix landed; the split stays off on Windows pending one run on a Windows
+host). `r7rs-prelude-split-gc-seam-on-macos` and
+`cps-self-tail-call-relies-on-sibling-call` have since closed.
+
+The change itself is small, because D11 had already made the `#lang` line the
+enable: the row leaves `EXPERIMENTS[]`, the name joins `GRADUATED[]` so
+`--enable=r7rs` is a TUR-W0063 no-op for a minor line,
+`LangBaseDescriptor.experiment` goes NULL again (so `tur dialects` says
+`stable` and the playground drops the chip with no JS change -- exactly as
+saffron's graduation did), and `g_opt_r7rs` survives with its writer moved
+from `experiment_enable` to a new `LangTraits.scheme_runtime` bit. That last
+is the saffron precedent rather than a departure from it: the flag was never
+only an enable bit, since `emit_module.c`'s `r7rs_gc_active` reads it to pick
+which collector opt-out governs the program (`--no-r7rs-gc` versus Saffron's
+`--no-saffron-gc`), and both dialects set `g_opt_dynamic_any`. Because the
+trait is read at the same moment the gate used to be, the emitted C is
+byte-identical to `main`'s across all six cells of {r7rs, saffron} x
+{default, `--no-r7rs-gc`, `--no-saffron-gc`}.
+
+The `experiment` field and `lang_dialect_apply`'s gate block are **kept**
+rather than deleted, now dormant as they were between saffron's graduation and
+r7rs's arrival. They are the shape the next gated dialect needs, and the r7rs
+row is what proved the design in 3.7 works end to end.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -117,7 +166,7 @@ Four items in Section 3 are hard requirements of R7RS that Turmeric does not
 meet today, and the first of them -- proper tail calls on the compiled path --
 turned out on measurement to be *not met at all* for the shape Scheme is made
 of. It is large enough to have its own document
-([../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md)) and is a prerequisite
+([proper-tail-calls-plan.md](proper-tail-calls-plan.md)) and is a prerequisite
 rather than a stage.
 
 **"Support Turmeric libraries" is the whole point**, and it is also the thing
@@ -290,7 +339,7 @@ justify each site -- rather than waiting to be surprised.
 ### 3.1 The compiled path does not have proper tail calls
 
 **This is the largest gap, and it is worse than the documentation suggests.**
-It now has its own plan: [../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md),
+It now has its own plan: [proper-tail-calls-plan.md](proper-tail-calls-plan.md),
 which carries the full measurement matrix and the design. The summary:
 
 | Shape | `-O0` | `-O2` | `--interpret` |
@@ -585,7 +634,7 @@ hand-written names, which is normally the first thing to break.
 ### D6 -- proper tail calls are a Turmeric prerequisite, not R7RS work
 
 **Verdict: this is spun out into
-[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md). R7RS depends on its T6;
+[proper-tail-calls-plan.md](proper-tail-calls-plan.md). R7RS depends on its T6;
 T1-T3 there are worth landing regardless.**
 
 Investigating 3.1 changed the shape of this decision twice, so the conclusions
@@ -1191,7 +1240,7 @@ is about exact/inexact divergence.
 ### R6 -- control (large; contains the hardest item)
 
 Proper tail calls on the compiled path -- **T6 of
-[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md)**, which is a
+[proper-tail-calls-plan.md](proper-tail-calls-plan.md)**, which is a
 prerequisite landing on its own schedule, not work done here (D6). `dynamic-wind`. `values` and
 `call-with-values`. `guard`/`raise`/`raise-continuable`/`with-exception-handler`
 over effects (D10). `parameterize` over `dynvar` (D10). `delay`/`force`
@@ -1448,7 +1497,7 @@ The port taxonomy, string ports, `read`, `write`, `display`, `write-shared` and
 >
 > Found and filed, not fixed: on the compiled path a top-level `define`'s
 > initializer runs before every top-level expression, in every dialect
-> ([toplevel-def-initializers-run-before-toplevel-expressions](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
+> ([toplevel-def-initializers-run-before-toplevel-expressions](toplevel-def-initializers-run-before-toplevel-expressions.md)).
 > It matters once initializers have effects -- `(define p
 > (open-output-file ...))` opens the file before an earlier top-level write.
 >
@@ -1545,7 +1594,7 @@ were both caught), editor packs, `tools/gendocs.py`, and
 >   stale copies of both pointers made LeakSanitizer count them reachable. R6's
 >   dynamic-call change moved those words. The fixture now frees its vector,
 >   and the closure is the new report
->   [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
+>   [dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md)
 >   (a closure returned as `any` gets no scope-end drop; pre-existing at
 >   `main`), which the fixture's `known-leak` marker cites.  (Resolved
 >   2026-09-28; the marker is gone.)
@@ -1591,7 +1640,7 @@ conformance story.
 >   `^mut` binding a nested `fn` mentions lives in an `R7rsBox` (prelude), read
 >   and written through it. Typed Turmeric and Saffron disagreed between back
 >   ends until 2026-09-26:
->   [compiled-closure-copies-a-captured-mut](../archive/compiled-closure-copies-a-captured-mut.md).
+>   [compiled-closure-copies-a-captured-mut](compiled-closure-copies-a-captured-mut.md).
 > - **Names.** A binder named like a Turmeric special form was that form:
 >   `(call/cc (lambda (return) ... (return x)))` compiled `return` as an early
 >   return (invalid C) and interpreted it as one (a wrong answer, which
@@ -2342,7 +2391,7 @@ task.*
 >       top-level expression's value is otherwise its elaborated
 >       representation: a `let` yielding a vector came back as the bare
 >       `Vec` pointer. The REPL has the same bug, filed as
->       [r7rs-repl-toplevel-expression-value-not-widened](../reported/r7rs-repl-toplevel-expression-value-not-widened.md).
+>       [r7rs-repl-toplevel-expression-value-not-widened](r7rs-repl-toplevel-expression-value-not-widened.md).
 >     - The catch turns an uncaught raise into a value instead of the
 >       process exit an uncaught raise is.
 >   - A `define` is evaluated as it stands, and its value is unspecified.
@@ -2388,7 +2437,7 @@ task.*
 >   - An `(except ...)` set is refused, as everywhere.
 >   - A top-level `define` whose initializer calls `eval` runs early on the
 >     compiled back end
->     ([toplevel-def-initializers-run-before-toplevel-expressions](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)),
+>     ([toplevel-def-initializers-run-before-toplevel-expressions](toplevel-def-initializers-run-before-toplevel-expressions.md)),
 >     so the fixture's program is one procedure body.
 > - **Fixtures:**
 >   - `r7rs-eval`, on both back ends: the four chibi tests, a persistent
@@ -2479,16 +2528,16 @@ re-entered continuation).**
 > - ~~**Top level is not delimited.**~~ A continuation was the rest of the
 >   program, as the image included `main`'s frame (and the interpreter's
 >   loop over the forms); filed as
->   [r7rs-toplevel-reentry-reruns-forms](../archive/r7rs-toplevel-reentry-reruns-forms.md)
+>   [r7rs-toplevel-reentry-reruns-forms](r7rs-toplevel-reentry-reruns-forms.md)
 >   and resolved 2026-09-25: each top-level statement runs under its own
 >   prompt (`r7rs-toplevel__`), so a re-entry finishes the captured form and
 >   continues after the invoking one, as chibi and Racket do.
 >   `r7rs-continuation-after-return` pins the delimited answer;
 >   `r7rs-toplevel-reentry` is the report's repro.
 > - **Found and filed:**
->   - [r7rs-internal-define-forward-set](../archive/r7rs-internal-define-forward-set.md)
+>   - [r7rs-internal-define-forward-set](r7rs-internal-define-forward-set.md)
 >     -- `set!` on a later internal define is "not bound" (resolved 2026-09-25);
->   - [r7rs-toplevel-define-named-like-a-turmeric-form](../archive/r7rs-toplevel-define-named-like-a-turmeric-form.md)
+>   - [r7rs-toplevel-define-named-like-a-turmeric-form](r7rs-toplevel-define-named-like-a-turmeric-form.md)
 >     -- `(define gen ...)` is the `gen` form (resolved 2026-09-25).
 > - **Fixtures:**
 >   - `r7rs-continuations`, on both back ends: test 1772, an escape, a
@@ -2499,7 +2548,7 @@ re-entered continuation).**
 >   - Verified by hand at `-O1` and under ASan, and on a Release build's
 >     both back ends. (`-O0` links no program at all today, Turmeric or
 >     Scheme, before and after T5 -- filed as
->     [o0-build-cannot-link-contract-handler](../archive/o0-build-cannot-link-contract-handler.md).)
+>     [o0-build-cannot-link-contract-handler](o0-build-cannot-link-contract-handler.md).)
 
 **T6 -- complex numbers, deliberately after the others (73 tests before T0,
 71 after: 756, 760, 784, 789, 794, 796, 797, 849, 903, 1016, 1017,
@@ -2682,7 +2731,7 @@ task.*
     - the embedded env's process-lifetime memory against what a program
       would expect to be freed.
   - **Closures and boxes in dynamic code:**
-    - [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
+    - [dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md)
       (resolved 2026-09-28 for a closure a `let` minted);
     - the `R7rsBox` cells T5's assignment conversion now makes for every
       `set!` variable.
@@ -2744,18 +2793,18 @@ task.*
 >   - 27 statement loops (fills, copies, port readers, the printer's walks,
 >     the reader's skips) became value-returning `-lp__` loops behind their
 >     `: nil` names: a `: nil` self tail call is not a loop
->     ([void-self-tail-call-not-lowered](../archive/void-self-tail-call-not-lowered.md);
+>     ([void-self-tail-call-not-lowered](void-self-tail-call-not-lowered.md);
 >     the cleanup is
->     [r7rs-prelude-value-returning-loop-workaround](../archive/r7rs-prelude-value-returning-loop-workaround.md)).
+>     [r7rs-prelude-value-returning-loop-workaround](r7rs-prelude-value-returning-loop-workaround.md)).
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it
 >     overflows at `-O1`
->     ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
+>     ([cps-self-tail-call-relies-on-sibling-call](cps-self-tail-call-relies-on-sibling-call.md)).
 >     *2026-09-26: a self-recursive CPS loop is a backedge now and holds at
 >     `-O0`. 2026-09-28: mutual recursion is too (fused CPS groups; T5 takes
 >     colored functions); resolved and archived. 2026-09-29: the tail call
 >     after a `guard` is too -- its partner was evicted from CPS by a quoted
 >     symbol in its base case
->     ([mutual-tail-call-through-guard-grows-the-stack](../archive/mutual-tail-call-through-guard-grows-the-stack.md)).*
+>     ([mutual-tail-call-through-guard-grows-the-stack](mutual-tail-call-through-guard-grows-the-stack.md)).*
 >   - A million-element `append`, `map` (one to four lists), `string-map`,
 >     `vector-map`, `list-copy`, `string->list`, `vector->list`, `equal?`,
 >     `read-line`, `read` and `write` now pass compiled at `-O2` and
@@ -2808,13 +2857,13 @@ task.*
 >   already runs every r7rs fixture under the sanitized `tur`.
 > - **Leaks are not gated, by a named exemption.** Every Scheme heap value is
 >   a `:heap` box, which the memory model never frees
->   ([r7rs-heap-data-never-reclaimed](../reported/r7rs-heap-data-never-reclaimed.md)):
+>   ([r7rs-heap-data-never-reclaimed](r7rs-heap-data-never-reclaimed.md)):
 >   a loop building a dead four-element list peaks at 429 MB for 10^6
 >   iterations. So no `r7rs-*` fixture is opted into `run-leak-check.sh`;
 >   with `known-leak` it could only assert that it leaks. Also filed:
->   [r7rs-caught-raise-leaks-runtime-records](../reported/r7rs-caught-raise-leaks-runtime-records.md)
+>   [r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md)
 >   (about 1 KB per caught `raise`) and
->   [r7rs-remaining-scratch-leaks](../reported/r7rs-remaining-scratch-leaks.md).
+>   [r7rs-remaining-scratch-leaks](r7rs-remaining-scratch-leaks.md).
 >
 > **What each feature allocates, and who frees it:**
 >
@@ -2841,41 +2890,41 @@ differences, as reports"):
 
 - ~~**`apply` and dynamic calls take at most four arguments**~~ -- resolved
   2026-09-25: eight, on every path, behind `TUR_FAT_SHIM_MAX_ARITY`
-  ([archived](../archive/r7rs-apply-more-than-four-arguments.md)); past
+  ([archived](r7rs-apply-more-than-four-arguments.md)); past
   eight, pass the rest as a list.
 - ~~**`char-ready?` and `u8-ready?` always answer `#t`**~~ -- resolved
   2026-09-25 with a zero-timeout `poll()` on file, pipe and console ports
-  ([archived](../archive/r7rs-char-ready-always-true.md)); Windows still
+  ([archived](r7rs-char-ready-always-true.md)); Windows still
   answers `#t`.
 - ~~**`(except ...)` in an import is refused**~~ -- resolved 2026-09-25:
   import sets nest in any order, and an excluded name is the program's own
-  ([archived](../archive/r7rs-import-except-refused.md)); over a user
+  ([archived](r7rs-import-except-refused.md)); over a user
   library or Turmeric module `except` is a full import, since Turmeric's
   import has no "all but".
 - ~~**`include` and `include-ci` are refused**~~ -- resolved 2026-09-25:
   the lowering reads the file with the Scheme reader and splices it
-  ([archived](../archive/r7rs-include-refused.md)).
+  ([archived](r7rs-include-refused.md)).
 - ~~**Compiled top-level order.** A top-level `define` whose initializer has an
   effect runs before the program's top-level expressions~~ -- resolved
   2026-09-25 for every dialect: the initializer is a statement of the
   synthesized main at its position, and a Scheme module program assigns
   such a define in its body
-  ([archived](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
+  ([archived](toplevel-def-initializers-run-before-toplevel-expressions.md)).
 - ~~**A procedure body cannot name a top-level variable defined after it**~~
   -- resolved 2026-09-25: such a define is `^mut : any` and the elaborator
   pre-declares that shape ahead of the bodies
-  ([archived](../archive/r7rs-procedure-body-forward-reference.md); found
+  ([archived](r7rs-procedure-body-forward-reference.md); found
   writing the fixture for the item above).
 - ~~**`map` and `for-each` take at most four sequences**, the `-map`/`-for-each`
   pair over vectors and strings with them~~ -- resolved 2026-09-25: the cap
   is the shim arity, eight, on both back ends
-  ([archived](../archive/r7rs-map-for-each-at-most-four-sequences.md)); past
+  ([archived](r7rs-map-for-each-at-most-four-sequences.md)); past
   eight is the `apply` bullet's limit.
 - ~~**`define-record-type` is not an internal definition** -- top level or a
   library body only~~ -- resolved 2026-09-26: one among a body's leading
   definitions is lifted to the top level under fresh names the body's scope
   maps its names to
-  ([archived](../archive/r7rs-define-record-type-not-an-internal-definition.md)).
+  ([archived](r7rs-define-record-type-not-an-internal-definition.md)).
 - **One library per file, named after the file** -- kept by decision
   2026-09-26 (Section 8, question 7)
   ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md));
@@ -2886,32 +2935,32 @@ differences, as reports"):
   -- resolved 2026-09-28: a cycle of CPS procedures is fused into one C
   function whose cross calls are jumps, and T5's direct groups take a colored
   procedure the CPS backend declines, so the pair is constant stack at `-O0`
-  ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
+  ([cps-self-tail-call-relies-on-sibling-call](cps-self-tail-call-relies-on-sibling-call.md)).
   A self-recursive loop of that shape -- `for-each`, `map`, `member` -- has
   been a backedge since 2026-09-26. A tail call made after a `guard`, into
   another procedure, followed 2026-09-29
-  ([mutual-tail-call-through-guard-grows-the-stack](../archive/mutual-tail-call-through-guard-grows-the-stack.md)).
+  ([mutual-tail-call-through-guard-grows-the-stack](mutual-tail-call-through-guard-grows-the-stack.md)).
 - ~~**Re-entrant `call/cc` is Linux and macOS only**~~ -- resolved 2026-09-26:
   the stack base comes from the TEB and the jump unwinds nothing
-  ([archived](../archive/r7rs-reentrant-callcc-not-on-windows.md)).
+  ([archived](r7rs-reentrant-callcc-not-on-windows.md)).
   ~~A top-level re-entry re-runs the forms after it~~ -- resolved 2026-09-25:
   each top-level form runs under its own prompt
-  ([archived](../archive/r7rs-toplevel-reentry-reruns-forms.md)).
+  ([archived](r7rs-toplevel-reentry-reruns-forms.md)).
 - ~~**A Scheme program's data is never freed**~~ -- resolved 2026-09-25 for
   the compiled back end: the r7rs-gc collector graduated and is the
   allocator of every compiled single-unit program on Linux and macOS
-  ([archived plan](../archive/r7rs-gc-plan.md); `TUR_R7RS_GC=0` or
+  ([archived plan](r7rs-gc-plan.md); `TUR_R7RS_GC=0` or
   `--no-r7rs-gc` for a program that starts threads). The interpreter keeps
   its values for the life of the process by design; the `call/cc` images'
   interpreter half stays open
   ([r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)).
 - ~~**`command-line` starts with `"tur"`**, not the program's own path~~
   -- resolved 2026-09-25 through a pre-declared `*argv0*` global
-  ([archived](../archive/r7rs-command-line-first-element-is-tur.md)).
+  ([archived](r7rs-command-line-first-element-is-tur.md)).
 - ~~**Case mapping details**~~ -- resolved 2026-09-25: the tables are
   generated from the UCD files at a pinned ICU release tag (Unicode 16.0.0),
   with Final_Sigma, the UCD's simple mappings and the Alphabetic property
-  ([archived](../archive/r7rs-unicode-case-mapping-gaps.md)). The
+  ([archived](r7rs-unicode-case-mapping-gaps.md)). The
   language-specific SpecialCasing entries (Lithuanian, Turkish, Azeri) are
   not applied, as R7RS does not ask for them.
 
@@ -2920,7 +2969,7 @@ differences, as reports"):
 A Scheme `set!` of a variable a lambda captures is shared: the Scheme lowering
 boxes it, on both back ends. A compiled Turmeric or Saffron closure COPIES a
 captured `^mut`, and their interpreter shares it
-([compiled-closure-copies-a-captured-mut](../archive/compiled-closure-copies-a-captured-mut.md)).
+([compiled-closure-copies-a-captured-mut](compiled-closure-copies-a-captured-mut.md)).
 That report is Turmeric's to decide, and whichever way it goes, the Scheme
 behavior does not move with it. If Turmeric settles on copying, Scheme keeps
 its boxes; if it settles on sharing, the Scheme-only `ac_walk` can retire in
@@ -2943,7 +2992,7 @@ arm64). These are the measurements Sections 2 and 3 cite.
 ### A.1 -- the tail-call matrix (3.1)
 
 Full transcript, including the two wrong turns this probe took first, is in
-[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md) Appendix A. Depth is read
+[proper-tail-calls-plan.md](proper-tail-calls-plan.md) Appendix A. Depth is read
 from the environment in every probe; an earlier version passed it as a literal
 and measured only clang's constant folding.
 
@@ -3040,17 +3089,17 @@ saffron/sweet          saffron   sweet        stable
 
 ## See also
 
-- [../archive/r7rs-srfi-plan.md](../archive/r7rs-srfi-plan.md) -- `(import (srfi N))`, after
+- [r7rs-srfi-plan.md](r7rs-srfi-plan.md) -- `(import (srfi N))`, after
   Racket's SRFI support: the built-in SRFIs as no-op imports, the rest as
   libraries, and the guide's support table
-- [../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md) -- D6's prerequisite,
+- [proper-tail-calls-plan.md](proper-tail-calls-plan.md) -- D6's prerequisite,
   with the full tail-call measurement matrix
-- [../archive/saffron-lang-plan.md](../archive/saffron-lang-plan.md) -- the dynamic substrate this
+- [saffron-lang-plan.md](saffron-lang-plan.md) -- the dynamic substrate this
   plan inherits, and the staging discipline it copies
 - [docs/guides/saffron-guide.md](../guides/saffron-guide.md)
 - [docs/guides/delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md) -- `call/cc`, `call/cc*`, `shift`/`reset`
 - [docs/guides/macros-guide.md](../guides/macros-guide.md) -- `defmacro`, manual hygiene, `defmacro*`
-- [docs/archive/macro-system-direction-plan.md](../archive/macro-system-direction-plan.md) -- why there is no phase tower, and the `Syntax` substrate
+- [docs/archive/macro-system-direction-plan.md](macro-system-direction-plan.md) -- why there is no phase tower, and the `Syntax` substrate
 - [docs/guides/module-system-guide.md](../guides/module-system-guide.md)
 - [docs/guides/numeric-tower-guide.md](../guides/numeric-tower-guide.md)
 - [docs/guides/performance-guide.md](../guides/performance-guide.md) -- the self-tail-call boundary that A.1 measures against

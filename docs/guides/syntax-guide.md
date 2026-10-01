@@ -685,11 +685,10 @@ Saffron module links against a Turmeric one in the same program. See
 
 **R7RS** is R7RS-small Scheme, over Saffron's dynamic substrate under a
 Scheme reader
-([r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md)).
-It is **experiment-gated, in beta** (`tur dialects` shows it as
-`experimental (r7rs)` and `tur experiments` lists the row), but the
-`#lang r7rs` line is itself the enable: no `--enable=r7rs` is needed, and the
-file prints the TUR-W0061 lifecycle warning once per compile. Today it has the reader (R1), the core
+([r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)).
+It **graduated in v0.57.0**: `tur dialects` shows it as `stable`,
+`tur experiments` no longer lists a row, the `#lang r7rs` line is all that is
+needed, and no lifecycle warning is printed. Today it has the reader (R1), the core
 forms (R2): `define`, `lambda`, the `let` family, `do`, `cond`/`case`,
 `and`/`or`, `set!`, `case-lambda`, multiple values and the core list, equality
 and output procedures, with Scheme truthiness (only `#f` is false); and the
@@ -756,10 +755,10 @@ classifies all of Unicode, from tables generated out of the Unicode
 database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).
 
-`turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
-saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no
-lifecycle warning; `tur dialects` lists those eight bases as `stable` and the
-ninth, `r7rs`, as experimental.
+`turmeric`, `saffron` and `r7rs` are all **stable bases** -- none is gated.
+`#lang saffron` and `#lang r7rs` each need no `--enable=` flag and no
+`:experiments` entry, and print no lifecycle warning; `tur dialects` lists all
+ten bases as `stable`.
 
 `turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
 `#lang sweet-exp` is still accepted as a legacy alias, so

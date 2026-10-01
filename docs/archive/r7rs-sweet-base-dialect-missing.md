@@ -56,7 +56,7 @@ oversight being reported.
 - `src/compiler/lang_dialects.c:77` -- `LANG_BASES[]` therefore has a single
   `{ LANG_R7RS, READER_R7RS }` row, and it is the whole base set: an unlisted
   pair is TUR-E0331.
-- `docs/upcoming/r7rs-lang-plan.md:1774` (Section 8, Q5) states the deferral in
+- `docs/archive/r7rs-lang-plan.md:1774` (Section 8, Q5) states the deferral in
   as many words: *"`r7rs/sweet` is arguably meaningful -- sweet-expressions
   were designed for Scheme, and SRFI-110 is a Scheme SRFI. Recorded as a
   deliberate deferral rather than an oversight; if it is ever wanted, the

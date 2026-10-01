@@ -1,5 +1,63 @@
 # `#lang r7rs`: a re-entrant `call/cc` gives a wrong value when the unit also calls `eval`
 
+**RESOLVED 2026-10-01 by `7c90e00b8` ("r7rs: keep thread-locals out of the
+call/cc capture's setjmp function"), which landed ~10 hours after the commit
+this was filed against and was never in it.** The last hypothesis below -- that
+this was the Mac's OS-ahead ASan runtime rather than a code bug -- is **wrong**,
+and the measurement that settles it is the one the report asked for, run on the
+same host class it was filed from (macOS 27.0 / build 26A5378n, Apple clang
+21.0.0 / CLT 27.0.0, arm64, `cmake -DCMAKE_BUILD_TYPE=Debug`, sanitizers ON):
+
+| Build | `repro.scm` (with `eval`) | without `eval` |
+| --- | --- | --- |
+| `bf31e725c` (the commit filed against) | **`error: +: not a number #<unknown>`** | `3` |
+| `7c90e00b8^` (`f5ce6e336`) | **SEGV in `r7rs_hycont_hycapture_un_un+0x670`** | -- |
+| `7c90e00b8` | `3` then `42` | -- |
+| `8bb60d016` (main) | `3` then `42` | `3` |
+
+So it is a code bug, fixed; the toolchain is not implicated. Two things rule
+the ASan theory out directly rather than by inference:
+
+- The repro still fails at `bf31e725c` **today**, under the current CLT. If the
+  cause were an outdated ASan runtime, updating the toolchain would have fixed
+  the old commit too. It did not.
+- At `main` the failing configuration is exactly the one that now works. The
+  emitted program links the ASan-instrumented `libturi.a` (2472 undefined
+  `asan` symbols) and `otool -L` on the binary shows
+  `@rpath/libclang_rt.asan_osx_dynamic.dylib` loaded -- and it prints `3` and
+  `42`. "Sanitized `libturi.a` in a program that copies and restores its own
+  stack" is not the trigger.
+
+**The cause**, from `7c90e00b8`: the re-entry path's thread-local stores --
+the DK trampoline's pair, `g_dk_driver`, `__dk_entry_depth` -- were made
+through a **stale address** after `setjmp`'s second return. The capture now
+saves and restores that state through two prelude functions
+(`r7rs-cont-save-state` / `r7rs-cont-load-state`) called through volatile
+function pointers, so the function that calls `setjmp` touches no
+thread-local and every access outside it recomputes its address.
+
+That also explains both of this report's puzzles, which it had treated as one:
+
+- **Why `eval` mattered.** A store through a stale address does damage that
+  depends on where the address lands, and `(scheme eval)` links the embedded
+  interpreter -- changing the program's module count and static-TLS layout, and
+  so where that address points. Same bug, two presentations: it corrupted the
+  delivered value at `bf31e725c` (`+: not a number`) and landed in text at
+  `f5ce6e336` (SEGV at `str x8, [x9]`). The report read "a later form changes
+  an earlier result" as proof of a *compile-time* difference; it is a link-time
+  difference, which is what the 2026-09-29 Linux narrowing had already found
+  when it diffed the emitted `count-to` and saw no change.
+- **Why CI was green.** `7c90e00b8`'s own message says macOS CI (arm64, Apple
+  clang) *did* die on this fixture's `count-to` -- it was being diagnosed on
+  `macos-latest` in parallel with this report. The two were the same bug seen
+  from two sides, which is why "CI is green and this is real" never reconciled:
+  the green run predated the re-entry regression reaching it.
+
+Guide upkeep: `tests/fixtures/docs-r7rs-guide-examples` passes at `main` on this
+host, all 12 expected lines, so the guide's `call/cc` example is covered again.
+
+---
+
 **Severity:** medium. On the compiled back end, a `call/cc` whose
 continuation is stored and re-entered reads back a non-number for a variable
 `set!` between the capture and the re-entry, and the program dies with
@@ -92,7 +150,7 @@ the dynamic environment per thread:
 - **Not the prelude split's macOS seam.** At `bf31e725c` macOS built one
   unit (`prelude_split_applies` declined off Linux), so the constructor-order
   bug fixed in `a73ab97c`
-  ([r7rs-prelude-split-gc-seam-on-macos](../archive/r7rs-prelude-split-gc-seam-on-macos.md))
+  ([r7rs-prelude-split-gc-seam-on-macos](r7rs-prelude-split-gc-seam-on-macos.md))
   cannot be it.
 - **ASan in the process is not enough on its own.** On Linux the gcc variant
   runs with the ASan runtime loaded (LeakSanitizer reports the embedded
@@ -100,7 +158,7 @@ the dynamic environment per thread:
 
 What is left points at the Mac's toolchain pairing: macOS 27 with Apple
 clang 21 is the OS-ahead-of-toolchain case
-[macos-asan-runtime-deadlocks-at-startup](macos-asan-runtime-deadlocks-at-startup.md)
+[macos-asan-runtime-deadlocks-at-startup](../reported/macos-asan-runtime-deadlocks-at-startup.md)
 describes, and the one variant that fails is the one that loads that ASan
 runtime (through `libturi.a`) into a program that copies and restores its own
 stack. The cheapest next measurement is on that Mac: the repro with a Release
