@@ -5308,6 +5308,17 @@ static bool type_mentions_kind(const Type *t, TypeKind k) {
     return false;
 }
 
+/* construct-in-spec-takes-the-spec-result: is `c` the type `t` with zero or
+ * more subtrees collapsed to the carrier `int`? */
+static bool abi_type_is_int_collapse_of(const Type *c, const Type *t, int depth) {
+    if (!c || !t || depth > 32) return false;
+    if (c->kind == TY_INT) return true;
+    if (c->kind == TY_APP && t->kind == TY_APP)
+        return abi_type_is_int_collapse_of(c->as.app.fn, t->as.app.fn, depth + 1) &&
+               abi_type_is_int_collapse_of(c->as.app.arg, t->as.app.arg, depth + 1);
+    return type_eq(*c, *t) != 0;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -6689,6 +6700,54 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 rb.kind == TY_APP && type_app_is_concrete_adt(&rb) &&
                 !emit_abi_type_has_concrete_named_tyvar(&rb) &&
                 !type_mentions_kind(&rb, TY_INT);
+        }
+        /* ...and an `int` leaf does not license the adoption when the
+         * adoption CONTRADICTS the construct's own arguments.  `(some x)`
+         * with `x : (Option int)` inside a spec returning `(Option int)`
+         * (A := (Option int)): adopting the spec result says `some`'s element
+         * is `int`, while its argument is an `(Option int)` -- the adoption
+         * peeled a layer and minted `some` at A := int (invalid C; `(Option
+         * float)` escaped only because its leaf is not `int`).  An argument
+         * can be the COLLAPSED side (an `int` carrier where the adoption says
+         * `(Option int)`) -- that is what the adoption exists for -- but never
+         * the side with more structure. */
+        if (!construct_bindings_decide && !construct_recovered_byvalue &&
+            body_is_construct && !borrow_path && fd &&
+            ctx->current_abi_specialization && call->kind == EX_CALL) {
+            Type sret = emit_resolve_type(ctx,
+                ctx->current_abi_specialization->result_type);
+            Type rh = sret, ch = generic_result;
+            while (rh.kind == TY_APP && rh.as.app.fn) rh = *rh.as.app.fn;
+            while (ch.kind == TY_APP && ch.as.app.fn) ch = *ch.as.app.fn;
+            if (sret.kind == TY_APP && rh.kind == TY_ADT && ch.kind == TY_ADT &&
+                rh.as.adt_.def && rh.as.adt_.def == ch.as.adt_.def) {
+                AbiTypeBinding ub[ABI_TYPE_BINDINGS_MAX]; uint8_t un = 0;
+                emit_abi_unify_collect(&generic_result, &sret, ub, &un,
+                                       ABI_TYPE_BINDINGS_MAX);
+                for (uint32_t ai = 0; un > 0 && ai < call->as.call_.n_args &&
+                                      ai < fd->n_params; ai++) {
+                    const Type *ef = (fn_binding->type.as.fn.arg_full_types &&
+                                      fn_binding->type.as.fn.arg_full_types[ai])
+                        ? fn_binding->type.as.fn.arg_full_types[ai]
+                        : &fd->params[ai]->type;
+                    Type a = emit_abi_instantiate_type(ef, ub, un, ctx->type_arena);
+                    const Expr *ae = call->as.call_.args[ai];
+                    while (ae && ae->kind == EX_ASCRIBE) ae = ae->as.ascribe_.inner;
+                    if (!ae) continue;
+                    Type actual = emit_resolve_type(ctx, ae->type);
+                    if (a.kind == TY_TYVAR || a.kind == TY_UNKNOWN ||
+                        actual.kind == TY_TYVAR || actual.kind == TY_UNKNOWN ||
+                        emit_abi_type_has_concrete_named_tyvar(&a) ||
+                        emit_abi_type_has_concrete_named_tyvar(&actual))
+                        continue;
+                    if (!type_eq(a, actual) &&
+                        !abi_type_is_int_collapse_of(&actual, &a, 0) &&
+                        abi_type_is_int_collapse_of(&a, &actual, 0)) {
+                        construct_bindings_decide = true;
+                        break;
+                    }
+                }
+            }
         }
         if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
             !construct_bindings_decide &&

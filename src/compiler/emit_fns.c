@@ -4353,9 +4353,20 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
     }
     bool ret_is_int64_carrier = ret_ctype &&
         strcmp(ret_ctype, "int64_t") == 0;
+    /* What the hoist temp HOLDS settles an int64 return before any of the
+     * tail predicates below, which read the elaborated EXPRESSION: a temp
+     * recorded `int64_t` is already the word, whatever its type says.  A mixed
+     * spec (`__inst_R_rm_W__spec__int64_t_tur_adt_W`) and a word-returning
+     * dict slot both hand one back under a concrete-looking type (`W`), and
+     * every box path below then assigned the int64 into a struct. */
+    const char *ret_val_ct = (ret_val && emit_str_is_bare_ident(ret_val))
+        ? emit_localvar_lookup_ctype(ret_val) : NULL;
     /* Special case: if this is main and it returns int64_t, cast to int */
     if (is_main && result_kind == TY_INT) {
         buf_printf(out, "return (int)%s;\n", ret_val);
+    } else if (ret_is_int64_carrier && ret_val_ct &&
+               strcmp(ret_val_ct, "int64_t") == 0) {
+        buf_printf(out, "return %s;\n", ret_val);
     } else if (fd->box_aggregate_result) {
         /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): a functor-
          * wrapping closure `g` for a wide-functor lens must return the int64
@@ -5286,6 +5297,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     const char   *saved_dd_cnames[MAX_FN_CONSTRAINTS];
     memcpy(saved_dd_classes, ctx->dict_dispatch_classes, sizeof saved_dd_classes);
     memcpy(saved_dd_cnames, ctx->dict_dispatch_param_cnames, sizeof saved_dd_cnames);
+    struct Binding *saved_dd_params[MAX_FN_CONSTRAINTS];
+    memcpy(saved_dd_params, ctx->dict_dispatch_params, sizeof saved_dd_params);
     char         *dd_cnames_owned[MAX_FN_CONSTRAINTS] = {0};
     if (fd->n_dict_clone > 0) {
         /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): install the full
@@ -5296,6 +5309,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         for (uint8_t k = 0; k < fd->n_dict_clone; k++) {
             dd_cnames_owned[k] = raw_name_for_binding(fd->dict_clone_params[k]);
             ctx->dict_dispatch_param_cnames[k] = dd_cnames_owned[k];
+            ctx->dict_dispatch_params[k] = fd->dict_clone_params[k];
             ctx->dict_dispatch_classes[k] = fd->dict_clone_classes[k];
         }
         ctx->dict_dispatch_param_cname = dd_cnames_owned[0];
@@ -6713,6 +6727,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->dict_dispatch_n = saved_dd_n;
     memcpy(ctx->dict_dispatch_classes, saved_dd_classes, sizeof saved_dd_classes);
     memcpy(ctx->dict_dispatch_param_cnames, saved_dd_cnames, sizeof saved_dd_cnames);
+    memcpy(ctx->dict_dispatch_params, saved_dd_params, sizeof saved_dd_params);
     for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_cnames_owned[k]);
     ctx->cur_dict_env_n = saved_de_n;
     memcpy(ctx->cur_dict_env_classes, saved_de_classes, sizeof saved_de_classes);

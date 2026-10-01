@@ -7110,7 +7110,7 @@ static int64_t __inst_Functor_fmap_Const_tyvar(int64_t c, tur_poly_fn_t g) {
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_63 = (mk_hyconst(__ps_62));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_63;
+        return __ps_63;
 }
 
 typedef struct dict_Functor_Const_tyvar {
@@ -7128,7 +7128,7 @@ static int64_t __inst_Functor_fmap_Identity(int64_t i, tur_poly_fn_t g) {
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_66 = (mk_hyid(__ps_65));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_66;
+        return __ps_66;
 }
 
 typedef struct dict_Functor_Identity {
@@ -10095,7 +10095,7 @@ static int64_t over__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_243 = (run_id__spec__int64_t_tur_adt_Identity__Line(__ps_242));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_243;
+        return __ps_243;
 }
 
 static tur_adt_Identity__int mk_id__spec__tur_adt_Identity__int_int64_t(int64_t x) {
@@ -10132,7 +10132,7 @@ static int64_t set__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64_
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_250 = (run_id__spec__int64_t_tur_adt_Identity__Line(__ps_249));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_250;
+        return __ps_250;
 }
 
 static tur_adt_Identity__Line __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Line_int64_t_int64_t(tur_adt_Identity__Point i, tur_poly_fn_t g) {

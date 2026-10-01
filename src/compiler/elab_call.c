@@ -11260,11 +11260,15 @@ static void dict_clone_forward_generic_calls(Elab *e, Expr *node,
             if (nc < 1 || nc > MAX_FN_CONSTRAINTS) return;
             if ((uint32_t)node->as.call_.n_args + nc > MAX_FN_ARITY) return;
             Binding *fwd[MAX_FN_CONSTRAINTS];
+            /* constrained-generic-relay-drops-dict: a kind-* constraint is
+             * forwarded too, but RECORDED on the node rather than rewritten
+             * (see below). */
+            bool all_hkt = true;
             for (uint8_t ci = 0; ci < nc; ci++) {
                 const TypeConstraint *con = &ccs->constraints[ci];
-                if (!con->typeclass || !con->tyvar || !con->tyvar->name ||
-                    !dcf_class_is_hkt(con->typeclass))
+                if (!con->typeclass || !con->tyvar || !con->tyvar->name)
                     return;
+                if (!dcf_class_is_hkt(con->typeclass)) all_hkt = false;
                 const Type *bt = NULL;
                 for (uint8_t bi = 0; bi < node->as.call_.n_abi_bindings; bi++) {
                     const AbiTypeBinding *ab = &node->as.call_.abi_bindings[bi];
@@ -11297,6 +11301,24 @@ static void dict_clone_forward_generic_calls(Elab *e, Expr *node,
                 clone = make_dict_clone(e, fb, node->span);
             }
             if (!clone) return;
+            if (!all_hkt) {
+                /* constrained-generic-relay-drops-dict: `(defn ru [a] [(R a)]
+                 * [v : a] : a (ri v))` -- ru's dict clone called ri's carrier
+                 * BASE, whose `(rm x)` resolves to a representative instance,
+                 * so a rank-2 `(use ru w)` ran the wrong instance on `w`.  The
+                 * HKT rewrite below replaces the node, which every clone of
+                 * the caller shares; a kind-* generic also has CONCRETE specs
+                 * emitted from this body, where the dict params do not exist.
+                 * So record the forward and let the emitter apply it only
+                 * inside a dict clone that has these params. */
+                Binding **fp = (Binding **)arena_alloc(e->arena,
+                                                       nc * sizeof(Binding *));
+                for (uint8_t ci = 0; ci < nc; ci++) fp[ci] = fwd[ci];
+                node->as.call_.dict_fwd_clone = clone;
+                node->as.call_.dict_fwd_params = fp;
+                node->as.call_.dict_fwd_n = nc;
+                return;
+            }
             uint32_t na = node->as.call_.n_args;
             Expr **nargs = (Expr **)arena_alloc(e->arena,
                                                 (na + nc) * sizeof(Expr *));

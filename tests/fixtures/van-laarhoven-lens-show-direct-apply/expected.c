@@ -7002,7 +7002,7 @@ static int64_t __inst_Functor_fmap_Identity(int64_t i, tur_poly_fn_t g) {
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_64 = (mk_hyid(__ps_63));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_64;
+        return __ps_64;
 }
 
 typedef struct dict_Functor_Identity {

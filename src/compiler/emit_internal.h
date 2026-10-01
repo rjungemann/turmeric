@@ -653,6 +653,10 @@ typedef struct EmitCtx {
     uint8_t          dict_dispatch_n;
     struct TypeClass *dict_dispatch_classes[MAX_FN_CONSTRAINTS];
     const char      *dict_dispatch_param_cnames[MAX_FN_CONSTRAINTS];
+    /* The dict-param BINDINGS behind dict_dispatch_param_cnames, so a recorded
+     * dict forward (call_.dict_fwd_params) can ask whether its dicts are the
+     * ones in scope. */
+    struct Binding  *dict_dispatch_params[MAX_FN_CONSTRAINTS];
     /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3) +
      * forall-dict-pass-nested-mapper-general-plan (Phase 1): set while emitting a
      * nested MAPPER lambda that was converted into a dict-capturing closure

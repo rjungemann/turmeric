@@ -7908,6 +7908,46 @@ static char *emit_dyn_method(EmitCtx *ctx, Buf *body, const Expr *e) {
     return out.data;
 }
 
+/* constrained-generic-relay-drops-dict: the recorded dict forward of a call
+ * (call_.dict_fwd_*), applied only when every dict it names is a dict param
+ * of the function being emitted -- i.e. inside the caller's dict clone.  The
+ * base and concrete specs share the node and keep the call as written. */
+static const Expr *emit_dict_forwarded_call(EmitCtx *ctx, const Expr *e) {
+    if (!ctx || !e || e->kind != EX_CALL || !e->as.call_.dict_fwd_clone ||
+        e->as.call_.dict_fwd_n == 0 || ctx->dict_dispatch_n == 0)
+        return e;
+    uint8_t n = e->as.call_.dict_fwd_n;
+    for (uint8_t i = 0; i < n; i++) {
+        bool found = false;
+        for (uint8_t k = 0; k < ctx->dict_dispatch_n && !found; k++)
+            found = ctx->dict_dispatch_params[k] == e->as.call_.dict_fwd_params[i];
+        if (!found) return e;
+    }
+    uint32_t na = e->as.call_.n_args;
+    Expr *c = (Expr *)arena_alloc(ctx->type_arena, sizeof(Expr));
+    *c = *e;
+    Expr **args = (Expr **)arena_alloc(ctx->type_arena, (na + n) * sizeof(Expr *));
+    for (uint8_t i = 0; i < n; i++) {
+        Binding *pb = e->as.call_.dict_fwd_params[i];
+        Expr *dv = (Expr *)arena_alloc(ctx->type_arena, sizeof(Expr));
+        memset(dv, 0, sizeof *dv);
+        dv->kind = EX_VAR;
+        dv->type = pb->type;
+        dv->span = e->span;
+        dv->as.var.binding = pb;
+        args[i] = dv;
+    }
+    for (uint32_t k = 0; k < na; k++) args[n + k] = e->as.call_.args[k];
+    c->as.call_.fn_binding = e->as.call_.dict_fwd_clone;
+    c->as.call_.fn_expr = NULL;
+    c->as.call_.args = args;
+    c->as.call_.n_args = na + n;
+    c->as.call_.dict_fwd_clone = NULL;
+    c->as.call_.dict_fwd_params = NULL;
+    c->as.call_.dict_fwd_n = 0;
+    return c;
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_DYN_OP:    return emit_dyn_op(ctx, body, e);
@@ -8718,6 +8758,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             fprintf(stderr, "tur: emit: EX_FN not yet implemented\n");
             abort();
         case EX_CALL: {
+            {
+                const Expr *fwd = emit_dict_forwarded_call(ctx, e);
+                if (fwd != e) return emit_value_dispatch(ctx, body, fwd);
+            }
             Binding *fn_binding = e->as.call_.fn_binding;
 
             /* jit-ffi-c2mir-plan F3: `(call-ptr p [sig] args...)` -- an

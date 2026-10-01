@@ -79,6 +79,14 @@ TYPES = {
     "vec":     ("(Vec int)", "(mx-vec2 4 5)", "(vec-get %s 1)", "5"),
     "pairv":   ("(Pair float cstr)", '(pair 1.25 "p")', "(pair-fst %s)", "1.25"),
     "fn":      ("(fn [int] int)", "(fn [n : int] : int (+ n 1))", "(%s 41)", "42"),
+    # An `int` payload, beside the float ones above: a construct inside a spec
+    # whose result is the same family took the spec's result when its own
+    # bindings had an `int` leaf (the carrier-collapse guess), so `(some x)` at
+    # A := (Option int) was minted at A := int -- invalid C that `(Option
+    # float)` never showed (docs/archive/constrained-generic-relay-drops-dict.md, defect 4).
+    "optint":  ("(Option int)", "(some 7)", "(unwrap-or %s 0)", "7"),
+    "resint":  ("(Result int cstr)", '(:: (ok 5) (Result int cstr))',
+                "(ok-val %s)", "5"),
 }
 
 PRELUDE = """\

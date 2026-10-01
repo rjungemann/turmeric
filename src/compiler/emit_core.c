@@ -3736,6 +3736,35 @@ bool emit_call_dispatches_word_result(EmitCtx *ctx, const Expr *call) {
     return false;
 }
 
+/* constrained-generic-relay-borrows-sibling-clone: a call recorded only under
+ * a SIBLING outer spec -- `(ei v)` inside `eu`, minted `ei__spec__W` under
+ * `eu__spec__W` and nothing under `eu__spec__int` (no ABI change at int) --
+ * was routed to the sibling's clone by the fallback below, so `(eu 40)` called
+ * the W instance's spec on an int: a segfault, or with a payload that does not
+ * fault, the wrong instance's answer.  Borrow a sibling's clone only when its
+ * parameter C types are what this call's arguments resolve to here. */
+static bool cross_spec_clone_fits_call(EmitCtx *ctx, const Expr *call,
+                                       const char *clone_name) {
+    if (!ctx || !call || call->kind != EX_CALL || !clone_name) return true;
+    const EmitAbiSpecialization *sp = NULL;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations && !sp; i++)
+        if (ctx->abi_specializations[i].clone_name &&
+            strcmp(ctx->abi_specializations[i].clone_name, clone_name) == 0)
+            sp = &ctx->abi_specializations[i];
+    if (!sp || sp->n_args != call->as.call_.n_args) return true;
+    for (uint32_t ai = 0; ai < sp->n_args; ai++) {
+        const Expr *a = call->as.call_.args[ai];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (!a) continue;
+        Type at = emit_resolve_type(ctx, a->type);
+        if (emit_abi_type_is_open(&at) || at.kind == TY_UNKNOWN) continue;
+        const char *want = emit_type_c_name(ctx, emit_resolve_type(ctx, sp->arg_types[ai]));
+        const char *have = emit_type_c_name(ctx, at);
+        if (want && have && strcmp(want, have) != 0) return false;
+    }
+    return true;
+}
+
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     const Expr *cur = NULL;
     /* MB1 (constrained-hkt-forall-mode-b-plan): while emitting a dict-clone
@@ -3940,7 +3969,9 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
              * match so it never routes a call to a spec-scoped clone with a
              * different return ABI (M2-completion primitive-payload construct). */
             if (active_outer != NULL && !saw && !construct_into_carrier &&
-                !abstract_here) {
+                !abstract_here &&
+                cross_spec_clone_fits_call(ctx, call,
+                                           ctx->specialized_call_names[i])) {
                 matched = ctx->specialized_call_names[i];
                 saw = true;
             }

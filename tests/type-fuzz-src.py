@@ -178,10 +178,13 @@ TIMEOUT = 90
 BYVALUE_WRAPPERS = {"box", "adt", "opt", "res", "opt_box", "res_box"}
 
 
+# --crossing NAME: offer only `x_NAME` wherever it applies (None: all).
+FORCE_CROSSING = None
+
 CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
                  "thin_hof", "class_thru", "tyvar_run",
                  "class_nested", "class_nullary_newtype",
-                 "gid_let", "class_let", "gbody"}
+                 "gid_let", "class_let", "gbody", "rank2_class"}
 
 
 def known_bug_slug(tags):
@@ -815,6 +818,56 @@ class Gen:
         leg.defs.append("(defn %s [A] [x : A] : A\n  %s)" % (g, body))
         return "(%s %s)" % (g, e), "gbody"
 
+    def x_rank2_class(self, leg, tn, e):
+        """The value crosses a RANK-2, dictionary-passing call: a constrained
+        generic passed where `(forall [a] [(C a)] (-> a a))` is expected, whose
+        body dispatches a class method through the runtime dictionary.
+
+        No crossing had ever generated one.  That path carried three silent
+        float wrong answers at once (docs/archive/
+        dict-classvar-float-param-value-converted.md and its result twin): the
+        carrier call value-converted the argument, the slot took a `double`
+        through an int64 cast, and the result came back through
+        `(int64_t)(intptr_t)` of a double.  Instance heads need a plain type
+        name, so this is offered for those only.
+        """
+        cls, m = self.name("FzR"), self.name("rm")
+        impl, use = self.name("ri"), self.name("ru")
+        # The method's shape: which positions hold the class variable.  Each
+        # is an identity on `x`, so the leg's oracle is unchanged.
+        shape = self.rng.choice(["id", "id", "two", "extra", "opt"])
+        sig, body, call = {
+            "id":    ("[x : a] : a", "x", "(%s x)" % m),
+            "two":   ("[x : a y : a] : a", "x", "(%s x x)" % m),
+            "extra": ("[x : a n : int] : a", "x", "(%s x 3)" % m),
+            "opt":   ("[x : a] : (Option a)", "(some x)",
+                      "(match (%s x) (Some q) q (None) x)" % m),
+        }[shape]
+        isig = sig.replace(": a", ": %s" % tn).replace("(Option a)",
+                                                       "(Option %s)" % tn)
+        leg.defs.append("(defclass %s [a] (%s %s))" % (cls, m, sig))
+        # A second instance declared BEFORE the leg's own changes which
+        # instance the dispatch site's cast follows (the "representative").
+        other = self.rng.choice([None, None, "int", "cstr", "float"])
+        if other and other != tn:
+            osig = sig.replace(": a", ": %s" % other).replace(
+                "(Option a)", "(Option %s)" % other)
+            leg.defs.append("(definstance %s [%s] (%s %s %s))"
+                            % (cls, other, m, osig, body))
+        leg.defs.append("(definstance %s [%s] (%s %s %s))"
+                        % (cls, tn, m, isig, body))
+        leg.defs.append("(defn %s [a] [(%s a)] [x : a] : a %s)" % (impl, cls, call))
+        route = self.rng.choice(["rank2", "rank2", "direct", "generic"])
+        if route == "direct":
+            return "(%s %s)" % (impl, e), "rank2_class"
+        if route == "generic":
+            leg.defs.append("(defn %s [a] [(%s a)] [v : a] : a (%s v))"
+                            % (use, cls, impl))
+            return "(%s %s)" % (use, e), "rank2_class"
+        leg.defs.append("(defn %s [l (forall [a] [(%s a)] (-> a a)) v : %s] : %s (l v))"
+                        % (use, cls, tn, tn))
+        return "(%s %s %s)" % (use, impl, e), "rank2_class"
+
     def x_fat_hof(self, leg, tn, e):
         f = self.name("h")
         leg.defs.append("(defn %s [^fat f : (fn [] %s)] : %s (f))" % (f, tn, tn))
@@ -977,6 +1030,7 @@ class Gen:
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)
+            xs.append(self.x_rank2_class)
             # Both F1 shapes are in the default pool: their reports were
             # resolved and archived (2026-09-11).  class_nested is also the
             # only shape that gives a class a SECOND instance declared before
@@ -988,6 +1042,10 @@ class Gen:
                 xs.append(self.x_class_nullary_newtype)
         if self.emit_known:
             xs.append(self.x_tyvar_run)
+        if FORCE_CROSSING:
+            # --crossing: concentrate a run on one crossing where it applies.
+            only = [x for x in xs if x.__name__ == "x_" + FORCE_CROSSING]
+            return only or xs
         return xs
 
     # -- int mutation steps (bare int legs get arithmetic through defns) -------
@@ -1703,12 +1761,17 @@ def main():
     ap.add_argument("--seam", default=None, choices=sorted(Gen.SEAMS),
                     help="generate ONLY this seam (implies every case is a "
                          "seam case); for triaging one feature")
+    ap.add_argument("--crossing", default=None,
+                    help="offer only the crossing x_NAME wherever it applies "
+                         "(e.g. rank2_class, gbody, fn_field)")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--known-probes", action="store_true")
     ap.add_argument("--seam-matrix", action="store_true",
                     help="print the seam x payload verdict table and exit "
                          "(deterministic; the one-command view of the axis)")
     args = ap.parse_args()
+    global FORCE_CROSSING
+    FORCE_CROSSING = args.crossing
     if args.seam:
         args.seam_frac = 1.0
 

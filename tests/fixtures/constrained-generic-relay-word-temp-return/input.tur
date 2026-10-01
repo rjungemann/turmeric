@@ -1,0 +1,35 @@
+;; A constrained generic that relays to another (`ru` -> `ri`), over a class
+;; whose result is the class variable, at a by-value ADT and a float.  The
+;; base carrier clone's call hands back the WORD (a mixed spec returning
+;; int64_t, or a word-returning dict slot) under a concrete-looking type (`W`),
+;; and three return paths re-boxed it as though it were the aggregate: an
+;; int64 assigned into a struct, invalid C.  A temp recorded int64_t now
+;; returns as it is from an int64 function.  Found by the type fuzzer's
+;; widened rank-2 class crossing.  Two more defects lived on the same path:
+;; the relay's dict clone called the callee's carrier BASE (dropping the
+;; dict), and a spec with no recorded clone for a nested call borrowed a
+;; sibling spec's (`(eu 40)` ran the W instance on an int).
+
+(defdata W (Wc :int))
+(defn wv [v : W] : int (match v (Wc x) x))
+
+(defclass R [a] (rm [x : a] : a))
+(definstance R [W] (rm [x : W] : W x))
+(definstance R [float] (rm [x : float] : float {x + 1.25}))
+(defn ri [a] [(R a)] [x : a] : a (rm x))
+(defn ru [a] [(R a)] [v : a] : a (ri v))
+(defn use [l (forall [a] [(R a)] (-> a a)) v : W] : W (l v))
+
+(defclass E [a] (em [x : a n : int] : a))
+(definstance E [int] (em [x : int n : int] : int {x + n}))
+(definstance E [W] (em [x : W n : int] : W x))
+(defn ei [a] [(E a)] [x : a] : a (em x 3))
+(defn eu [a] [(E a)] [v : a] : a (ei v))
+
+(defn main [] : int
+  (println (wv (ru (Wc 5))))       ; 5
+  (println (ru 7.1))               ; 8.35
+  (println (wv (use ru (Wc 6))))   ; 6
+  (println (wv (eu (Wc 7))))       ; 7
+  (println (eu 40))                ; 43
+  0)

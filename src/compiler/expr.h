@@ -1624,7 +1624,19 @@ struct Expr {
                   * holds the pointer expression; fn_binding is NULL.  AOT
                   * codegen emits the direct cast-and-call; turi routes it
                   * through the JIT FFI thunk provider. */
-                 struct CallPtrSig *ptr_sig; } call_;
+                 struct CallPtrSig *ptr_sig;
+                 /* constrained-generic-relay-drops-dict: a call, inside a
+                  * constrained generic, to ANOTHER constrained generic whose
+                  * kind-* constraints pin the caller's own variables.  While
+                  * the caller is emitted as one of its dict clones (which has
+                  * `dict_fwd_params` as its dict params), the call goes to the
+                  * callee's dict clone `dict_fwd_clone` with those dicts
+                  * prepended; everywhere else (the carrier base, concrete
+                  * specs) it is the call as written.  Recorded, not rewritten,
+                  * because every clone shares this body. */
+                 struct Binding *dict_fwd_clone;
+                 struct Binding **dict_fwd_params;
+                 uint8_t dict_fwd_n; } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
