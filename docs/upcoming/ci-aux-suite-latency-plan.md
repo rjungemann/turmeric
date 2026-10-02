@@ -501,6 +501,47 @@ Neither is a gap in S1-S7; both are things to do once the new shape has run.
   separate change; until then the full-matrix arm64 durations are retrievable
   per run but not plotted.
 
+### 9.2 What else was worth moving -- measured, then done
+
+Asked after S1-S7 landed: are there other suites to thin? Measured over
+`origin/ci-metrics` (84,793 rows, 7 days, 100 runs, macOS medians), against the
+post-S5 macOS `aux` of ~20.5 min modeled (767.5s serial chain + 1395.7s
+parallel / 3 cores):
+
+| candidate | kind | macOS | wall saved | verdict |
+| --- | --- | --- | --- | --- |
+| `turi_fixture_tests` | **RUN_SERIAL** | 283s | **283s** | sampled 1/4 + nightly |
+| `tur_span_coverage` | parallel | 340s | 114s | left alone for now |
+| `tur_shard_partition` | parallel | 261s | 87s | **Linux only** |
+| `tur_examples_check` | parallel | 84s | 28s | not worth it |
+| the three source fuzzers | parallel | 38-70s | 13-23s | not worth it |
+
+The ranking is driven by `RUN_SERIAL`, not by duration: a parallel suite
+contributes its duration divided by the core count, so only the serial barrier
+is worth a full saving. Everything below the top three saves under 30s of wall
+clock and is not worth the churn.
+
+Two things came out of that measurement besides the relocations:
+
+- **`lsp_saffron_diagnostics` and `lsp_r7rs_diagnostics` were not doing work.**
+  Both sat at 60.1-60.8s with near-zero variance (Linux min 60.1, max 60.2), and
+  60.10s of `real` against 0.24s of `user`. The cause was
+  `SETTLE_SECONDS = 15`, an unconditional `time.sleep(15)` per LSP session, four
+  sessions each -- about two minutes of sleeping in every job on both legs. Fixed
+  by ordering rather than waiting (see `tests/lsp/jsonrpc_probe.py`): a
+  `textDocument/documentSymbol` request flushes dirty documents *before* it is
+  answered, so sending it ahead of `shutdown`/`exit` puts the publish in the
+  stream by construction. Measured 60.10s -> 0.55s and 60.14s -> 2.15s with
+  identical assertions. This was the cheapest item of the three and traded away
+  no coverage at all.
+- **`tur_shard_partition`'s "costs about a minute" comment is stale.** It is
+  4.3 min median on macOS, up to 7 min.
+
+`tur_span_coverage` is a defensible fourth (`tur audit-spans` asserts the
+elaborated AST carries source spans -- a parser/elaborator property derived from
+source text positions, independent of codegen, ABI and the C compiler), but it
+buys only 114s and was left alone rather than spending the review.
+
 ## 10. Not in scope
 
 - **Sharding the `fixtures` part.** Still a gating decision about the

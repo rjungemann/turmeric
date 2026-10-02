@@ -70,11 +70,13 @@ PARTS = {
     "macos": {
         "fixtures": ("include", r"^tur_tests$"),
         "r7rs":     ("include", r"r7rs"),
-        # tur_generic_spec_matrix stays INSIDE aux here, running one quarter of
-        # its cells (TUR_GSM_SHARD=1/4), so macOS gets arm64 coverage of an
-        # ABI-sensitive bug class without a fourth macOS job queueing behind
-        # the first three.  The other three quarters are the nightly's job.
-        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_emitted_float_conversions$"),
+        # tur_generic_spec_matrix and turi_fixture_tests stay INSIDE aux here,
+        # each running one quarter of its work (TUR_GSM_SHARD / TUR_TURI_SHARD),
+        # so macOS keeps arm64 coverage of both without a fourth macOS job
+        # queueing behind the first three.  The other three quarters are the
+        # nightly's job.  tur_shard_partition is excluded outright -- see
+        # LEG_INVARIANT, it cannot answer differently here.
+        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_emitted_float_conversions$|^tur_shard_partition$"),
     },
 }
 
@@ -107,17 +109,66 @@ SAMPLED = {
             "fourth macOS job would queue 40+ min behind the first three.  A "
             "quarter per PR, all of it nightly.",
         ),
+        "turi_fixture_tests": (
+            "1/4",
+            "the fixture corpus through the tree-walking interpreter: 283s on "
+            "macOS and, with the matrix sharded, the last RUN_SERIAL barrier in "
+            "the aux part.  It executes programs, so arm64 is worth sampling "
+            "rather than dropping -- but the compiled path already runs the same "
+            "corpus in full on both legs, so the marginal per-PR value of a "
+            "second macOS engine pass over it is low.  A quarter per PR, all of "
+            "it nightly.",
+        ),
     },
     "linux": {},
 }
 
-# Where --check reads the macOS sample size from, to compare against SAMPLED.
+# Suites a leg does not run AND the nightly does not either, because the answer
+# cannot differ between legs -- not "cheaper elsewhere" but "the same by
+# construction".  A row here is a stronger claim than NIGHTLY_ONLY and needs the
+# mechanism, not a cost argument: if a platform could change the verdict, even in
+# principle, the suite belongs in NIGHTLY_ONLY instead so something still runs it.
+LEG_INVARIANT = {
+    "macos": {
+        "tur_shard_partition":
+            "enumeration only -- its own header says it never invokes $TUR.  It "
+            "asks run-jit.sh for the fixture NAMES a shard would run "
+            "(TUR_TEST_LIST) and does set algebra on them; nothing is compiled "
+            "or executed.  The enumeration applies only TUR_TEST_FILTER and the "
+            "shard ordinal over a glob of tests/fixtures/, with no requires.* "
+            "marker evaluation and no platform probing, so the disjoint/complete "
+            "verdict is a function of the fixture tree alone and is identical on "
+            "every platform.  Linux runs it; a nightly copy would re-derive the "
+            "same answer.",
+    },
+    "linux": {},
+}
+
+# Where --check reads the sample sizes from, to compare against SAMPLED, and the
+# env var each sampled suite's slice is spelled with.  A suite sampled per-PR has
+# to appear here, or nothing checks that the table and the workflow agree.
 CI_WORKFLOW = os.path.join(".github", "workflows", "ci.yml")
-# The first quoted i/N on the `TUR_GSM_SHARD:` line itself.  Same-line and
-# shape-agnostic on purpose: a tighter pattern that encoded the surrounding
-# expression would break on a reformat.  When it finds nothing --check FAILS
-# rather than passing, so a reformat that does defeat it is loud.
-GSM_SHARD_RE = re.compile(r"^\s*TUR_GSM_SHARD:[^\n]*?'(\d+/\d+)'", re.M)
+SAMPLE_VARS = {
+    "tur_generic_spec_matrix": "TUR_GSM_SHARD",
+    "turi_fixture_tests": "TUR_TURI_SHARD",
+}
+
+
+def ci_sample_shard(var):
+    """The i/N ci.yml sets for `var`, or None if that line is not found.
+
+    Matches the first quoted i/N on the variable's own line.  Same-line and
+    shape-agnostic on purpose: a tighter pattern encoding the surrounding GitHub
+    expression would break on a reformat.  Finding nothing makes --check FAIL
+    rather than pass, so a reformat that does defeat it is loud.
+    """
+    pat = re.compile(r"^\s*%s:[^\n]*?'(\d+/\d+)'" % re.escape(var), re.M)
+    try:
+        with open(os.path.join(REPO, CI_WORKFLOW)) as f:
+            m = pat.search(f.read())
+    except OSError:
+        return None
+    return m.group(1) if m else None
 
 
 def part_pattern(leg, part):
@@ -141,6 +192,10 @@ def nightly_pattern(leg):
     (NIGHTLY_ONLY) plus the ones it only samples (SAMPLED).  So moving a suite
     back onto the PR leg, or adding a new one to either table, moves the
     nightly's coverage with it and cannot leave a gap behind.
+
+    LEG_INVARIANT is deliberately NOT included: those are not uncovered, they
+    are answered identically by the other leg, so a nightly copy would re-derive
+    the same verdict at the cost of running it.
     """
     names = sorted(set(NIGHTLY_ONLY.get(leg, {})) | set(SAMPLED.get(leg, {})))
     if not names:
@@ -148,17 +203,6 @@ def nightly_pattern(leg):
                          "nightly has nothing to run\n" % leg)
         raise SystemExit(2)
     return "|".join("^%s$" % n for n in names)
-
-
-def ci_gsm_shard():
-    """The macOS matrix sample size as ci.yml actually sets it, or None."""
-    path = os.path.join(REPO, CI_WORKFLOW)
-    try:
-        with open(path) as f:
-            m = GSM_SHARD_RE.search(f.read())
-    except OSError:
-        return None
-    return m.group(1) if m else None
 
 
 def _ctest_n(build, *args):
@@ -235,7 +279,13 @@ def check(build):
             for name in got:
                 members.setdefault(name, []).append(part)
 
-        omitted = NIGHTLY_ONLY.get(leg, {})
+        nightly = NIGHTLY_ONLY.get(leg, {})
+        invariant = LEG_INVARIANT.get(leg, {})
+        # The two ways a leg may legitimately not run a registered suite. Both
+        # need a written reason; the difference is whether anything else has to
+        # cover it (nightly: yes, invariant: the other leg already did).
+        omitted = dict(nightly)
+        omitted.update(invariant)
 
         # Completeness -- the dangerous half.  A test in no part is a suite
         # that stopped running, and nothing else in CI would notice.
@@ -245,9 +295,29 @@ def check(build):
             print("FAIL check-ctest-partition -- %s: test '%s' is in NO part, "
                   "so this leg never runs it.\n"
                   "     Add it to a part's pattern, or record it in "
-                  "NIGHTLY_ONLY['%s'] with where its coverage comes from."
-                  % (leg, name, leg))
+                  "NIGHTLY_ONLY['%s'] (the nightly covers it) or "
+                  "LEG_INVARIANT['%s'] (the other leg's answer is the same by "
+                  "construction) with the reason."
+                  % (leg, name, leg, leg))
             fail = 1
+
+        # A LEG_INVARIANT row must name a suite the OTHER leg actually runs --
+        # otherwise "the other leg already answered this" is false and nothing
+        # runs it anywhere, which is the one claim in this table that could
+        # silently drop a suite from all of CI.
+        for name in sorted(invariant):
+            others = [o for o in PARTS if o != leg]
+            covered = any(
+                name in {m for p, e in PARTS[o].items()
+                         for m in selected(build, e[0], e[1])}
+                for o in others)
+            if not covered:
+                print("FAIL check-ctest-partition -- %s: LEG_INVARIANT names "
+                      "'%s' as answered by another leg, but no other leg runs "
+                      "it either, so nothing in CI does.  Move it to "
+                      "NIGHTLY_ONLY, or put it back in a part."
+                      % (leg, name))
+                fail = 1
 
         # Disjointness -- the cheap half: duplicated work, not lost signal.
         # Allowed only where the table says the suite is sharded across parts.
@@ -261,18 +331,19 @@ def check(build):
                   % (leg, name, len(parts), ", ".join(parts), shards))
             fail = 1
 
-        # A stale NIGHTLY_ONLY row hides a test that IS covered, or names one
-        # that no longer exists -- both make the table lie about coverage.
+        # A stale row hides a test that IS covered, or names one that no longer
+        # exists -- both make the table lie about coverage.
         for name in sorted(omitted):
+            which = "LEG_INVARIANT" if name in invariant else "NIGHTLY_ONLY"
             if name not in all_tests:
-                print("FAIL check-ctest-partition -- %s: NIGHTLY_ONLY names "
+                print("FAIL check-ctest-partition -- %s: %s names "
                       "'%s', which is not a registered test; delete the row."
-                      % (leg, name))
+                      % (leg, which, name))
                 fail = 1
             elif name in members:
-                print("FAIL check-ctest-partition -- %s: NIGHTLY_ONLY names "
+                print("FAIL check-ctest-partition -- %s: %s names "
                       "'%s', but part(s) %s already run it; delete the row."
-                      % (leg, name, ", ".join(members[name])))
+                      % (leg, which, name, ", ".join(members[name])))
                 fail = 1
 
         # A SAMPLED row must name a test that IS in a part (it runs, partially)
@@ -291,28 +362,41 @@ def check(build):
                       "per-PR.  Move the row to NIGHTLY_ONLY instead."
                       % (leg, name))
                 fail = 1
-            if leg == "macos" and name == "tur_generic_spec_matrix":
-                actual = ci_gsm_shard()
-                if actual is None:
-                    print("FAIL check-ctest-partition -- %s: could not find "
-                          "TUR_GSM_SHARD in %s to compare against SAMPLED['%s']"
-                          "['%s'] = %s" % (leg, CI_WORKFLOW, leg, name, shard))
-                    fail = 1
-                elif actual != shard:
-                    print("FAIL check-ctest-partition -- %s: SAMPLED says '%s' "
-                          "runs %s per PR but %s sets TUR_GSM_SHARD=%s.  The "
-                          "nightly's coverage is computed from this table, so "
-                          "the two must agree."
-                          % (leg, name, shard, CI_WORKFLOW, actual))
-                    fail = 1
+            # Only the macOS leg is sampled in ci.yml today; a sampled suite on
+            # another leg would need its own expression there before this could
+            # compare anything, so say so rather than silently checking nothing.
+            if leg != "macos":
+                continue
+            var = SAMPLE_VARS.get(name)
+            if not var:
+                print("FAIL check-ctest-partition -- %s: SAMPLED names '%s' but "
+                      "SAMPLE_VARS has no env var for it, so nothing checks that "
+                      "the table and %s agree.  Add the row."
+                      % (leg, name, CI_WORKFLOW))
+                fail = 1
+                continue
+            actual = ci_sample_shard(var)
+            if actual is None:
+                print("FAIL check-ctest-partition -- %s: could not find %s in "
+                      "%s to compare against SAMPLED['%s']['%s'] = %s"
+                      % (leg, var, CI_WORKFLOW, leg, name, shard))
+                fail = 1
+            elif actual != shard:
+                print("FAIL check-ctest-partition -- %s: SAMPLED says '%s' runs "
+                      "%s per PR but %s sets %s=%s.  The nightly's coverage is "
+                      "computed from this table, so the two must agree."
+                      % (leg, name, shard, CI_WORKFLOW, var, actual))
+                fail = 1
 
         if not fail:
             n_jobs = sum(part_shards(leg, p) for p in PARTS[leg])
             notes = []
-            if omitted:
-                notes.append("%d nightly-only" % len(omitted))
+            if nightly:
+                notes.append("%d nightly-only" % len(nightly))
             if SAMPLED.get(leg):
                 notes.append("%d sampled" % len(SAMPLED[leg]))
+            if invariant:
+                notes.append("%d leg-invariant" % len(invariant))
             print("  ok  %s -- %d registered test(s) across %d part(s) / %d "
                   "job(s)%s" % (leg, len(all_tests), len(PARTS[leg]), n_jobs,
                                 " (%s)" % ", ".join(notes) if notes else ""))

@@ -30,6 +30,9 @@
 #                    tests/run.sh -- see KB-002 in docs/archive/history/known-bugs.md)
 #   TUR_TEST_JOBS    parallelism (default: cpu count, capped at 8)
 #   TUR_FORCE        set to 1 to skip stamp-cache fast-path
+#   TUR_TURI_SHARD   run a round-robin slice, "i/N" 1-based (default: all)
+#   TURI_TEST_LIST   set to 1 to print the fixture names this invocation would
+#                    run, one per line, and exit without running any
 
 set -u
 cd "$(dirname "$0")/.."
@@ -44,7 +47,50 @@ cd "$(dirname "$0")/.."
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "run-turi: $TUR not built; run 'just build' first" >&2; exit 2; }
+LIST_ONLY=0
+if [ "${TURI_TEST_LIST:-0}" = "1" ]; then LIST_ONLY=1; fi
+# List mode answers a question about the CORPUS -- which fixtures a shard would
+# run -- so it must not require a built interpreter.  tests/run-shard-partition.sh
+# calls it from the non-JIT `test` job, where $TUR may be absent entirely.
+if [ "$LIST_ONLY" = "0" ]; then
+    [ -x "$TUR" ] || { echo "run-turi: $TUR not built; run 'just build' first" >&2; exit 2; }
+fi
+
+# Optional sharding, spelled and CLAMPED exactly as tests/run.sh and
+# tests/run-jit.sh do it: 1-based "i/N", a nonsense index snaps into range
+# rather than erroring, and a total of 1 or less means "not sharded".
+#
+# TUR_TURI_SHARD, not TUR_TEST_SHARD: turi_fixture_tests runs inside the 160-test
+# `aux` ctest part, and tools/ci/collect-suite-timings.py tags timing rows from
+# the job's ENVIRONMENT rather than per test -- so TUR_TEST_SHARD there would
+# label all 160 other suites as replicas of a slice they never ran.  One variable
+# per harness keeps every call site correct without a rule to remember; see
+# tests/shard_util.py.
+TUR_TURI_SHARD="${TUR_TURI_SHARD:-}"
+SHARD_INDEX=0
+SHARD_TOTAL=1
+if [ -n "$TUR_TURI_SHARD" ]; then
+    case "$TUR_TURI_SHARD" in
+        */*)
+            shard_left="${TUR_TURI_SHARD%/*}"
+            shard_right="${TUR_TURI_SHARD#*/}"
+            case "$shard_left" in ''|*[!0-9]*) shard_left=1 ;; esac
+            case "$shard_right" in ''|*[!0-9]*) shard_right=1 ;; esac
+            if [ "$shard_right" -lt 1 ]; then shard_right=1; fi
+            if [ "$shard_left" -lt 1 ]; then shard_left=1; fi
+            if [ "$shard_left" -gt "$shard_right" ]; then shard_left="$shard_right"; fi
+            SHARD_TOTAL="$shard_right"
+            SHARD_INDEX=$((shard_left - 1))
+            ;;
+    esac
+fi
+
+matches_shard() {
+    if [ "$SHARD_TOTAL" -le 1 ]; then
+        return 0
+    fi
+    [ $(($1 % SHARD_TOTAL)) -eq "$SHARD_INDEX" ]
+}
 
 PASS=0
 FAIL=0
@@ -471,41 +517,69 @@ done
 # same filter env var works against both tests/run.sh and tests/run-turi.sh.
 # TURI_FILTER wins when both are set.
 TURI_FILTER="${TURI_FILTER:-${TUR_TEST_FILTER:-}}"
+# The ordinal advances on EVERY discovered fixture, not just admitted ones, so
+# shard membership is a property of the corpus rather than of the filter.  A
+# filtered shard run is then a subset of the same slice an unfiltered one takes,
+# which is what makes TURI_FILTER usable to re-run one shard's failure -- the
+# name stays in the slice that ran it.  Same rule as tests/run-jit.sh.
 FILTERED_DIRS=()
+fixture_ordinal=0
 for d in "${ALL_DIRS[@]}"; do
     name="${d#tests/fixtures/}"
-    if [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; then
+    if { [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; } \
+       && matches_shard "$fixture_ordinal"; then
         FILTERED_DIRS+=("$d")
     fi
+    fixture_ordinal=$((fixture_ordinal + 1))
 done
 
+# TI8.b/W3: error-fixture diag pass (tests/fixtures/errors/*).  Honors the same
+# TURI_FILTER so `TURI_FILTER=errors/ ...` narrows to just this pass.
+#
+# Built here, BEFORE the positive pass runs, rather than between the two passes
+# as it used to be: both slices have to be resolved before anything executes for
+# TURI_TEST_LIST to answer "what is in shard i/N?" without running a fixture.
+ERROR_DIRS=()
+error_ordinal=0
+for d in tests/fixtures/errors/*/; do
+    d="${d%/}"; [ -d "$d" ] || continue
+    name="${d#tests/fixtures/}"
+    if { [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; } \
+       && matches_shard "$error_ordinal"; then
+        ERROR_DIRS+=("$d")
+    fi
+    error_ordinal=$((error_ordinal + 1))
+done
+
+# Names only, one per line, `errors/` kept in the path -- the same shape
+# run-jit.sh prints, so tests/run-shard-partition.sh can assert this harness's
+# partition through its REAL enumeration rather than a copy that could drift.
+if [ "$LIST_ONLY" = "1" ]; then
+    for d in "${FILTERED_DIRS[@]+"${FILTERED_DIRS[@]}"}" \
+             "${ERROR_DIRS[@]+"${ERROR_DIRS[@]}"}"; do
+        echo "${d#tests/fixtures/}"
+    done
+    exit 0
+fi
+
 # The census: every directory the two passes are about to walk that carries an
-# input.  The tally below must account for each of these exactly once.
+# input.  The tally below must account for each of these exactly once.  Counted
+# from the already-sharded arrays, so a shard's accounting balances against the
+# fixtures that shard actually runs rather than against the whole corpus.
 DISCOVERED=0
 for d in "${FILTERED_DIRS[@]}"; do
     if [ -f "$d/input.tur" ] || [ -f "$d/$(basename "$d").tur" ]; then
         DISCOVERED=$((DISCOVERED + 1))
     fi
 done
+for d in "${ERROR_DIRS[@]+"${ERROR_DIRS[@]}"}"; do
+    [ -f "$d/input.tur" ] && DISCOVERED=$((DISCOVERED + 1))
+done
 
 if [ ${#FILTERED_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${FILTERED_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_turi_fixture "$@"' _ {} 2>/dev/null
 fi
-
-# TI8.b/W3: error-fixture diag pass (tests/fixtures/errors/*).  Honors the same
-# TURI_FILTER so `TURI_FILTER=errors/ ...` narrows to just this pass.
-ERROR_DIRS=()
-for d in tests/fixtures/errors/*/; do
-    d="${d%/}"; [ -d "$d" ] || continue
-    name="${d#tests/fixtures/}"
-    if [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; then
-        ERROR_DIRS+=("$d")
-    fi
-done
-for d in "${ERROR_DIRS[@]}"; do
-    [ -f "$d/input.tur" ] && DISCOVERED=$((DISCOVERED + 1))
-done
 if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${ERROR_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_turi_error_fixture "$@"' _ {} 2>/dev/null
