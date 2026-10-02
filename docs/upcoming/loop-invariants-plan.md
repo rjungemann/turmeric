@@ -590,7 +590,19 @@ harness's documented report-only class.
 - Graduation, on the experiment lifecycle (the row's `expires_at` forces the
   review, not the date it happens).
 - A nested loop that assigns still declines the outer loop; a `when` guarding
-  an early `return` still declines the whole loop.
+  an early `return` still declines the whole loop. Both measured and filed
+  2026-10-02 as
+  [loop-invariant-declines-more-than-soundness-requires](../reported/loop-invariant-declines-more-than-soundness-requires.md),
+  which shows each decline is broader than its own reason (an inner-local
+  counter cannot affect the outer invariant; initiation and preservation do
+  not depend on how the loop exits) and that the nested-loop decline path has
+  no fixture.
+- A loop outside a `defn` -- in a `definstance` method or a top-level lambda --
+  is registered and given both runtime checks but never analysed, and says
+  nothing at any strictness level. Filed as
+  [loop-invariant-silently-unverified-outside-a-defn](../reported/loop-invariant-silently-unverified-outside-a-defn.md).
+  The "Scope of the defn-level pass" note above records the design; the report
+  is that it is silent rather than declined.
 - The ECS `for-each` lowering (RE2) is **no longer waiting on this plan, and
   will not be the consumer that fires the trigger above.** C3 landed, and RE2
   was re-measured 2026-10-02 (see its probe update in
