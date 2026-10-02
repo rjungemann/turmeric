@@ -1998,6 +1998,7 @@ size_t       adt_app_byval_value_size_bytes(Type t);
 /* b4box closure-slot width -- see the definition's comment for why this is
  * separate from type_is_wide_byval_adt (which also drives ADT field layout). */
 bool         type_is_b4box_closure_slot(Type t);
+bool         type_is_word_closure_slot(Type t);
 bool         adt_app_byval_pass_by_ptr(Type t);
 bool         type_is_byvalue_adt_product(Type t);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */

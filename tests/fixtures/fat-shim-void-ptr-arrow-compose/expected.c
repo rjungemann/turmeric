@@ -5559,8 +5559,8 @@ TUR_FATBOX_DECL(__tur_fatbox_0);
 TUR_FATBOX_DECL(__tur_fatbox_1);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 typedef double (*tur_thunk_double_double_t)(void *, double);
+typedef void * (*tur_thunk_void___int64_t_t)(void *, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_int64_t_t)(void *, int64_t, int64_t);
-typedef void * (*tur_thunk_void___void___t)(void *, void *);
 #if defined(__GNUC__) && !defined(__clang__)
 #define TUR_ANY_DROP_ATTR __attribute__((noinline, noclone))
 #else
@@ -7545,7 +7545,7 @@ static double __fn_301(void * __env_p_304, double t) {
         return (__env___env_303->k) * (__ps_112);
 }
 
-struct __env_308 { int64_t __fn; double k; };
+struct __env_308 { tur_thunk_void___int64_t_t __fn; double k; };
 static void drop_glue___env_308(void *__p) {
     struct __env_308 *__e = (struct __env_308 *)__p; (void)__e;
     free((void *)((char *)__p - sizeof(void *)));
@@ -10824,7 +10824,7 @@ static void * make_hyscale(double k) {
         void *__t279 = malloc(sizeof(void *) + sizeof(struct __env_308));
         *(void (**)(void *))__t279 = drop_glue___env_308;
         struct __env_308 *__t278 = (struct __env_308 *)((char *)__t279 + sizeof(void *));
-        __t278->__fn = (int64_t)(intptr_t)__fn_306;
+        __t278->__fn = (tur_thunk_void___int64_t_t)__fn_306;
         __t278->k = k;
         void *__t280 = __t278;
         return __t280;
@@ -10873,7 +10873,7 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t input = (int64_t)(intptr_t)(__ps_287);
             (void)input;
-            void * __ps_288 = ((*( tur_thunk_void___void___t *)((void *)(intptr_t)(composed)))((void *)(intptr_t)(composed), (void *)(intptr_t)(input)));
+            void * __ps_288 = ((*( tur_thunk_void___int64_t_t *)((void *)(intptr_t)(composed)))((void *)(intptr_t)(composed), (int64_t)(intptr_t)(input)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t out = (int64_t)(intptr_t)(__ps_288);
             (void)out;

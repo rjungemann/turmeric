@@ -697,14 +697,15 @@
       free(buf);
       /* Dispatch to handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
-      /* The handler is `(fn [c : ptr<void>] : nil)`, which the emitter lowers
-         to `void (void *, void *)`.  Spelling the conn parameter `int64_t`
-         here made this an indirect call through a mismatched function-pointer
-         type -- UB that -fsanitize=function reports and that CFI / CET-BTI /
-         WASM call_indirect turn into a hard failure.  See
+      /* The handler is `(fn [c : ptr<void>] : nil)`, whose slot 0 is
+         `void (void *, int64_t)`: an untyped `ptr<void>` parameter is the
+         word in a closure slot (fnsan-ptr-void-fn-slot-word).  Spelling it
+         any other way makes this an indirect call through a mismatched
+         function-pointer type -- UB that -fsanitize=function reports and that
+         CFI / CET-BTI / WASM call_indirect turn into a hard failure.  See
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
-      typedef void (*fn1_t)(void *, void *);
-      ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
+      typedef void (*fn1_t)(void *, int64_t);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
       /* Write response. */
       const char *body = conn->resp_body ? conn->resp_body : "";
       int         blen = conn->resp_body ? conn->resp_body_len : 0;
@@ -2718,14 +2719,15 @@
       free(buf);
       /* Dispatch handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
-      /* The handler is `(fn [c : ptr<void>] : nil)`, which the emitter lowers
-         to `void (void *, void *)`.  Spelling the conn parameter `int64_t`
-         here made this an indirect call through a mismatched function-pointer
-         type -- UB that -fsanitize=function reports and that CFI / CET-BTI /
-         WASM call_indirect turn into a hard failure.  See
+      /* The handler is `(fn [c : ptr<void>] : nil)`, whose slot 0 is
+         `void (void *, int64_t)`: an untyped `ptr<void>` parameter is the
+         word in a closure slot (fnsan-ptr-void-fn-slot-word).  Spelling it
+         any other way makes this an indirect call through a mismatched
+         function-pointer type -- UB that -fsanitize=function reports and that
+         CFI / CET-BTI / WASM call_indirect turn into a hard failure.  See
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
-      typedef void (*fn1_t)(void *, void *);
-      ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
+      typedef void (*fn1_t)(void *, int64_t);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
       /* Build the response head (shared with httpd-handle). */
       const char *body = conn->resp_body ? conn->resp_body : "";
       int         blen = conn->resp_body ? conn->resp_body_len : 0;
@@ -3309,10 +3311,11 @@
       if (matched) {
           c->route_params = (void *)params;
           int64_t *fat = (int64_t *)(intptr_t)route->handler;
-          /* `(fn [c : ptr<void>] : nil)` lowers to `void (void *, void *)`;
-             see the note in httpd-handle's dispatch. */
-          typedef void (*fn1_t)(void *, void *);
-          ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)c);
+          /* `(fn [c : ptr<void>] : nil)`'s slot 0 is
+             `void (void *, int64_t)`; see the note in httpd-handle's
+             dispatch. */
+          typedef void (*fn1_t)(void *, int64_t);
+          ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)c);
           /* Free params after handler returns. */
           RouteParam *cur = params;
           while (cur) { RouteParam *nx = cur->next; free(cur); cur = nx; }
