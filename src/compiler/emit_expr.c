@@ -19303,10 +19303,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* match-adt-var-arm-does-not-bind: a variable catch-all arm
                      * binds the WHOLE scrutinee.  `__scrut` is the by-value
                      * aggregate, a pbp pointer to it, or the carrier pointer,
-                     * so the read matches how it was bound above. */
+                     * so the read matches how it was bound above.
+                     *
+                     * A by-value binder is declared at the scrutinee's own C
+                     * type: inside a generic's spec the binding's type is
+                     * still the declared `(Option A)`, which type_c_name
+                     * spells as the int64 carrier, while `__scrut` is the
+                     * monomorph's aggregate -- `int64_t other = *__scrut;`,
+                     * invalid C at every instantiation. */
                     if (pat->is_var && pat->var_binding) {
                         const char *vct = type_c_name(pat->var_binding->type);
                         char *vname = name_for_binding(ctx, pat->var_binding);
+                        if (adt_byval || adt_byval_pbp) {
+                            vct = adt_c_name;
+                            emit_localvar_record_ctype(vname, vct);
+                        }
                         indent_buf(body, ctx->indent);
                         if (adt_byval_pbp)
                             buf_printf(body, "%s %s = *__scrut;\n", vct, vname);
@@ -19694,10 +19705,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     ctx->indent += 4;
 
                     /* match-adt-var-arm-does-not-bind: the variable catch-all
-                     * binds the whole scrutinee (carrier pointer here). */
+                     * binds the whole scrutinee (carrier pointer here).  A
+                     * by-value binder takes the scrutinee's C type, as in the
+                     * if-chain path above. */
                     if (pat->is_var && pat->var_binding) {
                         const char *vct = type_c_name(pat->var_binding->type);
                         char *vname = name_for_binding(ctx, pat->var_binding);
+                        if (adt_byval) {
+                            vct = adt_c_name;
+                            emit_localvar_record_ctype(vname, vct);
+                        }
                         indent_buf(body, ctx->indent);
                         if (adt_byval)
                             /* Copy, never `&__scrut_v`: the binding can outlive

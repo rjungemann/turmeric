@@ -1542,6 +1542,28 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
             uint8_t idx = 0;
             if (!expected->as.tyvar_.name) return true;
             if (call_find_type_binding(bindings, *n_bindings, expected->as.tyvar_.name, &idx)) {
+                /* open-arg-first-binds-call-result-as-int: a binding to a
+                 * variable nothing fixed -- an open constructor slot, or the
+                 * free result variable of a return-only generic call such as
+                 * `(none)` -- is provisional, and a later concrete argument
+                 * takes its place.  `(get-or (none) 1.5)` against `[o :
+                 * (Option A) d : A]` bound `A` to `(none)`'s own `A` first;
+                 * the m5 rule below (meant for the ENCLOSING signature's
+                 * variable) then kept it because the names coincided, the
+                 * result typed as `int`, and the float spec's 1.5 printed as
+                 * `1`.  With any other name for the callee's variable it was
+                 * "expected A, got float".  The enclosing signature's own
+                 * variables are fixed in each instantiation and keep the m5
+                 * treatment. */
+                if (bindings[idx].type.kind == TY_TYVAR && actual.kind != TY_TYVAR &&
+                    actual.kind != TY_UNKNOWN &&
+                    (bindings[idx].type.as.tyvar_.open_slot ||
+                     (g_call_cb_elab && bindings[idx].type.as.tyvar_.name &&
+                      !ng_tyvar_in_sig(g_call_cb_elab,
+                                       bindings[idx].type.as.tyvar_.name)))) {
+                    bindings[idx].type = actual;
+                    return true;
+                }
                 /* m5-eq-vec-rewrite-fn-arg-loses-annotation step 2 (fix-i v2):
                  * a prior TYVAR-named binding (from an earlier same-tyvar
                  * actual, e.g. xs:(Vec A) where the outer scope already
@@ -7612,6 +7634,10 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
     CallTypeBinding type_bindings[16];
     uint8_t n_type_bindings = 0;
     for (uint8_t bi = 0; bi < 16; bi++) type_bindings[bi].name = NULL;
+    /* open-arg-first-binds-call-result-as-int: arguments to ground after the
+     * loop (allocated on first use). */
+    bool *open_first = NULL;
+    bool open_first_init = false;
     /* generic-return-type-not-inferred-from-context: capture the enclosing
      * expected-type channel (pushed by (:: e T), typed-let, or the defn
      * return slot) before clearing it for sub-arg elaboration -- so the
@@ -8167,6 +8193,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
                                                         type_bindings, &n_type_bindings);
                     g_call_cb_elab = saved_cb_elab;
+                }
+                /* open-arg-first-binds-call-result-as-int: a return-only
+                 * generic call (`(none)`) that no sibling has grounded yet
+                 * bound the variable provisionally; ground it once every
+                 * argument is in (below the loop). */
+                if (arg_ok && expected_full->kind == TY_APP &&
+                    w2_arg_is_free_poly_call(args[i]) &&
+                    !ng_type_names_sig_tyvar(e, &args[i]->type)) {
+                    Type inst_now = call_instantiate_type(e, expected_full,
+                                                          type_bindings, n_type_bindings);
+                    if (call_type_has_named_tyvar(&inst_now)) {
+                        if (!open_first)
+                            open_first = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                        if (!open_first_init) {
+                            for (uint32_t oi = 0; oi < n_args; oi++) open_first[oi] = false;
+                            open_first_init = true;
+                        }
+                        open_first[i] = true;
+                    }
                 }
                 /* nullary-generic-call-under-tyvar-expectation: `(wrap 3
                  * (box-nil))` against `[v : A b : (Box A)]`, or `(make-struct
@@ -9932,6 +9978,40 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     arg_b3->usage_state = USAGE_UNUSED;
                 }
             }
+        }
+    }
+
+    /* open-arg-first-binds-call-result-as-int: a return-only generic call
+     * argument (`(none)`, `(vec-new)`) checked before the sibling that fixed
+     * its variable -- `(get-or (none) 1.5)` -- is grounded now, the way the
+     * nullary-generic block grounds one checked after it: the substitution is
+     * recorded on the call so emit monomorphizes it, and the grounded type
+     * becomes the argument's.  Left open, the call's bindings said `A :=
+     * float` (or `int`, from an unannotated lambda's parameters) while the
+     * argument still said `(Option A)`, and a CPS caller named a spec that was
+     * never emitted. */
+    if (open_first && fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+        for (uint32_t i = 0; i < n_args; i++) {
+            if (!open_first[i] || !args[i] || !w2_arg_is_free_poly_call(args[i]))
+                continue;
+            uint32_t pidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (pidx >= fn_type.as.fn.arity) continue;
+            const Type *pf = fn_type.as.fn.arg_full_types[pidx];
+            if (!pf || pf->kind != TY_APP) continue;
+            Type inst = call_instantiate_type(e, pf, type_bindings, n_type_bindings);
+            if (inst.kind != TY_APP || call_type_has_named_tyvar(&inst)) continue;
+            CallTypeBinding ogscratch[16];
+            uint8_t ogn = 0;
+            if (!call_collect_type_bindings(&args[i]->type, inst, ogscratch, &ogn))
+                continue;
+            if (ogn > 0 && !args[i]->as.call_.abi_bindings) {
+                AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+                    e->arena, ogn * sizeof(AbiTypeBinding));
+                for (uint8_t bi = 0; bi < ogn; bi++) saved[bi] = ogscratch[bi];
+                args[i]->as.call_.abi_bindings   = saved;
+                args[i]->as.call_.n_abi_bindings = ogn;
+            }
+            args[i]->type = inst;
         }
     }
 
