@@ -285,6 +285,113 @@ static bool module_body_form_is_definition(const Expr *be) {
     }
 }
 
+/* The defmodule body loop's state for elaborating one body form out of the
+ * loop's own position: a flushed defn, or a deferred one's second chance. */
+typedef struct MdRetryCtx {
+    Elab            *e;
+    const DefModule *mod;
+    Form *const     *forms;
+    uint32_t         n;
+    const Form      *saved_tl_stmt;
+    Expr           **slot;
+    bool            *deferred;
+    bool            *any_deferred;
+    bool            *had_error;
+    FwdGenOrder     *fgo;
+} MdRetryCtx;
+
+/* The body loop's treatment of form `s` at position `pos`: speculative when
+ * it is a defn and a `definstance` follows `pos` (symptom A).  A defmodule
+ * body is its own file-scope statement list, so each form here is a
+ * statement for the def-position check -- exactly as in elaborate_program's
+ * Pass 2.  Without this, `e->toplevel_stmt` would still name the enclosing
+ * `(defmodule ...)` form and every `def` in the module would be reported as
+ * sitting inside a top-level expression. */
+static void md_elab_slot(MdRetryCtx *c, uint32_t s, uint32_t pos) {
+    Elab *e = c->e;
+    Form *f = c->forms[s];
+    bool md_may_defer = false;
+    uint32_t md_fsd_mark = e->n_file_scope_defs;
+    if (c->deferred && f->tag == F_LIST && f->as.list.len > 0) {
+        Form *bh = f->as.list.items[0];
+        if (bh->tag == F_SYM && bh->as.sym == e->sym_defn) {
+            for (uint32_t k = pos + 1; k < c->n; k++) {
+                Form *lf = c->forms[k];
+                if (lf->tag != F_LIST || lf->as.list.len == 0) continue;
+                Form *lh = lf->as.list.items[0];
+                if (lh->tag == F_SYM && lh->as.sym == e->sym_definstance) {
+                    md_may_defer = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (md_may_defer) diag_push_capture();
+    e->toplevel_stmt = f;
+    Expr *be = elab_form(e, f);
+    e->toplevel_stmt = c->saved_tl_stmt;
+    if (md_may_defer) {
+        uint32_t md_cerr = diag_pop_capture();
+        if (md_cerr > 0 || !be) {
+            e->n_file_scope_defs = md_fsd_mark;
+            c->deferred[s] = true;
+            *c->any_deferred = true;
+            return;
+        }
+    }
+    fwd_gen_order_done(c->fgo, s);
+    if (!be) {
+        *c->had_error = true;
+        return;  /* keep going to surface more diagnostics */
+    }
+    if (!module_body_form_is_definition(be)) {
+        diag_emit_with_code(DIAG_ERROR, f->span,
+                            TUR_E0711_MODULE_TOPLEVEL_EXPR,
+                            "expression at (defmodule %s ...) top level is "
+                            "never evaluated",
+                            c->mod->name->name);
+        diag_emit(DIAG_NOTE, f->span,
+                  "only definitions run here -- there is no module-level "
+                  "side-effect position.  Move this into a function "
+                  "(main, or one main calls); for a test suite, call the "
+                  "block from the module's entry point");
+        *c->had_error = true;
+        return;
+    }
+    c->slot[s] = be;
+}
+
+/* Elaborate, ahead of position `pos`, every waiting defn `f` names -- each
+ * one's own waiting names first. */
+static void md_flush(MdRetryCtx *c, const Form *f, uint32_t pos) {
+    uint32_t d;
+    while ((d = fwd_gen_order_next_flush(c->fgo, f)) != UINT32_MAX) {
+        fwd_gen_order_done(c->fgo, d);
+        md_flush(c, c->forms[d], pos);
+        md_elab_slot(c, d, pos);
+    }
+}
+
+/* The second chance for one deferred body form: no capture frame, so a
+ * still-failing body reports for real. */
+static void md_retry_slot(void *vctx, uint32_t s) {
+    MdRetryCtx *c = (MdRetryCtx *)vctx;
+    Form *f = c->forms[s];
+    c->e->toplevel_stmt = f;
+    Expr *be = elab_form(c->e, f);
+    c->e->toplevel_stmt = c->saved_tl_stmt;
+    if (!be) { *c->had_error = true; return; }
+    if (!module_body_form_is_definition(be)) {
+        diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0711_MODULE_TOPLEVEL_EXPR,
+                            "expression at (defmodule %s ...) top level "
+                            "is never evaluated",
+                            c->mod->name->name);
+        *c->had_error = true;
+        return;
+    }
+    c->slot[s] = be;
+}
+
 /* Phase M0: Module system */
 
 /* Validate that a module name only contains [a-zA-Z0-9_\-/] */
@@ -1532,89 +1639,35 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
         (bool *)calloc(n_slots, sizeof(bool));
     for (uint32_t k = 0; k < n_slots; k++) slot[k] = NULL;
     bool md_any_deferred = false;
+    /* forward-call-to-generic-callee-typed-as-placeholder: a defn that calls a
+     * generic defn of this body not elaborated yet waits for it, as at top
+     * level (fwd_gen_order_init in elab_toplevel.c). */
+    FwdGenOrder fgo;
+    fwd_gen_order_init(&fgo, e, call->as.list.items + body_start, n_slots);
+    Form *const *md_forms = call->as.list.items + body_start;
 
     const Form *saved_tl_stmt = e->toplevel_stmt;
-    for (uint32_t j = body_start; j < call->as.list.len; j++) {
-        /* A defmodule body is its own file-scope statement list, so each form
-         * here is a statement for the def-position check -- exactly as in
-         * elaborate_program's Pass 2.  Without this, `e->toplevel_stmt` would
-         * still name the enclosing `(defmodule ...)` form and every `def` in
-         * the module would be reported as sitting inside a top-level
-         * expression. */
-        bool md_may_defer = false;
-        uint32_t md_fsd_mark = e->n_file_scope_defs;
-        if (md_deferred) {
-            Form *bf = call->as.list.items[j];
-            if (bf->tag == F_LIST && bf->as.list.len > 0) {
-                Form *bh = bf->as.list.items[0];
-                if (bh->tag == F_SYM && bh->as.sym == e->sym_defn) {
-                    for (uint32_t k = j + 1; k < call->as.list.len; k++) {
-                        Form *lf = call->as.list.items[k];
-                        if (lf->tag != F_LIST || lf->as.list.len == 0) continue;
-                        Form *lh = lf->as.list.items[0];
-                        if (lh->tag == F_SYM && lh->as.sym == e->sym_definstance) {
-                            md_may_defer = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if (md_may_defer) diag_push_capture();
-        e->toplevel_stmt = call->as.list.items[j];
-        Expr *be = elab_form(e, call->as.list.items[j]);
-        e->toplevel_stmt = saved_tl_stmt;
-        if (md_may_defer) {
-            uint32_t md_cerr = diag_pop_capture();
-            if (md_cerr > 0 || !be) {
-                e->n_file_scope_defs = md_fsd_mark;
-                md_deferred[j - body_start] = true;
-                md_any_deferred = true;
-                continue;
-            }
-        }
-        if (!be) {
-            body_had_error = true;
-            continue;  /* keep going to surface more diagnostics */
-        }
-        if (!module_body_form_is_definition(be)) {
-            diag_emit_with_code(DIAG_ERROR, call->as.list.items[j]->span,
-                                TUR_E0711_MODULE_TOPLEVEL_EXPR,
-                                "expression at (defmodule %s ...) top level is "
-                                "never evaluated",
-                                mod->name->name);
-            diag_emit(DIAG_NOTE, call->as.list.items[j]->span,
-                      "only definitions run here -- there is no module-level "
-                      "side-effect position.  Move this into a function "
-                      "(main, or one main calls); for a test suite, call the "
-                      "block from the module's entry point");
-            body_had_error = true;
+    MdRetryCtx md_ctx = { e, mod, md_forms, n_slots, saved_tl_stmt, slot,
+                          md_deferred, &md_any_deferred, &body_had_error,
+                          &fgo };
+    for (uint32_t s = 0; s < n_slots; s++) {
+        if (fwd_gen_order_should_defer(&fgo, md_forms, s)) {
+            fwd_gen_order_defer(&fgo, s);
+            md_any_deferred = true;
             continue;
         }
-        slot[j - body_start] = be;
+        /* A waiting defn this form names is elaborated first, so the form
+         * sees its definition, as it did when the defn kept its place. */
+        md_flush(&md_ctx, md_forms[s], s);
+        md_elab_slot(&md_ctx, s, s);
     }
 
     /* Second chance for the deferred defns; every instance is registered now.
-     * No capture frame -- a still-failing body reports for real. */
-    if (md_any_deferred) {
-        for (uint32_t j = body_start; j < call->as.list.len; j++) {
-            if (!md_deferred[j - body_start]) continue;
-            e->toplevel_stmt = call->as.list.items[j];
-            Expr *be = elab_form(e, call->as.list.items[j]);
-            e->toplevel_stmt = saved_tl_stmt;
-            if (!be) { body_had_error = true; continue; }
-            if (!module_body_form_is_definition(be)) {
-                diag_emit_with_code(DIAG_ERROR, call->as.list.items[j]->span,
-                                    TUR_E0711_MODULE_TOPLEVEL_EXPR,
-                                    "expression at (defmodule %s ...) top level "
-                                    "is never evaluated",
-                                    mod->name->name);
-                body_had_error = true;
-                continue;
-            }
-            slot[j - body_start] = be;
-        }
-    }
+     * No capture frame -- a still-failing body reports for real.  A defn that
+     * waited for a generic callee comes after it (fwd_gen_order_drain). */
+    if (md_any_deferred)
+        fwd_gen_order_drain(&fgo, md_forms, md_deferred, md_retry_slot, &md_ctx);
+    fwd_gen_order_free(&fgo);
     free(md_deferred);
     md_deferred = NULL;
 
