@@ -1313,6 +1313,24 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         if (!init) { rc = -1; break; }
 
+        /* fat-let-of-thin-fn-stores-code-pointer: `^fat` promises a fat
+         * `{ thunk, env }` handle, and the binding is fat-dispatched and
+         * handed to fat sinks as one -- but a captureless lambda or a named
+         * defn is a bare code pointer, and was stored as it was.  The first
+         * fat call read the function's own machine code as slot 0: a SIGSEGV
+         * with no diagnostic, where the interpreter answered.  Box it here,
+         * as the `^fat` argument and `^mut` fn-cell sites already do.  Only a
+         * value that is provably thin: a lifted captureless lambda or a defn
+         * referenced by name. */
+        if (is_fat_ann && init->kind == EX_VAR && init->as.var.binding) {
+            const Binding *ib = init->as.var.binding;
+            if (ib->is_global && !ib->is_fat && !ib->is_poly_fn &&
+                (ib->is_lifted_lambda || ib->source_fn_def) &&
+                init->type.kind == TY_FN && !init->type.as.fn.boxed &&
+                !init->type.as.fn.cfnptr)
+                init = elab_fn_value_to_fat(e, init);
+        }
+
         /* let-binding-void-call-emits-invalid-c: a `:void` init has no value to
          * name.  Left to run, the emitter writes `void x = ...;` -- "variable
          * has incomplete type 'void'", a cc error with no .tur attribution,
@@ -1695,8 +1713,18 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         /* Propagate closure metadata through lets so a binding produced by a
          * closure literal or a closure-returning call remains callable with the
-         * underlying thunk signature. */
-        if (init) {
+         * underlying thunk signature.
+         *
+         * fat-let-of-thin-fn-stores-code-pointer: not through a `^fat x : (fn
+         * ...)` binding.  The annotation IS the call signature (it re-types
+         * the binding above), and a call through it is a fat dispatch at that
+         * signature.  Recording the producing lambda instead made `(h 7.1)`
+         * call the lambda directly at the GENERIC lambda's types -- `(>>> f
+         * g)`'s `(fn [x : A] : C ...)` -- so 7.1 was passed as its carrier
+         * bits to the spec clone's `double` parameter and the result printed
+         * as an int (-9223372036854775808, where the interpreter said 16.7). */
+        bool fat_ann_typed = is_fat_ann && type_ann_form && b->type.kind == TY_FN;
+        if (init && !fat_ann_typed) {
             /* curried-fn-typed-param: distinguish "init *is* a closure value"
              * from "init names a *function* that returns a closure".  When the
              * init is an EX_VAR naming a plain function (TY_FN, no

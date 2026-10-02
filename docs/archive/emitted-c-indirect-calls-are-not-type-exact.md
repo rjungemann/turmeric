@@ -9,9 +9,16 @@ silent-wrong-answer family, when the type that differs is a `double` or a
 16-byte tagged `any`. Filed 2026-09-30 with the P0 representation-confusion
 work.
 
-**Status: OPEN, being swept (4 trapping fixtures as of 2026-10-02, eighth sweep; every fixture counted).** The detector is armed in the four source
-fuzzers (`tests/fuzz_arm.py`, report-only `FNPTR_TRAP` until this reaches
-zero). It is **not** yet a gate on the fixture suite.
+**Status: RESOLVED 2026-10-02 (ninth sweep): zero traps across the corpus,
+and the detector GATES.**  The `ptr<void>` decision below took the last four
+to one, and that one is a different defect -- an erased producer read by a
+typed caller, not a spelling -- filed as
+[arrow-instance-closure-erased-to-words](../reported/arrow-instance-closure-erased-to-words.md)
+and carried as the gate's single `known.fnsan` fixture.  The suite runs under
+the trap flags in the `fnsan` CI job (`tests/run-fnsan.sh`, which proves the
+detector armed with a canary first and requires each `known.fnsan` fixture to
+STILL trap), and a fuzzer trap is the failing `BUG_fnptr_trap` by default now
+(`TUR_FUZZ_FNSAN_STRICT=0` makes it report-only).
 
 ## How to see it
 
@@ -49,6 +56,7 @@ harmful one, so the corpus has to reach zero before it can gate.
 | sixth (2026-10-01) | 57 -> 16 | **First sweep that counts every fixture**: `-L` points at an UNSANITIZED `libturi.a` (`cmake -S . -B build-nosan -DTUR_DEBUG_SANITIZE=OFF && cmake --build build-nosan --target libturi`), so the ~56 fixtures that failed to link under clang before are in -- 57 trapping at the start.  Fixed: a rank-2 `__poly_N` wrapper / capturing closure packed into a FORALL or erased carrier-base sink gets an adapter at the call site's convention (narrow "phase F" or word, per position; `ensure_named_call_adapter` / `ensure_call_adapter_ex`); a bare fn boxed for a `^fat` sink is spelled as the callee THE CALL SELECTS reads it -- a concrete parameter type, a spec clone's instantiated type, or words at the type-variable positions of a carrier base / inline-C body (`fn_to_fat_.sink_fn_type`, `ctx->fat_box_sink_type`) -- whenever the box's default choice would spell it differently; runtime callbacks (timer wheel `tur_scheduler_unpark_cb`, serial-registry ser/deser adapters, capability FileSystem vtable, image registry, `future-then`, a `nil` `(async ...)` body); a cloneable continuation's named receiver is called at its recorded result type; fixtures' own inline C calls each closure at its emitted type |
 | seventh (2026-10-01) | 16 -> 9 | A `nil`-returning function passed where the slot is `(fn [...] A)`: no spec is made at `A := nil`, so the carrier base calls slot 0 as returning the word -- a bare fn's box gets a `void`-callee adapter (`ensure_call_adapter_ex` learned `void`), a capturing closure a `{shim, handle}` wrapper whose shim answers 0 (`EX_FN_TO_FAT.nil_result_word`, `ensure_nilres_fatshim`; on the stack when the sink provably keeps nothing, reaped with the DK entry inside a CPS body) -- `region-scope-void-body`, `nil-closure-into-erased-result`.  A thin call through a fn value spells a TY_FN parameter `int64_t`, as every definition does, not from an already-fat argument's `void *` (`annotated-fat-lambda-param`, `sf-let-bind-with-inner-call`).  A narrow-result closure packed into a CONCRETE (phase F) `tur_poly_fn_t` sink gets the narrow adapter at any arity, a by-value aggregate parameter passing through unchanged, and the hoisted `__borrowc` thunk is found through the carrier retype (`fn-value-carrier-fat-seams`, `hkt-cata-fmap-byvalue-carrier`).  A <= 16-byte by-value result boxed for a CONCRETE sink -- a `^fat` parameter or, new, a concrete `(fn ...)` struct field (`sink_fn_type`) -- takes the typed shim on every host, not only Win64 (`fat-dispatch-parametric-monomorph-return`, `fn-field-carrier-shim-read-typed`).  No snapshot moved |
 | eighth (2026-10-02) | 9 -> 4 | The untyped-`^fat` inline-C cluster is gone, and it was hiding a **silent wrong answer**: `vec-eq?`, `map-eq?`, `result-eq?`, `mutmap-eq?` with a comparator typed `(fn [a : float b : float] ...)` compared xmm registers nobody set (`vec-eq?` and `map-eq?` answered true for 7.1 against 3.25; the interpreter said false).  The stdlib comparators take `(fn [A A] bool)` now (fix direction 4); a bare fn is boxed at words where the inline C reads them, a capturing closure or a forwarded typed `^fat` parameter is wrapped in a { adapter, handle } box (`EX_FN_TO_FAT.word_params`, `fat_closure_tyvar_sink_adapter`), a type variable a spec leaves unbound is a word, and a bare fn whose recorded signature differs from its type's (a niche parameter that arrives as the carrier box) gets an adapter instead of a typed shim that called it at the wrong type (`option-niche-vec-closure-cmp`, `niche-elem-comparator-conventions`, new `comparator-float-elements-word-adapter`).  A fat call through a fn value whose declared result resolves to a POINTER under the spec takes that result in the cast -- its parameters already followed the declared type -- and hands the word back (`stdlib-lens-record-field`, `lens-compose-wide-byvalue-get-put`).  And a typed `tur_poly_fn_t` carrier's phase-F call (F5: its thunk is natively typed) spells a parameter the declared `(fn [a] b)` resolves to a pointer as that pointer, bridging an argument that is only the carrier word -- `run-id`'s spec answers `int64_t` at a := Point (`van-laarhoven-lens-wide-compose`, the one snapshot that moved, by that one cast) |
+| ninth (2026-10-02) | 4 -> 0 (+1 known) | **The `ptr<void>` decision: an untyped `ptr<void>` PARAMETER is the word in slot 0**, as a function-typed one (ER4) and a b4box aggregate already were (`type_is_word_closure_slot`, `thunk_param_slot_c_name`).  A closure thunk keeps `void *` in its definition and slot 0 holds a converting `__tur_slot0_<thunk>` entry; a bare defn's typed fatshim converts the word back (`thunk_param_def_c_name`); every hand-built fat-call cast asks the slot question; runtime C that calls slot 0 by hand follows (`httpd`'s handler dispatch, `image`'s deser; the reactor was already all-word).  A function-typed parameter now has a concrete C ABI in the typed-thunk predicate, so a captureless lambda whose parameter is a function takes the typed shim instead of the all-word adapter a typed caller misread (`fn-param-closure-typed-result-shim`, new -- found probing).  A fat value whose lambda the `tur_poly_fn_t` packing site cannot see gets the narrowing adapter keyed on its type (`narrow-fat-value-into-concrete-carrier`, new -- a type-fuzzer `FNPTR_TRAP`).  `fat-shim-void-ptr-arrow-compose`'s remaining trap is the Arrow instance (filed).  Pinned by `closure-slot-ptr-void-fn-word` (a closure erased to `ptr<void>` called back at both its own type and the `ptr<void>`-ified one) and `closure-slot-ptr-void-param-sinks` (`def`, defn, generic HOF, Vec, struct-field producers and sinks).  One snapshot moved |
 
 Clusters at `-O0` as of the second sweep (165 fixtures; counts are
 fixtures). The session, `seq-call-bool-fn1` and comparator rows are fixed in
@@ -126,7 +134,7 @@ fixtures:
 
 One decision per call shape, keyed on the callee's EMITTED signature, not on
 the erased type at the call. That is the same lesson as
-[repr-decision-function-plan](../archive/repr-decision-function-plan.md). The
+[repr-decision-function-plan](repr-decision-function-plan.md). The
 concrete moves, largest cluster first:
 
 1. The session wrapper calls `void (*)(void *)`: `session-spawn` takes
@@ -142,4 +150,26 @@ concrete moves, largest cluster first:
 
 When the sweep is at zero: add the flags above as a Linux CI leg, flip
 `TUR_FUZZ_FNSAN_STRICT` on by default, and ratchet it like the
-`-Wfloat-conversion` check in `tests/run.sh`.
+`-Wfloat-conversion` check in `tests/run.sh`.  **Done 2026-10-02**: the
+`fnsan` job runs `tests/run-fnsan.sh`, and the fuzzers fail on a trap.
+
+## The `ptr<void>` decision (2026-10-02)
+
+The eighth sweep left one question: a program erases a closure to `ptr<void>`
+and calls it back as `(fn [ptr<void>] ...)`, so its function-typed parameter
+(`int64_t`, ER4) and the caller's `ptr<void>` one (`void *`) must be ONE
+spelling.  Two candidates, and the choice was the word:
+
+- **`ptr<void>` -> `int64_t` (taken).**  Touches only signatures that have a
+  `ptr<void>` parameter -- httpd handlers, reactor and fiber callbacks, image
+  deserializers, SF pipelines -- and makes them closer to the erased word
+  convention every carrier consumer already uses.  The definitions keep
+  `void *` (a slot-0 entry converts), so no body, forward declaration or CPS
+  twin changed.
+- **fn -> `void *` (rejected).**  Every higher-order closure has a function
+  parameter, and every erased consumer calls slot 0 at words: it would have
+  traded four traps for an adapter at every erased sink of every HOF.
+
+Results were left alone: a `ptr<void>` result and a fat function result are
+both `void *` already.  The rule is recorded in
+[value-representations-guide](../guides/value-representations-guide.md#slot-0s-signature-which-parameters-are-the-word).

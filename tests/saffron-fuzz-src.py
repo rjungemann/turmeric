@@ -1040,7 +1040,7 @@ def main():
         n_trap = counts.get("FNPTR_TRAP", 0)
         if n_trap:
             print("  fn-pointer traps (report)   : %d   "
-                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
+                  "(TUR_FUZZ_FNSAN_STRICT=0: report-only)" % n_trap)
         print("  known open findings (report): %d" % n_known)
         if findings:
             print("\n  saved to %s" % save_dir)

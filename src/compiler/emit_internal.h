@@ -1677,6 +1677,7 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
  * emit_module.c. */
 const char *thunk_result_slot_c_name(Type t);
 const char *thunk_param_slot_c_name(Type t);
+const char *thunk_param_def_c_name(Type t);
 const char *thunk_result_slot_c_spelling(const char *rc);
 char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
                                  Type result_type, Type *param_types,

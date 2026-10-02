@@ -144,6 +144,37 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
    representation uniformly after the same bug was fixed there
    (`tests/fixtures/capturing-closure-struct-field/`).
 
+### Slot 0's signature: which parameters are the word
+
+Every fat box is called through slot 0, and the C type a caller casts slot 0
+to must be exactly the type the entry stored there was defined at -- clang's
+`-fsanitize=function` checks that, and WASM's `call_indirect` traps on any
+difference.  So a parameter's **slot spelling** is one decision, made by
+`thunk_param_slot_c_name` (`src/compiler/emit_module.c`), which every
+typed-thunk typedef, hand-built fat-call cast, typed fatshim and adapter
+consults:
+
+| Parameter | Slot spelling | Why |
+| --- | --- | --- |
+| wide (> 8 byte) by-value aggregate | `int64_t` (a box pointer) | b4box: the thunk body loads it at entry |
+| function value (not a cfnptr) | `int64_t` | every definition takes a fn parameter as the word (ER4), and every erased consumer calls at words |
+| untyped `ptr<void>` | `int64_t` | **fnsan-ptr-void-fn-slot-word (2026-10-02).**  A program erases a closure to `ptr<void>` and calls it back as `(fn [ptr<void>] ...)`; for that call to be type-exact the two parameters must share one spelling, and the fn parameter's is the entrenched one |
+| everything else | `type_c_name` | -- |
+
+The `ptr<void>` row is a slot fact, not a definition fact: a closure thunk
+still DEFINES the parameter `void *` (its body, forward, spec and CPS
+declarations all say so), and slot 0 holds a converting `__tur_slot0_<thunk>`
+entry (`ensure_closure_slot0_widen`, the same wrapper that widens a narrow
+result).  A bare defn boxed into a fat value gets a typed fatshim that
+converts the word back (`thunk_param_def_c_name` is the definition side).
+Results are untouched: a `ptr<void>` result and a fat function result are
+both `void *` already.  Runtime C that calls a closure's slot 0 by hand must
+follow the table -- `httpd`'s handler dispatch is `void (*)(void *, int64_t)`,
+`image/register-global!`'s deser is `TUR_APPLY1_T(int64_t, int64_t, ...)`,
+and the reactor's callbacks were already all-word.  A typed `ptr<T>`,
+`ptr<const-void>` and a cfnptr keep their real C types: they are FFI
+spellings, not erasure.
+
 Plus one in-flight form the minimization matrix in
 `docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
 **by-value fat struct** sitting in a parameter slot, whose return path
@@ -397,16 +428,18 @@ programs), so every finding is new. Its first corpus run found a live one: a
 2) under a tag `type-of` could not name. When you add a DELIBERATE conversion
 to the emitter, spell it `TUR_AS`; anything else it reports is the bug.
 
-**Mismatched indirect calls** (`tests/fuzz_arm.py`: clang
-`-fsanitize=function` in trap mode, armed in all four source fuzzers and
-proven armed by a canary). It sees a call through a function pointer whose
-type disagrees with the callee's definition -- the thin/fat, int64/double and
+**Mismatched indirect calls** (clang `-fsanitize=function` in trap mode:
+`tests/run-fnsan.sh` over the fixture corpus, the `fnsan` CI job, and
+`tests/fuzz_arm.py` in all four source fuzzers -- each proven armed by a
+canary first). It sees a call through a function pointer whose type disagrees
+with the callee's definition -- the thin/fat, int64/double and
 int64/tagged-`any` confusions of the fn-value rows above. It is exact, so it
-also traps on ABI-benign `bool`/pointer vs `int64_t` mismatches, of which the
-corpus still has some; until that sweep reaches zero a trap is the
-report-only `FNPTR_TRAP` (`TUR_FUZZ_FNSAN_STRICT=1` fails on it). See
-[emitted-c-indirect-calls-are-not-type-exact](https://github.com/rjungemann/turmeric/blob/main/docs/reported/emitted-c-indirect-calls-are-not-type-exact.md)
-for the live count and how to run the sweep.
+also traps on ABI-benign `bool`/pointer vs `int64_t` mismatches. **The corpus
+is at zero** (2026-10-02, after the slot-0 decision in "Slot 0's signature"
+above), so it gates: a fixture trap fails the `fnsan` job and a fuzzer trap is
+the failing `BUG_fnptr_trap` (`TUR_FUZZ_FNSAN_STRICT=0` makes it report-only
+for a session chasing something else). The sweep's history is in
+[emitted-c-indirect-calls-are-not-type-exact](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emitted-c-indirect-calls-are-not-type-exact.md).
 
 **An unresolved type tag** (runtime). A value widened to `any` while its type
 is still a type VARIABLE used to be tagged with the bare `TY_TYVAR` kind, a

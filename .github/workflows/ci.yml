@@ -1014,6 +1014,71 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-split-${{ runner.os }}-${{ github.sha }}
 
+  # The fixture corpus under clang's -fsanitize=function (trap mode): every
+  # indirect call the emitted C makes must go through a function pointer of
+  # EXACTLY the callee's type.  WASM's call_indirect traps on any difference,
+  # and on a `double` or a 16-byte `any` the native build answers wrong
+  # silently -- the longest-running wrong-answer family this repo has had.
+  # The corpus reached zero on 2026-10-02 (docs/archive/
+  # emitted-c-indirect-calls-are-not-type-exact.md), so this is a GATE: a
+  # failing fixture here is a new mismatched call.  tests/run-fnsan.sh proves
+  # the detector armed with a canary first, so it cannot pass vacuously.
+  fnsan:
+    name: Indirect-call type check (clang -fsanitize=function)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache clang
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-fnsan-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-fnsan-${{ runner.os }}-
+
+      # The compiler under test is the ordinary Debug build (gcc, ASan), as
+      # in `test`; only the fixture programs are compiled with clang.
+      - name: Configure + build (Debug)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build -j
+
+      # The Debug libturi.a is compiled with gcc's ASan, which clang cannot
+      # link against: the fixtures that use it would fail to build and drop
+      # out of the count.  An unsanitized one keeps them in.
+      - name: Build an unsanitized libturi.a
+        run: |
+          cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build-nosan -j --target libturi
+
+      - name: Suite under -fsanitize=function
+        run: |
+          set -o pipefail
+          CC=clang TUR_FNSAN_LIB_DIR=build-nosan/src bash tests/run-fnsan.sh 2>&1 | tee /tmp/fnsan-run.log
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-fnsan-${{ runner.os }}-${{ github.sha }}
+
   # Phase 3A/4 of docs/archive/suite-timing-trends-plan.md.
   #
   # A SEPARATE job, not a step on `test`, specifically because of the

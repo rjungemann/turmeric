@@ -382,6 +382,21 @@ static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
          * TUR_APPLYn_T cast that this shim is the other half of. */
         case TY_ANY:
             return true;
+        /* fnsan-ptr-void-fn-slot-word: a function-typed PARAMETER is the
+         * word in slot 0 (thunk_param_slot_c_name) and in every definition
+         * (ER4), so it has a concrete C ABI.  Declining sent every function
+         * whose parameter is a function to the generic word shim -- right
+         * for an erased consumer, but a typed caller casts slot 0 at the
+         * real result type: `double (*)(void *, int64_t)` against a shim
+         * returning the word.  A function-valued RESULT is admitted at
+         * type_c_name's spelling, `void *` for a boxed (fat) one and
+         * `int64_t` for a thin one, which is how the definitions return it
+         * and how a typed caller casts it (a captureless lambda returning a
+         * capturing closure, `void *__fn_14(int64_t)`, now gets the typed
+         * shim instead of the word shim a `(fn [ptr<void>] ptr<void>)`
+         * caller misread). */
+        case TY_FN:
+            return type_is_word_closure_slot(t);
         case TY_ADT:
             return t.as.adt_.def != NULL;
         case TY_APP:
@@ -531,6 +546,18 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
  * conventions. */
 const char *thunk_param_slot_c_name(Type t) {
     if (type_is_b4box_closure_slot(t)) return "int64_t";
+    if (type_is_word_closure_slot(t)) return "int64_t";
+    return type_c_name(t);
+}
+
+/* fnsan-ptr-void-fn-slot-word: the spelling a closure thunk's DEFINITION
+ * gives a parameter, where it differs from the slot.  A function-typed
+ * parameter is the word in both (ER4); an untyped `ptr<void>` is the word in
+ * the slot but `void *` in the definition, which ensure_closure_slot0_widen
+ * and the typed fatshims bridge. */
+const char *thunk_param_def_c_name(Type t) {
+    if (type_is_b4box_closure_slot(t)) return "int64_t";
+    if (t.kind == TY_FN && type_is_word_closure_slot(t)) return "int64_t";
     return type_c_name(t);
 }
 
@@ -2041,8 +2068,10 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
                               : adt_app_byval_pass_by_ptr(rp);
             if (type_is_b4box_closure_slot(rp) && rp_pbp)
                 buf_printf(target, "const %s *", type_c_name(rp));
-            else
+            else if (type_is_b4box_closure_slot(rp))
                 buf_puts(target, type_c_name(rp));
+            else
+                buf_puts(target, thunk_param_def_c_name(rp));
         }
     }
     buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
@@ -2060,8 +2089,14 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
             /* by-value callee below the pbp threshold: deref the box. */
             buf_printf(target, "*(%s *)(intptr_t)a%u",
                        type_c_name(rp), (unsigned)i);
-        else
-            buf_printf(target, "a%u", (unsigned)i);
+        else {
+            /* fnsan-ptr-void-fn-slot-word: a `ptr<void>` word back to the
+             * pointer the bare function takes. */
+            char an[16];
+            snprintf(an, sizeof an, "a%u", (unsigned)i);
+            emit_scalar_word_conv(target, thunk_param_slot_c_name(rp),
+                                  thunk_param_def_c_name(rp), an);
+        }
     }
     buf_puts(target, widen ? "));\n}\n" : ");\n}\n");
     return name;
@@ -2083,9 +2118,24 @@ char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
                                  uint8_t n_params) {
     if (!ctx || !out || !thunk_sym) return NULL;
     const char *rc = type_c_name(result_type);
-    if (!narrow_int_carrier(rc)) return NULL;
+    bool narrow = narrow_int_carrier(rc);
+    /* fnsan-ptr-void-fn-slot-word: an untyped `ptr<void>` parameter is the
+     * word in slot 0 (type_is_word_closure_slot), but the thunk's definition
+     * keeps it `void *` -- the body reads it as a pointer, and its forward,
+     * spec and CPS declarations all say so.  The same wrapper that widens a
+     * narrow result converts each such word back to the pointer.  A
+     * function-typed parameter needs nothing: the definition already takes
+     * it as the word (ER4). */
+    bool word_ptr = false;
+    for (uint8_t i = 0; i < n_params && !word_ptr; i++)
+        word_ptr = param_types[i].kind == TY_PTR_VOID &&
+                   type_is_word_closure_slot(param_types[i]);
+    if (!narrow && !word_ptr) return NULL;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    const char *def_rc = has_ret ? rc : "void";
+    const char *slot_rc = has_ret ? thunk_result_slot_c_name(result_type) : "void";
     Buf nb; buf_init(&nb);
-    buf_puts(&nb, "__tur_widen_");
+    buf_puts(&nb, word_ptr ? "__tur_slot0_" : "__tur_widen_");
     append_sanitized_c_token(&nb, thunk_sym);
     buf_putc(&nb, '\0');
     char *name = strdup(nb.data);
@@ -2102,15 +2152,28 @@ char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
     }
     ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
-    buf_printf(out, "static int64_t %s(void *__e", name);
+    buf_printf(out, "static %s %s(void *__e", slot_rc, name);
     for (uint8_t i = 0; i < n_params; i++)
         buf_printf(out, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
                    (unsigned)i);
-    buf_printf(out, ") {\n    return (int64_t)((%s (*)(void *", rc);
+    buf_puts(out, ") {\n    ");
+    /* The cast widens a narrow result; any other result (a pointer, or a
+     * by-value aggregate, which C cannot cast to) is returned as it is. */
+    if (has_ret) {
+        if (strcmp(slot_rc, def_rc) != 0) buf_printf(out, "return (%s)", slot_rc);
+        else buf_puts(out, "return ");
+    }
+    buf_printf(out, "((%s (*)(void *", def_rc);
     for (uint8_t i = 0; i < n_params; i++)
-        buf_printf(out, ", %s", thunk_param_slot_c_name(param_types[i]));
+        buf_printf(out, ", %s", thunk_param_def_c_name(param_types[i]));
     buf_printf(out, "))(intptr_t)%s)(__e", thunk_sym);
-    for (uint8_t i = 0; i < n_params; i++) buf_printf(out, ", a%u", (unsigned)i);
+    for (uint8_t i = 0; i < n_params; i++) {
+        char an[16];
+        snprintf(an, sizeof an, "a%u", (unsigned)i);
+        buf_puts(out, ", ");
+        emit_scalar_word_conv(out, thunk_param_slot_c_name(param_types[i]),
+                              thunk_param_def_c_name(param_types[i]), an);
+    }
     buf_puts(out, ");\n}\n");
     return name;
 }

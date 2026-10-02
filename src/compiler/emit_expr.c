@@ -6314,7 +6314,7 @@ static char *fat_closure_tyvar_sink_adapter(EmitCtx *ctx, const Expr *inner,
         Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sk, i));
         apc[i] = (ctx->fat_box_sink_erased_mask & ARG_IDX_BIT(i))
             ? "int64_t"
-            : (type_is_b4box_closure_slot(pt) ? "int64_t" : type_c_name(pt));
+            : thunk_param_slot_c_name(pt);
     }
     const char *crc = typed_ok ? thunk_result_slot_c_name(rt) : "int64_t";
     Type srt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sk));
@@ -9271,7 +9271,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * int)`), which the narrower wide-ADT test passed by
                          * value to a shim that dereferenced it. */
                         slot_is_wide[i] = type_is_b4box_closure_slot(arg_slot_ty[i]);
-                        arg_ct[i] = slot_is_wide[i]
+                        /* fnsan-ptr-void-fn-slot-word: a `ptr<void>` or fn
+                         * slot is the word; TUR_APPLY's per-argument cast
+                         * converts a pointer argument. */
+                        arg_ct[i] = (slot_is_wide[i] ||
+                                     type_is_word_closure_slot(arg_slot_ty[i]))
                                         ? "int64_t"
                                         : emit_type_c_name(ctx, arg_slot_ty[i]);
                         if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
@@ -10221,8 +10225,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * an int64 box pointer, and fat_dispatch_box_arg
                              * above already converted the argument. */
                             buf_printf(&out, ", %s",
-                                type_is_b4box_closure_slot(arg_types[i])
-                                    ? "int64_t" : type_c_name(arg_types[i]));
+                                thunk_param_slot_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -10241,7 +10244,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             (arg->type.kind == TY_FN || arg->type.kind == TY_PTR_VOID)) {
                             needs_ptr_cast = true;
                         }
-                        if (needs_ptr_cast) {
+                        if (type_is_word_closure_slot(arg_types[i])) {
+                            /* fnsan-ptr-void-fn-slot-word: the slot is the
+                             * word. */
+                            buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        } else if (needs_ptr_cast) {
                             buf_printf(&out, ", (void *)(intptr_t)(%s)", arg_strs[i]);
                         } else {
                             buf_printf(&out, ", %s", arg_strs[i]);
@@ -10497,7 +10504,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             /* SR-fat-abi: see the CY2 twin above. */
                             buf_printf(&out, ", %s",
                                 type_is_b4box_closure_slot(emit_resolve_type(ctx, arg_types[i]))
-                                    ? "int64_t" : type_c_name(arg_types[i]));
+                                    ? "int64_t" : thunk_param_slot_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -10551,7 +10558,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool ptr_into_carrier = !slot_is_ptr && slot_cty &&
                             strcmp(slot_cty, "int64_t") == 0 &&
                             val_len > 0 && val_cty[val_len - 1] == '*';
-                        if (slot_is_ptr && var_is_int64_carrier) {
+                        if (type_is_word_closure_slot(arg_types[i])) {
+                            /* fnsan-ptr-void-fn-slot-word: a `ptr<void>` or
+                             * fn slot is the word, whatever the argument is
+                             * held as. */
+                            buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        } else if (slot_is_ptr && var_is_int64_carrier) {
                             buf_printf(&out, ", (%s)(intptr_t)(%s)", emit_type_c_name(ctx, arg_types[i]), arg_strs[i]);
                         } else if (!slot_is_ptr && (arg_is_fat_box || ptr_into_carrier)) {
                             buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
@@ -16848,6 +16860,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * converts at the word boundary instead of the raw
                          * slot 0 (ensure_fat_word_adapter). */
                         char *wadapt = NULL;
+                        bool wadapt_cast = false;
                         const Expr *ci = e->as.poly_wrap_.inner;
                         while (ci && ci->kind == EX_ASCRIBE) ci = ci->as.ascribe_.inner;
                         const FnDef *cfd = (ci && ci->kind == EX_CLOSURE &&
@@ -16862,7 +16875,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             for (uint8_t ci2 = 0; ci2 < cn; ci2++) {
                                 Type pt = emit_resolve_type(ctx,
                                     emit_fn_arg_type_from_type(cty, (uint8_t)(ci2 + 1)));
-                                pcs[ci2] = type_is_b4box_closure_slot(pt)
+                                pcs[ci2] = (type_is_b4box_closure_slot(pt) ||
+                                            type_is_word_closure_slot(pt))
                                     ? "int64_t" : emit_type_c_name(ctx, pt);
                             }
                             Type rt = emit_resolve_type(ctx,
@@ -16871,7 +16885,53 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                                 : thunk_result_slot_c_name(rt);
                             wadapt = ensure_fat_word_adapter(ctx, rcs, pcs, cn);
                         }
-                        if (wadapt)
+                        /* fnsan-narrow-fat-value-into-concrete-carrier: a fat
+                         * value whose lambda this site cannot see -- the
+                         * result of `(l2f2 ...)`, a `(fn [] int16)` -- still
+                         * has slot 0 at the SLOT convention (a narrow result
+                         * widened, thunk_result_slot_c_name), while a
+                         * concrete (phase F) sink calls `.fn` at the narrow
+                         * type (`__tur_poly_to_fat0_int16_t`).  The thunk_
+                         * binding arm above adapts exactly this when it knows
+                         * the lambda; key the same adapter on the value's own
+                         * type here.  Found by the type fuzzer
+                         * (closure_ret,deep,scalar_int16,through,thunk). */
+                        if (!wadapt && !cfd && !thunk_binding &&
+                            !e->as.poly_wrap_.boxes_aggregate &&
+                            !(ctx->poly_wrap_callee_carrier &&
+                              (e->as.poly_wrap_.carrier_erased_arg_mask ||
+                               e->as.poly_wrap_.carrier_erased_result ||
+                               e->as.poly_wrap_.carrier_erased_result_hkt)) &&
+                            ci && ci->type.kind == TY_FN &&
+                            ci->type.as.fn.arity <= MAX_FN_ARITY) {
+                            Type vty = ci->type;
+                            uint8_t vn = (uint8_t)vty.as.fn.arity;
+                            Type vres = emit_resolve_type(ctx,
+                                emit_fn_result_type_from_type(vty));
+                            const char *vcpc[MAX_FN_ARITY], *vapc[MAX_FN_ARITY];
+                            bool v_ok = vres.kind != TY_FN && vres.kind != TY_NIL &&
+                                type_kind_is_poly_concrete(vres.kind);
+                            for (uint8_t i = 0; i < vn && v_ok; i++) {
+                                Type pt = emit_resolve_type(ctx,
+                                    emit_fn_arg_type_from_type(vty, i));
+                                if (!type_kind_is_poly_concrete(pt.kind)) v_ok = false;
+                                vcpc[i] = thunk_param_slot_c_name(pt);
+                                vapc[i] = emit_type_c_name(ctx, pt);
+                            }
+                            const char *vcrc = v_ok ? thunk_result_slot_c_name(vres) : NULL;
+                            const char *varc = v_ok ? emit_type_c_name(ctx, vres) : NULL;
+                            if (v_ok && strcmp(vcrc, varc) != 0)
+                                wadapt = ensure_call_adapter_ex(
+                                    ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs
+                                                             : ctx->file,
+                                    NULL, vcrc, vcpc, varc, vapc, vn);
+                            wadapt_cast = wadapt != NULL;
+                        }
+                        if (wadapt && wadapt_cast)
+                            buf_printf(&out, "(tur_poly_fn_t){ %s, "
+                                             "(int64_t(*)(void*,int64_t))%s }",
+                                       tmp, wadapt);
+                        else if (wadapt)
                             buf_printf(&out, "(tur_poly_fn_t){ %s, %s }", tmp, wadapt);
                         else
                             buf_printf(&out,
@@ -17401,8 +17461,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sk, i));
                         apc[i] = (ctx->fat_box_sink_erased_mask & ARG_IDX_BIT(i))
                                      ? "int64_t"
-                                     : (type_is_b4box_closure_slot(pt) ? "int64_t"
-                                                                       : type_c_name(pt));
+                                     : thunk_param_slot_c_name(pt);
                         dpc[i] = typed_ok ? thunk_param_slot_c_name(fnt_params[i]) : "int64_t";
                         if (strcmp(apc[i], dpc[i]) != 0) differs = true;
                         /* The default shim also CALLS the function at dpc.  A
@@ -17519,7 +17578,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     const char *apc[MAX_FN_ARITY];
                     for (uint8_t i = 0; i < arity; i++) {
                         Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sft, i));
-                        apc[i] = type_is_b4box_closure_slot(pt) ? "int64_t" : type_c_name(pt);
+                        apc[i] = thunk_param_slot_c_name(pt);
                     }
                     Type rt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sft));
                     const char *arc = rt.kind == TY_NIL ? NULL

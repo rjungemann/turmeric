@@ -361,7 +361,7 @@
           if (!bb) return restored;
           bb[0] = bl;
           if (bl) memcpy(bb + 1, c, (size_t)bl);
-          (void)TUR_APPLY1_T(int64_t, void *, desers[i], bb);
+          (void)TUR_APPLY1_T(int64_t, int64_t, desers[i], bb);
           free(bb);
           restored++;
           break;
