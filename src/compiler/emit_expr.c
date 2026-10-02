@@ -507,7 +507,7 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
      * mismatch).  See the M2-completion primitive-payload construct path.
      *
      * Phase 5 carrier-bridge deletion: NEVER apply the cross-spec fallback to
-     * a `#{Construct}` callee.  emit_call_name disambiguates a construct only
+     * a `^construct` callee.  emit_call_name disambiguates a construct only
      * by the exact Expr* recording (a by-value spec and the carrier base
      * differ ONLY in return ABI), so the same shared `(some ...)` Expr*
      * recorded under a by-value option_map spec must NOT be reported as
@@ -564,7 +564,7 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     if (e->as.call_.n_args == 0) {
         return NULL;
     }
-    /* Same disambiguation for an N-arg `#{Construct}` callee (`(ok x)` /
+    /* Same disambiguation for an N-arg `^construct` callee (`(ok x)` /
      * `(err e)` / `(some x)`): a by-value spec and the int64 carrier base differ
      * ONLY in return ABI, not in argument types, so the structural by-args match
      * below cannot tell them apart.  The per-Expr* recording (handled above) is
@@ -1418,7 +1418,7 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
  * fn_body_tail_is_carrier_producer (ascribe/do/if/let), delegating the leaf
  * decision to expr_emits_byvalue_carrier_abi.
  *
- * Post-M2, a #{Construct} helper (ok/err/some/none) specialized at a concrete
+ * Post-M2, a ^construct helper (ok/err/some/none) specialized at a concrete
  * call site lowers to its by-value `*__spec__*` clone, so a body whose tail is
  * `(ok (make-struct ...))` hands back the struct by value.  The carrier->concrete
  * return-deref in emit_fns.c must NOT fire for such a body -- dereferencing an
@@ -1492,7 +1492,7 @@ static bool call_ordinary_defn_byval_aggregate(EmitCtx *ctx, const Expr *call,
         return false;
     if (!fb->is_global || fb->is_poly_fn || fb->poly_type) return false;
     if (fb->body_is_inline_c) return false;  /* handled by the inline-C seam */
-    /* A `#{Construct}` template (some/none/ok/err) has context-dependent
+    /* A `^construct` template (some/none/ok/err) has context-dependent
      * lowering: in a carrier-returning context (e.g. inside a generic
      * `option_map` spec) it emits its bare int64-carrier base `some(..)`, not
      * the by-value monomorph -- so it is NOT unconditionally a by-value
@@ -2543,7 +2543,7 @@ static char *fat_dispatch_box_arg(EmitCtx *ctx, Buf *body, const Expr *arg,
  * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
  * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
  * the tail is a carrier producer whose by-value aggregate return is nonetheless
- * EMITTED as the int64 carrier (an inline-C / #{Construct} producer under the
+ * EMITTED as the int64 carrier (an inline-C / ^construct producer under the
  * defstruct-as-defadt lowering), `emit_value` yields the carrier handle but the
  * temp is the by-value aggregate -- deref it carrier->concrete so the assign
  * type-checks.  emit_if_value applies the same bridge per arm inline; this is the
@@ -3234,7 +3234,7 @@ const char *match_binder_c_type(const Type *t) {
  *
  * A binding whose declared C type is a by-value aggregate can be initialised by
  * a producer whose C return is the uniform int64 carrier -- an inline-C body
- * declared `: (Result T E)`, a #{Construct} helper, an instance method. Emitting
+ * declared `: (Result T E)`, a ^construct helper, an instance method. Emitting
  * `T x = <int64_t>;` is a hard cc error, so the carrier has to be dereferenced
  * into the aggregate first.
  *
@@ -4440,7 +4440,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool only_then_diverges = then_has_return_or_throw && else_no_return;
     bool only_else_diverges = else_has_return_or_throw && then_no_return;
     /* Phase 5 carrier-bridge deletion: if either arm is a by-value Option/Result
-     * producer (a monomorphized #{Construct} spec), the merge temp must be that
+     * producer (a monomorphized ^construct spec), the merge temp must be that
      * by-value struct -- the if's own `e->type` is collapsed to the int64
      * carrier, so the default temp decl would type it int64 and the by-value arm
      * would `cc`-mismatch.  Declare the temp by-value and bridge each
@@ -13071,7 +13071,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
                      /* CONV-S1 seam 4 (carrier-producer arg -> by-value spec
                       * param): the arg is a direct call to a carrier producer -- an
-                      * inline-C / #{Construct} / `__inst_` method whose by-value
+                      * inline-C / ^construct / `__inst_` method whose by-value
                       * ADT-app result (`(Result bool cstr)` / `(Option Device)`
                       * under lowering) is EMITTED as the int64 carrier, so its
                       * `emit_arg->type` reads by-value (type_uses_carrier_abi
@@ -13216,7 +13216,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_free(&cast);
                     }
                 }
-                /* Option none-as-NULL retirement (Track A): a `#{Construct}`
+                /* Option none-as-NULL retirement (Track A): a `^construct`
                  * result (`some`/`none`/`ok`/`err`, which stay on the int64
                  * carrier base) passed straight into a PLAIN (non-spec) callee
                  * whose declared param is a concrete by-value Option/Result --
@@ -13231,7 +13231,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * historical NULL-deref segfault.
                  *
                  * Scoped TIGHTLY -- only when (a) the arg is itself a call to a
-                 * `#{Construct}` template (the some/none/ok/err carrier
+                 * `^construct` template (the some/none/ok/err carrier
                  * producers, the documented gap), AND (b) the param's struct
                  * family is Option or Result (the only families the bridge's
                  * canonical `tur_option_t`/`tur_result_box_t` field-wise
@@ -17062,7 +17062,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     er = ib->source_fn_def->inferred_effect_row;
                 else if (ib && ib->type.kind == TY_FN)
                     er = ib->type.as.fn.effect_row;
-                bool effectful = er && er->kind != ERK_EMPTY;
+                /* Runtime-pure rows (only capability tags, e.g. IO from a
+                 * `println`) are not CPS-colored and have no `__cps` entry. */
+                bool effectful = er && !effect_row_is_runtime_pure(er);
                 /* The twin force-declares the wrapped fn as `int64_t <fn>(int64_t)`
                  * (emit_module.c) and dispatches its int64 `__cps` entry, so the
                  * wrapped fn's arg AND result must both be a plain `int`/`int64`

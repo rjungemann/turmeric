@@ -3931,7 +3931,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
          * fall back to the first entry (top-level / single-spec, unchanged). */
         const char *active_outer = ctx->current_abi_specialization
             ? ctx->current_abi_specialization->clone_name : NULL;
-        /* option-consumer-retype-byvalue step 2: a `#{Construct}` callee
+        /* option-consumer-retype-byvalue step 2: a `^construct` callee
          * (`some`/`none`/`ok`/`err`) emitted inside a spec whose own return is
          * the int64 carrier must produce the carrier box, not a by-value clone.
          * This case arises in a pure-Turmeric `option-map`/`result-map` body
@@ -4012,7 +4012,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
          * only sound disambiguator; an unrecorded 0-arg constructor stays on
          * the carrier callee.
          *
-         * The SAME hazard applies to an N-arg `#{Construct}` callee
+         * The SAME hazard applies to an N-arg `^construct` callee
          * (`(ok x)` / `(err e)` / `(some x)`): its by-value spec and the int64
          * carrier base share identical argument types and differ only in
          * return ABI, so the by-args match cannot tell them apart.  Once a

@@ -689,7 +689,7 @@ typedef struct EmitCtx {
      * fallback emitted. */
     const Expr  *current_scan_fn;
     /* nested-construct-byvalue (Gap #5): set while the ABI scan descends into the
-     * argument subexpressions of a #{Construct} call that is itself emitting as
+     * argument subexpressions of a ^construct call that is itself emitting as
      * the int64 carrier (no by-value spec).  A nested construct argument under
      * such a carrier consumer must NOT be promoted to a by-value spec, or the
      * carrier consumer (`ok(int64_t)`) would be handed a by-value aggregate
@@ -1135,11 +1135,11 @@ bool emit_fn_body_is_opaque_ptr_over_carrier_result(const FnDef *fd,
  * instead of the shallow struct-only free (see emit_core.c). */
 bool result_err_arm_is_freeable_scalar(const Type *t);
 /* M5 straddle (root cause C): every tail leaf of `e` is a carrier-int64
- * producer call (a #{Construct} helper or an __inst_ method).  Defined in
+ * producer call (a ^construct helper or an __inst_ method).  Defined in
  * emit_fns.c; consumed there and in emit_module.c's forward-decl mirror. */
 bool fn_body_tail_is_carrier_producer(const struct Expr *e);
 /* instance-method-return-carrier-bridge: every tail leaf of `e` already emits a
- * by-value concrete carrier-ABI aggregate (post-M2 #{Construct} spec, make-struct
+ * by-value concrete carrier-ABI aggregate (post-M2 ^construct spec, make-struct
  * literal, by-value var).  Gates off the carrier->concrete return deref so an
  * already-by-value producer is not dereferenced as a heap pointer.  Defined in
  * emit_expr.c. */

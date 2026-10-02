@@ -1049,7 +1049,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     syms[n_valid++] = item->as.sym;
                 }
             }
-            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid);
+            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid,
+                                                      maybe_row->span);
             ret_idx++;
         }
     }
@@ -1813,6 +1814,19 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             memset(def_fd, 0, sizeof(FnDef));
             Binding *def_b = binding_new(e, default_sym, fn_t, false, true,
                                           method_form->span);
+            /* `__default_<Class>_<method>` is the elaborator's name for the
+             * body the user wrote inside the defclass; keep it out of
+             * symbol listings and diagnostics alike. */
+            def_b->is_synthesized = true;
+            def_b->synth_kind = SYNTH_DEFAULT_METHOD;
+            {
+                char lbl[192];
+                int n = snprintf(lbl, sizeof(lbl),
+                                 "default body of method '%s' in class %s",
+                                 method->name->name, name->name);
+                if (n > 0 && (size_t)n < sizeof(lbl))
+                    def_b->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+            }
             def_fd->binding        = def_b;
             def_fd->params         = mp;
             def_fd->n_params       = n_mp;
@@ -2176,7 +2190,7 @@ static Type m7_box_hkt_element_fns_ex(Arena *arena, Type t, bool inner_slots) {
 
 /* M7 HKT layer-4 (flag-gated): is this instance-method body genuinely
  * by-value-constructible?  The emit-side per-(f, A) by-value spec only works
- * when the method body constructs its `(f b)` result IN-BODY via `#{Construct}`
+ * when the method body constructs its `(f b)` result IN-BODY via `^construct`
  * calls (`some`/`none`/`ok`/...) -- so its inner constructs recover by value.
  * A body that DELEGATES to a carrier helper (e.g. `Bifunctor [Result]`'s
  * `(result-bimap container ...)`, where `result-bimap` takes a `:int` carrier)
@@ -2221,7 +2235,7 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
              * of the result applied family -- directly, e.g.
              * `(if (some? x) x y)`.  Under the by-value spec the param's type is
              * the by-value `Option__int`, so returning it is already by value;
-             * no in-body `#{Construct}` is needed.  Restrict to the applied
+             * no in-body `^construct` is needed.  Restrict to the applied
              * `(f b)` family (TY_APP) so a bare-element return (the `extract` /
              * Foldable shape, whose result is not an applied type) stays on the
              * uniform carrier path until its own probe hardens it. */
@@ -2252,7 +2266,7 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
 /* M7 HKT layer-4 (flag-gated): is this instance-method body a by-value-safe
  * BARE-ELEMENT return?  The Comonad `extract [w : (f a)] : a` / Foldable shape
  * returns a bare element (`a`, grounding to a scalar/struct), not an applied
- * `(f b)` -- so there is no `#{Construct}` to recover, and m7_body_constructs_
+ * `(f b)` -- so there is no `^construct` to recover, and m7_body_constructs_
  * byvalue (which looks for one) correctly rejects it.  A bare-element body is
  * by-value-safe when its tail merely READS a scalar out of the (now by-value)
  * receiver -- a field access `(.value w)` -- or returns a bare element binding
@@ -4820,6 +4834,23 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * `__inst_Eq_eq_qu_int` -- keep the mangled name out of every
          * human-facing symbol listing. */
         method_binding->is_synthesized = true;
+        method_binding->synth_kind = SYNTH_INSTANCE_METHOD;
+        /* ...and out of diagnostics, in the words the user did write. */
+        {
+            char args[96] = "";
+            size_t used = 0;
+            for (uint8_t ti = 0; ti < n_type_args && used < sizeof(args); ti++) {
+                int w = snprintf(args + used, sizeof(args) - used, "%s%s",
+                                 ti ? " " : "", type_name(type_args[ti]));
+                if (w < 0) break;
+                used += (size_t)w;
+            }
+            char lbl[224];
+            int n = snprintf(lbl, sizeof(lbl), "method '%s' of instance %s [%s]",
+                             method_name_str, tc_name->name, args);
+            if (n > 0 && (size_t)n < sizeof(lbl))
+                method_binding->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+        }
 
         /* RT1 VARIANCE: an instance may accept MORE than its class signature
          * promises, never less.  The class signature is the contract callers

@@ -2377,6 +2377,42 @@ void elab_pre_declare_any_mut_def(Elab *ep, const Form *f) {
     scope_add(&ep->global, b);
 }
 
+/* The index of a `(defn ...)` form's name: past the bare attribute symbols
+ * (#[no-unwind] / #[used]), an `(export-as "c_name")`, and the `^attr`s
+ * elab_defn takes before the name (^construct, ^byval, ^deprecated
+ * ["message"], ^reflect), in any order.  Every scanner that wants a defn's
+ * name before elab_defn runs goes through this, so a new pre-name attribute
+ * is taught in one place -- the module pre-declare scan used to skip none of
+ * the `^` ones.  Unknown `^attr`s are skipped too: elab_defn reports them.
+ * Returns f->as.list.len when the form has no name. */
+uint32_t elab_defn_name_index(const Elab *ep, const Form *f) {
+    uint32_t n = f->as.list.len;
+    uint32_t i = 1;
+    while (i < n) {
+        const Form *it = f->as.list.items[i];
+        if (it->tag == F_SYM &&
+            (it->as.sym == ep->sym_no_unwind_attr || it->as.sym == ep->sym_used_attr)) {
+            i++;
+            continue;
+        }
+        if (it->tag == F_LIST && it->as.list.len == 2 &&
+            it->as.list.items[0]->tag == F_SYM &&
+            it->as.list.items[0]->as.sym == ep->sym_export_as_attr) {
+            i++;
+            continue;
+        }
+        if (it->tag == F_SYM && it->as.sym->len > 1 && it->as.sym->name[0] == '^') {
+            i++;
+            if (it->as.sym == ep->sym_caret_deprecated && i < n &&
+                f->as.list.items[i]->tag == F_STR)
+                i++;
+            continue;
+        }
+        break;
+    }
+    return i;
+}
+
 void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
         elab_pre_declare_any_mut_def(ep, f);
         if (f->tag == F_LIST && f->as.list.len > 0) {
@@ -2385,45 +2421,8 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                 if (head->as.sym == ep->sym_defn) {
                     /* Parse defn declaration without body */
                     if (f->as.list.len >= 3) {
-                        /* Phase R5: skip optional #[no-unwind] / #[used] bare
-                         * attribute symbols (either order) before the name. */
-                        uint32_t name_idx = 1;
-                        while ((uint32_t)f->as.list.len > name_idx &&
-                               f->as.list.items[name_idx]->tag == F_SYM &&
-                               (f->as.list.items[name_idx]->as.sym == ep->sym_no_unwind_attr ||
-                                f->as.list.items[name_idx]->as.sym == ep->sym_used_attr)) {
-                            name_idx++;
-                        }
-                        /* Phase M6: skip optional (export-as "c_name") attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_LIST &&
-                            f->as.list.items[name_idx]->as.list.len == 2 &&
-                            f->as.list.items[name_idx]->as.list.items[0]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.list.items[0]->as.sym == ep->sym_export_as_attr) {
-                            name_idx += 1; /* skip (export-as "c_name") */
-                        }
-                        /* reflected-measures RF0: skip `^reflect`, in either
-                         * order with ^deprecated (elab_defn accepts both). */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_reflect) {
-                            name_idx += 1;
-                        }
-                        /* F4: skip optional ^deprecated [message] attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_deprecated) {
-                            name_idx += 1;
-                            if ((uint32_t)f->as.list.len > name_idx &&
-                                f->as.list.items[name_idx]->tag == F_STR) {
-                                name_idx += 1;
-                            }
-                        }
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_reflect) {
-                            name_idx += 1;
-                        }
+                        /* Skip every pre-name attribute (shared helper). */
+                        uint32_t name_idx = elab_defn_name_index(ep, f);
                         if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
                         Form *name_f = f->as.list.items[name_idx];
                         if (name_f->tag == F_SYM) {

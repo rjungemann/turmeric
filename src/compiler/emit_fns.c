@@ -1177,7 +1177,7 @@ bool inline_c_returns_byvalue_adt(EmitCtx *ctx, bool body_is_inline_c,
 
 /* M5 straddle (root cause C of m5-suite-residual-6-failures): true when every
  * tail leaf of `e` is a call that emits an int64 carrier value -- a
- * #{Construct} helper (some/ok/err/none) or a typeclass-method impl
+ * ^construct helper (some/ok/err/none) or a typeclass-method impl
  * (__inst_*), both of which return the carrier handle regardless of their
  * declared (Option A)/(Result A B) type.  Used to decide whether a by-value
  * carrier-aggregate return needs a carrier->concrete deref bridge.  Shared
@@ -1231,7 +1231,7 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
              * body whose declared return type uses the carrier ABI is lowered
              * with an int64_t C return type, so a tail call to it yields the
              * carrier handle.  A pure-Turmeric wrapper around such a helper
-             * needs the same carrier->by-value bridge that the #{Construct}
+             * needs the same carrier->by-value bridge that the ^construct
              * and __inst_ producers above already get.
              * See docs/archive/history/tail-call-inline-c-carrier-bridge.md. */
             if (b->body_is_inline_c && b->type.kind == TY_FN &&
@@ -1406,7 +1406,7 @@ static bool catch_box_tail_sole_owned(const Expr *fnbody, const Expr *e) {
  * distinct monomorph, so `return <box>` is an int64->struct cc error without a
  * carrier->concrete bridge.  Gating on the catch-box tail structurally --
  * rather than on emit_type_c_name, which reports "int64_t" for a by-value
- * #{Construct} tail (`ok`/`err`/`some`/`none`) too -- is what keeps this from
+ * ^construct tail (`ok`/`err`/`some`/`none`) too -- is what keeps this from
  * mis-firing on the ordinary Result constructors the M4c/M5 branches own. */
 static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
                                                   const Expr *fn_e,
@@ -1816,7 +1816,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                      * repeated too, and was not.  A binding whose C type is a
                      * by-value aggregate, initialised by a producer whose C
                      * return is the int64 carrier (an inline-C body declared
-                     * `: (Result T E)`, a #{Construct} helper, an instance
+                     * `: (Result T E)`, a ^construct helper, an instance
                      * method), emitted `T x = <int64_t>;` -- a hard cc error,
                      * loud but pointing at a generated identifier, and absent
                      * the moment the recursive call left tail position.  The
@@ -4665,7 +4665,7 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          *
          * instance-method-return-carrier-bridge: also skip the deref when
          * the body tail already emits the struct by value (a post-M2
-         * #{Construct} spec like `(ok (make-struct ...))` lowers to its
+         * ^construct spec like `(ok (make-struct ...))` lowers to its
          * by-value `*__spec__*` clone). */
         Type sink_rt = ctx->current_abi_specialization->result_type;
         char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
@@ -4700,7 +4700,7 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          * return is the uniform int64 carrier (a lifted lambda thunk in a
          * poly_fn slot, or a generic carrier base) but the body tail now
          * produces a by-value Option/Result struct (a monomorphized
-         * #{Construct} spec like `some__spec`).  Heap-spill the struct and
+         * ^construct spec like `some__spec`).  Heap-spill the struct and
          * return its pointer as int64 -- the SAME malloc spill the
          * inst_method_carrier_spill path uses, so the carrier consumer
          * (which derefs a {is_some,value}/{is_ok,...} layout) reads it
@@ -5946,7 +5946,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * lower to TY_ADT/TY_APP -- so the population never fired and has been
      * removed.  `needs_box_spill` therefore stays all-false; the rename +
      * heap-spill stanza below remain as an inert safety net for future
-     * inline-C `#{Construct}` bodies that cast a pointer-carried param. */
+     * inline-C `^construct` bodies that cast a pointer-carried param. */
     /* B4 (byvalue-recursive-carrier, slice 2): the inverse of box-spill.  A
      * CLOSURE thunk whose parameter is a WIDE (>8 byte) by-value ADT receives it
      * across the fat-closure boundary as an int64 heap-box POINTER (the value
@@ -6189,7 +6189,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* M2b RETIRED M2a inference (2026-06-13).
      *
      * Background: M2a (generalized from Prereq 6) used shape inference to
-     * synthesize a direct by-value constructor body for `#{Construct}`-
+     * synthesize a direct by-value constructor body for `^construct`-
      * annotated polymorphic constructors with value-struct payloads.  It
      * reconstructed the discriminator-tag + payload-field assignment by
      * matching the param's C type against StructDef type-params, then
@@ -6214,7 +6214,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     bool prereq6_synthesized_body = false;
 
     /* M2b (end-to-end-monomorphization-plan, Plan M2): synthesize a CARRIER
-     * body for any `#{Construct}` polymorphic constructor whose user body is
+     * body for any `^construct` polymorphic constructor whose user body is
      * a `(make-struct …)` expression and which is being emitted in the
      * generic carrier-emit path (no `current_abi_specialization`).  Without
      * this, the make-struct body lowers to `(int64_t){.field = …}` — invalid
@@ -6237,7 +6237,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * for the rationale; this implements that report's option (a). */
     bool m2b_carrier_synth = false;
     /* Fire in TWO contexts:
-     *   (a) generic carrier-only emit (no spec at all) — every #{Construct}
+     *   (a) generic carrier-only emit (no spec at all) — every ^construct
      *       polymorphic defn must always emit a callable fallback symbol;
      *   (b) a spec whose declared result type lowers to the int64 carrier
      *       (typeclass-method dispatch context: the method's signature is
@@ -6246,7 +6246,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * was keyed on the StructDef* in the make-struct node, which is now
      * always NULL (structs lower to ADTs).  The branch never fired, so
      * m2b_carrier_synth stays false and the normal body-emit path handles
-     * every #{Construct} constructor. */
+     * every ^construct constructor. */
 
     {
         /* M2b retirement of the M2a inference path: the shape-inference
@@ -6261,7 +6261,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * for the migration history.
          *
          * The heap-spill stanza below stays: it sets up the `__tur_inbox_X`
-         * pointer for the few inline-C `#{Construct}` bodies that may still
+         * pointer for the few inline-C `^construct` bodies that may still
          * cast their params via `(int64_t)(intptr_t)x`.  Stdlib has none,
          * but the safety net is cheap and future user code can rely on it. */
         {

@@ -1251,7 +1251,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (eff_f->tag == F_SYM) {
                 single_name = eff_f->as.sym->name;
                 const Symbol *one[1] = { eff_f->as.sym };
-                handled_row = effect_row_unresolved(e->arena, one, 1);
+                handled_row = effect_row_unresolved(e->arena, one, 1, eff_f->span);
             } else if (eff_f->tag == F_MAP) {
                 warn_legacy_fx_row(eff_f);
                 uint8_t n_sym = (uint8_t)eff_f->as.list.len;
@@ -1262,7 +1262,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     Form *item = eff_f->as.list.items[j];
                     if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
                 }
-                handled_row = effect_row_unresolved(e->arena, syms, n_valid);
+                handled_row = effect_row_unresolved(e->arena, syms, n_valid,
+                                                    eff_f->span);
                 if (n_valid == 1) single_name = syms[0]->name;  /* still single */
             } else {
                 diag_emit(DIAG_ERROR, eff_f->span,
@@ -1642,7 +1643,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     Form *item = row_form->as.list.items[rj];
                     if (item->tag == F_SYM) row_syms[n_row_valid++] = item->as.sym;
                 }
-                fn_effect_row = effect_row_unresolved(e->arena, row_syms, n_row_valid);
+                fn_effect_row = effect_row_unresolved(e->arena, row_syms, n_row_valid,
+                                                      row_form->span);
             }
             /* Return type — must be the last element */
             if (idx >= form->as.list.len) {

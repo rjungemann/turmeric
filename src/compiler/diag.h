@@ -69,6 +69,8 @@ typedef enum DiagCode {
     /* duplicate-instance-silently-drops-a-user-definstance: a user definstance
      * for a (class, type) the stdlib already covers is rejected, not dropped */
     TUR_E0025_DUPLICATE_INSTANCE,                 /* instance already defined for this class and type */
+    /* effect-row honesty W1: a #fx{...} names an effect no defeffect declares */
+    TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
 
     TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */
@@ -304,6 +306,9 @@ typedef enum DiagCode {
      * F_MAP whose provenance is PROV_FX_AT_LEGACY is consumed as an
      * effect row.  Note: this does not affect bare `@x` deref sugar. */
     TUR_D0003_FX_ROW_LEGACY_AT,
+    /* effect-row-honesty-plan W0: `(match #fx{NonExhaustive} x ...)` is
+     * deprecated; the marker is the attribute `^non-exhaustive`. */
+    TUR_D0004_NONEXHAUSTIVE_FX_MARKER,
     /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
      * E0310 fires at CLI/manifest parse on an unknown experiment name;
      * W0060/W0061 fire once per compile at the first use site of an enabled

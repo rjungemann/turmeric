@@ -682,7 +682,7 @@ only after the compiler shows the function
   subterm of such. `(f (- n 1))` rejects by design, as does mutual recursion
   and a call through a variable;
 - **covered** -- every `match` is proven exhaustive. ADT and union
-  scrutinees already are (compiling implies it); a `#{NonExhaustive}`
+  scrutinees already are (compiling implies it); a `^non-exhaustive`
   opt-out or a literal-scrutinee `match` with no `_`/variable arm rejects,
   and so does any form the walk does not positively recognise (macros,
   lambdas, `panic`, loops, `set!`).

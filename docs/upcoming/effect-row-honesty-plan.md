@@ -1,8 +1,12 @@
 # Effect-row honesty -- answer WP8 as Option A, and make `#fx{}` mean something
 
 > **Status: PROPOSED 2026-10-01, all three open questions resolved the same
-> day** (section 6 -- Q1 and Q2 by measurement, Q3 by the author). Nothing
-> implemented. Written in response to
+> day** (section 6 -- Q1 and Q2 by measurement, Q3 by the author).
+> **W0-W4 DONE 2026-10-02** (W1 first; W0 turned out not to be its
+> prerequisite), and **W5's two gating defects fixed the same day.** What
+> remains is W5 itself -- the `--strict-effects` default -- which this plan
+> recommends against, now with the post-W4 measurement it asked for (see W5).
+> Written in response to
 > two questions about the security guide -- whether `--no-proc-macros` should
 > default on "because Rust defaults `procMacro.enable = false`", and whether
 > `--strict-effects` should default to true -- plus the observation that
@@ -19,9 +23,9 @@
 > **Answers:** security-audit-plan open question 3 (`#fx{Unsafe}` semantics)
 > as **Option A**, and supersedes WP8's first bullet.
 > **Files alongside:**
-> [capability-effect-tag-silently-resolves-to-empty-row](../reported/capability-effect-tag-silently-resolves-to-empty-row.md),
-> [strict-effects-w0030-names-synthesized-lambdas](../reported/strict-effects-w0030-names-synthesized-lambdas.md),
-> [strict-effects-and-lint-effects-are-indistinguishable](../reported/strict-effects-and-lint-effects-are-indistinguishable.md).
+> [capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md),
+> [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md),
+> [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md).
 
 ## 1. The thesis
 
@@ -127,7 +131,18 @@ language has.
 Ordered by dependency: W0 -> W1 -> W2 -> W4; W3 is independent and can land
 any time.
 
-### W0 -- Split attributes out of `#fx{}` (new, now the foundation)
+### W0 -- Split attributes out of `#fx{}` -- DONE 2026-10-02
+
+> **Done:** `(defn ^construct some ...)`, `(defn ^byval name ...)`,
+> `(match ^non-exhaustive x ...)`.  `^construct`/`^byval` sit before the
+> defn's name with `^deprecated`/`^reflect` (one parse loop, any order; one
+> shared `elab_defn_name_index` for the pre-name scans, and `gendocs.py` taught
+> the carets).  `#fx{NonExhaustive}` still opts out, with **TUR-D0004** (an
+> error under `--Werror=deprecated`); one fixture per spelling.  Left in a row,
+> `Construct`/`ByVal`/`NonExhaustive` are TUR-E0026 with a hint naming the new
+> spelling, and an unknown pre-name `^attr` is now an error rather than being
+> taken as the function's name.  Turned out not to be W1's prerequisite -- see
+> W1 -- so it landed after it.
 
 Move the three compiler attribute markers onto the `^attr` syntax the language
 already has, leaving `#fx{...}` holding effect names and row variables only.
@@ -168,10 +183,26 @@ Transition, because one of them is published syntax:
 `grep -r '#fx{Construct}\|#fx{ByVal}' --include=*.tur` is empty; the
 `NonExhaustive` dual-accept has a fixture for each spelling.
 
-### W1 -- Make effect-row resolution honest
+### W1 -- Make effect-row resolution honest -- DONE 2026-10-02
+
+> **Done:** an undeclared name is `TUR-E0026`, in every row position, with a
+> did-you-mean and a load hint for the `stdlib/effects.tur` names. Two
+> corrections to what this section assumed, both measured with the real
+> compiler rather than `--dump-effects`:
+>
+> - **W0 was not a prerequisite.** `Construct` and `ByVal` never reach
+>   resolution -- the `defn` row parser plucks them before building the row --
+>   and `#fx{NonExhaustive}` is a `match` marker, never a row. So the rule
+>   below landed with no allowlist and no W0. W0 stays worth doing as the
+>   syntax cleanup it is.
+> - **The sweep was not zero.** Four rows had never resolved: a stdlib
+>   `#fx{FS}` on `show-string-fputs` (a stdout writer; tag removed, it matches
+>   `println` until W4) and three fixtures' undeclared `Write` and `#fx{|e}`.
+>   All fixed in the same change; turmeric-spices has none. Details in the
+>   archived report's Resolution.
 
 Filed as
-[capability-effect-tag-silently-resolves-to-empty-row](../reported/capability-effect-tag-silently-resolves-to-empty-row.md).
+[capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md).
 An uppercase name in `#fx{...}` that no `defeffect` in the compile declares is
 dropped silently, so `#fx{IO}` checks as `#fx{}` -- and a caller's `#fx{}`
 then passes a check it should fail.
@@ -191,7 +222,18 @@ warn-then-error transition.
 **Exit:** the repro in that report errors instead of printing two `#{}` rows,
 and `stdlib/` still compiles.
 
-### W2 -- Make `IO` available where `println` is (prerequisite)
+### W2 -- Make `IO` available where `println` is -- DONE 2026-10-02
+
+> **Done:** the five tags are registered, with parents and `is_capability`,
+> wherever `Unsafe` is -- the elaborator's env, `PASS_EFFECT_LOWER`'s and the
+> interpreter's session env (`effect_env_register_builtin_capabilities`).
+> `stdlib/effects.tur` keeps its declarations, because the docs live on them;
+> a `defeffect` of one of these names is accepted only when it matches the
+> built-in exactly, and anything else is an error naming the expected form.
+> **`Bt` stays in `trail.tur`:** it is declared next to the mutators it
+> annotates, in an autoloaded file, and since W1 an undeclared name is an
+> error rather than a silent drop -- so its placement is ordinary now, not a
+> workaround, and it did not need to become compiler-known.
 
 `IO` lives in `stdlib/effects.tur:29`, which is not autoloaded. `println` is
 available everywhere. Tagging the builtin without fixing that would make the
@@ -206,7 +248,15 @@ only to dodge this problem.
 
 **Exit:** `#fx{IO}` resolves in a file that imports nothing.
 
-### W3 -- Guide corrections (independent, no code)
+### W3 -- Guide corrections -- DONE 2026-10-02
+
+> **Done:** all three items.  The rust-analyzer sentence and the
+> `#fx{Unsafe}` paragraph in the security guide (each claim re-probed), the
+> audit plan's M-7 row, open question 3 and WP8 decision bullet; and the
+> effects guide's "Printing: `println` or `(perform (Write s))`?" section,
+> written against W4's semantics -- with W4, `println` maps to `putStrLn`
+> (tracked) rather than `Debug.Trace`, and `Write` to an interpretable output
+> effect.
 
 Two factual errors, both in `docs/guides/security-guide.md` (plus W0's
 `sum-types-guide.md` rewrite, which lands with W0 rather than here):
@@ -250,7 +300,38 @@ macros. The faithful analogy is a **per-subcommand** default -- deny for
 today. Out of scope for this plan; recorded so the next person does not
 re-derive it.
 
-### W4 -- `^capability` on `println`
+### W4 -- `^capability` on `println` -- DONE 2026-10-02
+
+> **Done:** `BuiltinSpec.effect` (the declared capability, by name); all 14
+> `println` rows say `"IO"`; the effect pass merges it in the `EX_BUILTIN` arm
+> and, for Saffron's dynamic `println`, the `EX_DYN_OP` arm.  The exit holds on
+> both engines.  Three things the item did not list, all needed:
+>
+> - **Capability filters on the "can this perform an effect at runtime?"
+>   gates** -- `fn_effect_may_escape` (cps_ir.c), `callee_effect_free`
+>   (emit_cps_ir.c), the poly-wrap `__cps` twin gate (emit_expr.c) and
+>   `serial_receiver_with_escaping_effect` (emit_effects.c) now ask
+>   `effect_row_is_runtime_pure` instead of "is the row empty".  Without it
+>   every printing int->int function would have grown a `__cps` twin.  No
+>   codegen snapshot moved.  CPS *coloring* needed nothing: it seeds on control
+>   operators, not rows.
+> - **Lint filters** -- TUR-W0032 ignores capability tags (a row-polymorphic
+>   HOF that prints is not "always concrete"), and TUR-W0033 strips them from
+>   the handled body's row (IO is Write's parent, so a body that merely prints
+>   would otherwise make every Write clause look reachable).
+> - **Fixtures:** nine annotated fixtures printed under a row that did not say
+>   so; each now names IO (or, for the two whose point was a *pure* closure,
+>   uses one).  New: `errors/println-in-pure-fn` (four routes, run under both
+>   engines), `errors/println-in-pure-fn-saffron`, `println-io-row`.  Hover
+>   renders `(println : (fn [int] #fx{IO} : nil))`.  `show-string-fputs`
+>   (typeclass-show.tur), the only other stdout writer, says `#fx{IO}` too.
+>
+> **turmeric-spices: unaffected** -- the same 649 of 777 files check clean
+> before and after.  Partly for a bad reason: module members are not
+> effect-checked at all (only top-level functions are), and every spice-test
+> `main` that prints under a row sits inside a `defmodule`.  That gap is filed
+> as [module-members-skip-effect-row-checking](../reported/module-members-skip-effect-row-checking.md);
+> closing it is the next step toward `#fx{}` meaning something everywhere.
 
 With W1 and W2 landed, tag the `println` builtin `#fx{IO}`.
 
@@ -277,12 +358,16 @@ the same function unannotated still compiles.
 
 ### W5 -- Then, and only then, revisit the `--strict-effects` default
 
-Two filed defects gate this, both found while measuring it:
+Two filed defects gated this, both found while measuring it. **Both fixed
+2026-10-02:** no effect diagnostic names a gensym (a lambda is *anonymous
+function in 'dfs-or'*), and `--strict-effects` is the one flag, promotable
+with `-Werror=strict-effects`, with `--lint-effects` a deprecated alias. What
+is left of W5 is the default itself, after W4:
 
-- [strict-effects-w0030-names-synthesized-lambdas](../reported/strict-effects-w0030-names-synthesized-lambdas.md)
+- [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md)
   -- 47 of 358 warnings name `__fn_38`-style gensyms. A default-on lint that
   is 13% unactionable teaches people to ignore the category.
-- [strict-effects-and-lint-effects-are-indistinguishable](../reported/strict-effects-and-lint-effects-are-indistinguishable.md)
+- [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md)
   -- the two flags emit the same warning, neither can become an error, and the
   comment claiming otherwise is wrong. Decide which flag survives before
   giving either a default.
@@ -292,12 +377,31 @@ invisible. Once `println` carries `#fx{IO}`, the corpus-wide cost of
 `--strict-effects` is a different and much larger number, and the current
 measurement says nothing about it.
 
+> **Re-measured 2026-10-02, after W4**, over `stdlib/` plus `tests/fixtures/`
+> (3,830 files):
+>
+> | | before W4 | after W4 |
+> | --- | --- | --- |
+> | `TUR-W0030` warnings | 342 | **3,252** |
+> | files with at least one | 202 (5%) | **2,418 (63%)** |
+> | warnings whose row is only `{IO}` | -- | 2,909 (89%) |
+> | warnings on `main` | -- | 2,355 (72%) |
+> | `TUR-W0032` | 1 | 1 |
+>
+> So a default-on `--strict-effects` would now flag most programs, and mostly
+> for one thing: an unannotated `main` that prints.  That is the prediction
+> this section made, and it settles the recommendation below.  If W0030 is
+> ever defaulted on, exempting `main` (the program's entry, whose row nobody
+> calls into) would remove 72% of it on its own -- a question for whoever
+> reopens W5, not a change this plan makes.
+
 **Recommendation: do not default it on in this plan.** The honest version of
 "meaningful effect reporting" is W1-W4 -- making `#fx{}` a claim the compiler
 actually checks. A default-on W0030 is a *style* lint over unannotated code,
-which is a separate question with a worse cost/benefit, and it buys nothing
-for security: `diag.c:110` discards warning severity unconditionally, so
-W0030 cannot fail a build no matter what it is pointed at.
+which is a separate question with a worse cost/benefit -- 63% of the corpus
+after W4, above -- and it buys nothing for security: a warning never fails a
+build (`diag.c:110`), and the opt-in `-Werror=strict-effects` is the way a
+project that wants the gate already gets it.
 
 ## 5. What this does not do
 
@@ -312,6 +416,12 @@ W0030 cannot fail a build no matter what it is pointed at.
 ## 6. Open questions -- all three resolved 2026-10-01
 
 ### Q1. W1's blast radius -- RESOLVED by measurement
+
+> **Correction 2026-10-02:** not zero. Checked with the real compiler (W1's
+> `TUR-E0026`), four rows had never resolved -- see W1. The resolver itself
+> is the better detector than a `--dump-effects` diff: it sees every row
+> position and every loaded file (the `typeclass-show.tur` site is reached
+> only through a load). The paragraph below is kept as written.
 
 **Zero undeclared effect tags in the corpus.** Over `stdlib/` plus
 `tests/fixtures/`: 146 files carry a `#fx{...}` tag, 28 distinct names, and

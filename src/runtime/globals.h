@@ -122,9 +122,6 @@ extern bool g_dump_cps;
  * carrier, dictionary, polymorphic-wrapper) for each call site during emit-c */
 extern bool g_emit_abi_trace;
 
-/* ER6: --lint-effects flag — advisory warnings for unannotated effectful functions */
-extern bool g_lint_effects;
-
 /* LT0: -Xlinear flag — enable linear type checking */
 extern bool g_linear_enabled;
 
@@ -209,6 +206,11 @@ extern bool g_werror_deprecated;
  * warnings to errors so a strict build can gate against unannotated narrow
  * parameters reaching inline-C bodies. */
 extern bool g_werror_inline_c_narrow_params;
+
+/* -Werror=strict-effects: promote the --strict-effects lints (TUR-W0030,
+ * TUR-W0032) to errors, so a build can gate on effect annotations.  Implies
+ * --strict-effects, the way gcc's -Werror=<x> implies -W<x>. */
+extern bool g_werror_strict_effects;
 
 /* forall-kinds GRADUATED 2026-07-06 -- explicit kind annotations on
  * forall/exists bound variables ((f :: * -> *)) are always accepted; the enable

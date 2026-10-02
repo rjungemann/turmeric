@@ -709,7 +709,9 @@ static bool atom_is_fn_value(const CAtom *a) {
  * An indirect / unknown callee (fn == NULL) is conservatively NOT effect-free. */
 static bool callee_effect_free(const Binding *fn) {
     if (!fn || fn->type.kind != TY_FN) return false;
-    if (effect_row_is_empty(fn->type.as.fn.effect_row)) return true;
+    /* Runtime-pure, not merely empty: a capability tag (IO from a `println`,
+     * FS, Bt) is never performed, so it cannot cross a fn-value argument. */
+    if (effect_row_is_runtime_pure(fn->type.as.fn.effect_row)) return true;
     /* A ROW-VARIABLE declared row (`#fx{e}`) reads as non-empty, but the fn may be
      * runtime-PURE: its INFERRED row (computed over the body by the P19-2 effect
      * pass, stable before codegen so still fixpoint-independent) is the sound
@@ -718,7 +720,7 @@ static bool callee_effect_free(const Binding *fn) {
      * `run-twice [x] #fx{e} = (+ x x)`).  Fall back to it when the declared row is
      * a non-empty row variable. */
     const FnDef *fd = g_prog ? fd_for_binding(g_prog, fn) : NULL;
-    if (fd && fd->inferred_effect_row && effect_row_is_empty(fd->inferred_effect_row))
+    if (fd && fd->inferred_effect_row && effect_row_is_runtime_pure(fd->inferred_effect_row))
         return true;
     return false;
 }

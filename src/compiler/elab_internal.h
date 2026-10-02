@@ -473,14 +473,19 @@ typedef struct Elab {
     const Symbol *sym_used_attr;
     /* Phase M6: (export-as "c_name") attribute for explicit C symbol naming */
     const Symbol *sym_export_as_attr;
-    /* M2a (end-to-end-monomorphization-plan): #{Construct} marker on a
-     * polymorphic stdlib constructor defn. Picked up in elab_fns.c when the
-     * defn's effect-row map is parsed. */
-    const Symbol *sym_construct_attr;
-    /* M5 residual-straddle retirement: #{ByVal} marker symbol.  See the
+    /* M2a (end-to-end-monomorphization-plan): `^construct` on a polymorphic
+     * stdlib constructor defn, `(defn ^construct some ...)`.  Picked up with
+     * the other pre-name attributes in elab_defn.  (Was `^construct`,
+     * an attribute borrowing the effect row -- effect-row-honesty-plan W0.) */
+    const Symbol *sym_caret_construct;
+    /* M5 residual-straddle retirement: `^byval` (was `^byval`).  See the
      * `prefer_byvalue_spec` comment on Binding in expr.h for the rationale
      * and demolition date. */
-    const Symbol *sym_byval_attr;
+    const Symbol *sym_caret_byval;
+    /* Sum-types T6: `(match ^non-exhaustive x ...)`, and `NonExhaustive`
+     * for the deprecated `(match #fx{NonExhaustive} x ...)` (TUR-D0004). */
+    const Symbol *sym_caret_non_exhaustive;
+    const Symbol *sym_non_exhaustive_legacy;
     const Symbol *sym_panic_payload_type;
     const Symbol *sym_panic_payload_value;
     const Symbol *sym_panic_payload_file;
@@ -700,7 +705,7 @@ typedef struct Elab {
     Kind         sig_tyvar_kinds[32];
     uint8_t      n_sig_tyvars;
     /* generic-ctor-over-sig-tyvar-erased: the defn being elaborated is a
-     * `#{Construct}` template (stdlib `some`/`ok`/`err`...), whose bare-ctor
+     * `^construct` template (stdlib `some`/`ok`/`err`...), whose bare-ctor
      * body the emitter types from the spec's RESULT, not its bindings. */
     bool         in_construct_template;
     /* Phase G3: coerce special form */
@@ -2266,6 +2271,9 @@ Expr       *elab_binding(Elab *e, const Form *call);
 DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name);
 
 /* elab_effects.c -- fx-row-syntax-rename-plan Phase 2 deprecation warner */
+/* The index of a `(defn ...)` form's name, past its pre-name attributes
+ * (elab_toplevel.c).  Returns the form's length when there is no name. */
+uint32_t elab_defn_name_index(const Elab *ep, const Form *f);
 void warn_legacy_fx_row(Form *f);
 
 /* elab_sessions.c */
