@@ -42,10 +42,22 @@ jobs:
     # it.  Between 09-19 and 09-29 the macOS aux job's serial chain went from
     # 3.8 min to 18.3 min as those suites landed, and total wall time from
     # ~22 min to ~36 min -- growth that lands entirely on the critical path
-    # and cannot be recovered by -j.  Measured from the ci-metrics trend
-    # (branch `ci-metrics`, suite-timings-2026.jsonl), medians 09-28..09-30:
-    # the split takes the macOS aux part to ~13 min and gives r7rs its own
-    # ~10 min, against the ~28 min they cost together.
+    # and cannot be recovered by -j.  That split gave r7rs its own ~10 min.
+    #
+    # The same mechanism then did it again, one layer down, and the budget this
+    # comment used to quote ("~13 min" for aux, measured 09-28..09-30) was
+    # already stale when it was written: tur_generic_spec_matrix and
+    # tur_emitted_float_conversions were registered on 09-30 and took the macOS
+    # aux job from 18m12s to 67m28s in ONE merge (#1007, 8bb60d016).  Both are
+    # RUN_SERIAL for the same reason as the r7rs pair, and together they were
+    # 70% of the job.  `fconv` and `gsm1`/`gsm2` are the answer, and the leg
+    # asymmetry below is the rest of it.  PROJECTED from the pre-change
+    # measurements, not yet observed: macOS aux 66 -> ~27 min, Linux aux
+    # ~15 min with the two suites moved out.  Check them against the real trend
+    # (branch `ci-metrics`, suite-timings-2026.jsonl) once this has run a few
+    # times, and correct this comment to measured numbers then -- the "~13 min"
+    # that used to be here was measured, and went stale in two days anyway, so
+    # a number in this comment is worth only as much as its date.
     #
     # The parts must between them run every registered test, and that is no
     # longer something to verify by hand: every pattern below comes from
@@ -57,6 +69,18 @@ jobs:
     # passing it vacuously.
     name: ${{ matrix.job_name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # This job had NO timeout-minutes and so inherited GitHub's 360-minute
+    # default, which is why a 67-minute macOS aux job passed quietly instead of
+    # saying anything.  A number here is a diagnostic, not a budget.
+    #
+    # 90, against a projected ~27 min for the slowest part (macOS aux) plus a
+    # cold-cache build: deliberately loose, because a timeout-minutes kill is the
+    # one outcome with NO diagnostics -- it cancels the job and leaves the
+    # `if: always()` timing uploads pending, so a run killed here tells you less
+    # than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
+    # the tight bound and they name the suite; this is only the outer fence.
+    # Tighten it once the post-split durations are in the trend, not before.
+    timeout-minutes: 90
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
     # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
@@ -349,10 +373,10 @@ jobs:
 
       - name: Run auxiliary suites
         if: matrix.part == 'aux'
-        # Everything except tur_tests, once per OS, in its own job so it
-        # overlaps the fixture corpus instead of following it.
+        # Everything the other parts do not claim, once per OS, in its own job
+        # so it overlaps the fixture corpus instead of following it.
         #
-        # -j: this step runs ~155 targets, so without it wall time is their sum.
+        # -j: this step runs ~160 targets, so without it wall time is their sum.
         # The count must be explicit -- through CMake 3.28 a bare `-j` is
         # accepted silently and does nothing (see the Justfile `test` recipe).
         # getconf _NPROCESSORS_ONLN is portable across the Linux and macOS
@@ -389,7 +413,7 @@ jobs:
         # tur_r7rs_sanitize) fan out across nproc internally and so must stay
         # RUN_SERIAL, which on ctest's scheduler is a barrier for the whole
         # invocation.  Keeping them here means they only serialize against
-        # each other and the ~155 suites in the `aux` part no longer wait
+        # each other and the ~160 suites in the `aux` part no longer wait
         # behind them.
         #
         # `-R 'r7rs'` matches the substring, not a prefix, on purpose: it picks
