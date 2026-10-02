@@ -21,15 +21,18 @@ believed.
 
 Usage: r7rs-diagnostics.py [path-to-tur]   ($TUR, else build/tur[.exe])
 """
-import json
 import os
 import subprocess
 import sys
-import threading
-import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from jsonrpc_probe import (drain, frame, iter_frames, settle,  # noqa: E402
+                           start_reader)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-SETTLE_SECONDS = float(os.environ.get("TUR_LSP_SETTLE", "15"))
+# How long to allow the server to finish and be read, not a settle time; see
+# jsonrpc_probe. $TUR_LSP_SETTLE still raises it for a loaded box.
+WAIT_SECONDS = float(os.environ.get("TUR_LSP_SETTLE", "30"))
 
 
 def find_tur():
@@ -48,25 +51,11 @@ def find_tur():
 TUR = find_tur()
 
 
-def frame(obj):
-    body = json.dumps(obj).encode("utf-8")
-    return b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
-
-
 def session(text, path, format_it=False):
     """Open `text` as `path`; return (published diagnostic sets, formatting result)."""
     p = subprocess.Popen([TUR, "lsp"], stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    buf = bytearray()
-
-    def reader():
-        while True:
-            c = p.stdout.read(1)
-            if not c:
-                break
-            buf.extend(c)
-
-    threading.Thread(target=reader, daemon=True).start()
+    buf, reader = start_reader(p)
     uri = "file://" + path
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
              "params": {"processId": None, "rootUri": None, "capabilities": {}}},
@@ -82,35 +71,22 @@ def session(text, path, format_it=False):
         p.stdin.write(frame(msg))
         p.stdin.flush()
 
-    time.sleep(SETTLE_SECONDS)
+    # Sent after the formatting request above (id 7) and before shutdown/exit.
+    # The server handles one message at a time, so this orders the flush -- and
+    # the publishDiagnostics it writes -- after formatting and before the exit.
+    # on_formatting does NOT flush dirty docs, and neither does on_shutdown; only
+    # the symbol-reading handlers do, which is why this request has to be here.
+    settle(p, uri)
     try:
         p.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         p.stdin.write(frame({"jsonrpc": "2.0", "method": "exit", "params": {}}))
         p.stdin.flush()
     except Exception:
         pass
-    try:
-        p.wait(timeout=30)
-    except Exception:
-        p.kill()
+    drain(p, reader, WAIT_SECONDS)
 
-    out = bytes(buf)
     published, formatting = [], "no-response"
-    while out:
-        head, sep, rest = out.partition(b"\r\n\r\n")
-        if not sep:
-            break
-        length = None
-        for line in head.split(b"\r\n"):
-            if line.lower().startswith(b"content-length:"):
-                length = int(line.split(b":", 1)[1].strip())
-        if length is None:
-            break
-        body, out = rest[:length], rest[length:]
-        try:
-            obj = json.loads(body.decode("utf-8"))
-        except Exception:
-            continue
+    for obj in iter_frames(bytes(buf)):
         if obj.get("method") == "textDocument/publishDiagnostics":
             published.append(obj["params"].get("diagnostics", []))
         elif obj.get("id") == 7:
