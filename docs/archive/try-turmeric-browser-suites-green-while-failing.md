@@ -305,6 +305,24 @@ Both fix directions, plus the three test-side failures:
    always-uploaded report plus the `web_mobile` row are what make triaging
    it cheap.
 
+### Fix direction 6 (gating) -- taken 2026-10-02
+
+Left to a human at the time, with the caveat "do not leave the suite
+permanently red as the reason it can never be flipped". That is exactly what
+had happened: `docs-offline.spec.js`'s cold-pane test became a standing failure
+and held the desktop suite at `1 failed` for 21 consecutive commits. Marking it
+(docs/reported/docs-offline-cold-pane-never-boots.md) restored a clean baseline,
+and the desktop step is now BLOCKING.
+
+The decision was made on this report's own `/ci` data rather than on the raw
+fail rate, which would have argued the other way: 42 failures in 266 commits
+(16%) looks ungateable, but collapses to 10 episodes -- the failures are
+standing bugs, not flake. Isolated single-commit failures were 6/266 (2.3%),
+damped to ~1e-5 by `retries: 2`. Mobile stays non-blocking, not for test
+quality (its isolated-flake rate is lower, 1.9%) but because its WebKit
+download step is `continue-on-error` and gating would promote an infrastructure
+failure into a blocked PR. Details in test-suite-portability-guide section 6a.
+
 Not verified end to end: the browser job needs Emscripten and a Playwright
 install, neither available locally. The specs and `main.js` pass
 `node --check`, the collector was exercised on a synthetic Playwright JUnit
