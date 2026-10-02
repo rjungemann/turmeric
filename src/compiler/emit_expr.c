@@ -10342,6 +10342,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                     const char *ret_c = type_c_name(disp_result);
+                    /* fnsan-parametric-fn-field-read-by-spec: the parameters of
+                     * this cast follow the callee's DECLARED fn type resolved
+                     * through the spec (two-level-sf-closure, below); the result
+                     * followed the call's erased `int`.  A `(fn [A S] S)` lens
+                     * field read in `set`'s spec at S := Point was cast `int64_t
+                     * (*)(void *, int64_t, tur_adt_Point *)` while the box
+                     * returns `tur_adt_Point *`.  Take the declared result too
+                     * when it resolves to a pointer, and hand the call's word
+                     * back to the erased consumer.  A float result stays as it
+                     * was: a box built erased returns its bits in rax, and
+                     * reading xmm0 instead would turn a type mismatch into a
+                     * wrong answer. */
+                    Type decl_ptr_res;
+                    bool word_back = false;
+                    if (disp_result.kind == TY_INT && fn_binding->type.kind == TY_FN &&
+                        fn_binding->type.as.fn.result_full_type) {
+                        decl_ptr_res = emit_resolve_type(ctx,
+                            *fn_binding->type.as.fn.result_full_type);
+                        const char *drc = emit_type_c_name(ctx, decl_ptr_res);
+                        size_t dl = drc ? strlen(drc) : 0;
+                        word_back = dl > 0 && drc[dl - 1] == '*' &&
+                                    !emit_repr_type_mentions_tyvar(&decl_ptr_res) &&
+                                    !type_is_b4box_closure_slot(decl_ptr_res);
+                    }
                     Type arg_types[MAX_FN_ARITY];
                     char **arg_strs = (n > 0)
                         ? (char **)malloc(n * sizeof(char *)) : NULL;
@@ -10377,8 +10401,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             e->as.call_.args[i], arg_types[i], arg_strs[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
-                        disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
+                        word_back ? decl_ptr_res : disp_result,
+                        n > 0 ? arg_types : NULL, (uint8_t)n);
+                    if (word_back && !thunk_typedef) word_back = false;
                     Buf out; buf_init(&out);
+                    if (word_back) buf_puts(&out, "(int64_t)(intptr_t)(");
                     /* narrow-closure-result-read-through-int64-carrier: slot 0
                      * (and the typed-thunk typedef) return a narrow result
                      * widened; convert back to the declared type. */
@@ -10480,6 +10507,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(&out, ")");
                     if (narrow_back) buf_puts(&out, ")");
                     if (carrier_unbox) buf_puts(&out, ")");
+                    if (word_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);

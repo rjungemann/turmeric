@@ -222,5 +222,7 @@ saw a declared ADT, so that one was likely an error before #1007 too.
   now `TUR-E0709` -- the open half, filed as
   [forward-call-to-generic-callee-typed-as-placeholder](../reported/forward-call-to-generic-callee-typed-as-placeholder.md).
 
-The workaround (reorder the helpers) is no longer needed for any of the three
-spices' shapes.
+The workaround (reorder the helpers) is no longer needed: against
+`turmeric-spices` at `86188f2`, `tur check` passes on `secret/src/secret/hex.tur`,
+`secret/src/secret/kdf.tur`, `valkey/src/valkey/cmd.tur` and
+`tourist-session-valkey`'s `store.tur`, the four files that failed.
