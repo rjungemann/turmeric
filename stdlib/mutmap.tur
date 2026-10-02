@@ -417,7 +417,8 @@
 ;; `Eq [Vec]` keeps the inline-C `vec-eq?` for direct/abstract use but
 ;; dispatches through the pure-Turmeric `vec-eq-loop`.
 
-(defn mutmap-eq-storage? [V] [pa : ptr<void> pb : ptr<void>
+(defn mutmap-eq-storage? [V] [pa : ptr<void>
+                              pb : ptr<void>
                               ^borrow ^fat val-cmp : (fn [V V] bool)]
   #fx{}
   : bool

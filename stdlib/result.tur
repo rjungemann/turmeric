@@ -173,9 +173,10 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-eq? [A E] [r1 : int r2 : int
-                         ^borrow ^fat ok-cmp : (fn [A A] bool)
-                         ^borrow ^fat err-cmp : (fn [E E] bool)]
+(defn result-eq? [A E] [r1 : int
+                        r2 : int
+                        ^borrow ^fat ok-cmp : (fn [A A] bool)
+                        ^borrow ^fat err-cmp : (fn [E E] bool)]
   #fx{}
   : bool
   ```c
