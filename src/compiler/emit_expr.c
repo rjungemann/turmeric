@@ -6259,6 +6259,54 @@ static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
     buf_puts(body, ");\n");
 }
 
+/* fnsan-fat-closure-at-tyvar-sink: the adapter for a { adapter, handle }
+ * wrapper around a fat closure `inner` headed for a `^fat` slot whose declared
+ * fn type has type variables, when the callee this call selects reads those
+ * positions as words (ctx->fat_box_sink_type / _erased_mask, set by the
+ * call-argument loop: an inline-C body or a carrier base).  Slot 0 of the
+ * closure is spelled from its own type -- the typed-thunk convention every
+ * typed caller casts to -- except a parameter its lambda takes as the carrier
+ * (a niche param marked arrives_as_carrier_box, a B4 box load), which the
+ * thunk declares `int64_t`.  NULL when the two spellings agree, when the sink
+ * reads concrete types (a spec clone), or when a position is not a scalar or
+ * pointer: the handle then passes through as before. */
+static char *fat_closure_tyvar_sink_adapter(EmitCtx *ctx, const Expr *inner,
+                                            const Type *fnty, uint8_t arity) {
+    const Type *sk = ctx->fat_box_sink_type;
+    if (!sk || sk->kind != TY_FN || sk->as.fn.arity != arity ||
+        !ctx->fat_box_sink_erased_mask)
+        return NULL;
+    Type rt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*fnty));
+    if (rt.kind == TY_NIL || rt.kind == TY_NEVER) return NULL;
+    Type ps[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < arity; i++)
+        ps[i] = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*fnty, i));
+    bool typed_ok = use_typed_thunk_abi(rt, ps, arity);
+    const FnDef *cfd = NULL;
+    while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    if (inner && inner->kind == EX_CLOSURE && inner->as.closure_.closure)
+        cfd = inner->as.closure_.closure->fn;
+    uint32_t off = (cfd && cfd->n_params == (uint32_t)arity + 1) ? 1 : 0;
+    const char *cpc[MAX_FN_ARITY], *apc[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < arity; i++) {
+        const Binding *pb = (cfd && cfd->params && i + off < cfd->n_params)
+            ? cfd->params[i + off] : NULL;
+        cpc[i] = (!typed_ok || (pb && pb->arrives_as_carrier_box))
+            ? "int64_t" : thunk_param_slot_c_name(ps[i]);
+        Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sk, i));
+        apc[i] = (ctx->fat_box_sink_erased_mask & ARG_IDX_BIT(i))
+            ? "int64_t"
+            : (type_is_b4box_closure_slot(pt) ? "int64_t" : type_c_name(pt));
+    }
+    const char *crc = typed_ok ? thunk_result_slot_c_name(rt) : "int64_t";
+    Type srt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sk));
+    const char *arc = ctx->fat_box_sink_erased_res
+        ? "int64_t" : thunk_result_slot_c_spelling(type_c_name(srt));
+    return ensure_call_adapter_ex(ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs
+                                                           : ctx->file,
+                                  EMIT_ADAPT_FAT_SLOT1, crc, cpc, arc, apc, arity);
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -11849,6 +11897,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 ctx->fat_box_sink_type = rt;
                                 ctx->fat_box_sink_erased_mask = 0;
                                 ctx->fat_box_sink_erased_res = false;
+                            } else if (rt->kind == TY_FN && rt->as.fn.arity <= 64) {
+                                /* fnsan-fat-closure-at-tyvar-sink: a type
+                                 * variable the spec does not bind -- `map-eq?`'s
+                                 * `W`, which appears only in the comparator's
+                                 * own type -- is a word in the clone, as in a
+                                 * carrier base.  Boxed at the function's own
+                                 * `double`s instead, the clone forwarded it to
+                                 * the inline-C helper as words and `map-eq?`
+                                 * answered true for 7.1 against 3.25. */
+                                uint64_t m = 0;
+                                for (uint32_t k = 0; k < rt->as.fn.arity; k++)
+                                    if (emit_repr_type_mentions_tyvar(
+                                            rt->as.fn.arg_full_types
+                                                ? rt->as.fn.arg_full_types[k] : NULL) ||
+                                        (rt->as.fn.arg_kinds &&
+                                         rt->as.fn.arg_kinds[k] == TY_TYVAR))
+                                        m |= ARG_IDX_BIT(k);
+                                ctx->fat_box_sink_type = rt;
+                                ctx->fat_box_sink_erased_mask = m;
+                                ctx->fat_box_sink_erased_res =
+                                    emit_repr_type_mentions_tyvar(rt->as.fn.result_full_type) ||
+                                    rt->as.fn.result_kind == TY_TYVAR;
                             }
                         } else if (!matched_spec || fn_binding->body_is_inline_c) {
                             uint64_t m = 0;
@@ -17081,6 +17151,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             ? *fnty.as.fn.arg_full_types[i]
                             : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
                     wshim = ensure_nilres_fatshim(ctx, wparams, (uint8_t)arity);
+                } else if (e->as.fn_to_fat_.word_params) {
+                    /* A forwarded `^fat` parameter reads as `ptr<void>`; its
+                     * binding keeps the declared fn type. */
+                    Type wft = fnty;
+                    if (wft.kind != TY_FN && inner->kind == EX_VAR &&
+                        inner->as.var.binding &&
+                        inner->as.var.binding->type.kind == TY_FN)
+                        wft = inner->as.var.binding->type;
+                    uint32_t warity = wft.kind == TY_FN ? wft.as.fn.arity : 0;
+                    if (wft.kind == TY_FN && warity <= MAX_FN_ARITY)
+                        wshim = fat_closure_tyvar_sink_adapter(ctx, inner, &wft,
+                                                               (uint8_t)warity);
                 } else if (!e->as.fn_to_fat_.nil_result_word &&
                     fnty.kind == TY_FN && fnty.as.fn.result_full_type &&
                     arity <= MAX_FN_ARITY) {
@@ -17094,7 +17176,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         *fnty.as.fn.result_full_type, wparams, (uint8_t)arity,
                         /*inner_is_fat=*/true);
                 }
-                if (!wshim) return hv;
+                if (!wshim) {
+                    /* A forwarded `^fat` parameter is the int64 handle word in
+                     * C, and this node is typed `ptr<void>`: a CPS binder
+                     * declares its temp from the node. */
+                    if (e->as.fn_to_fat_.word_params && inner->kind == EX_VAR) {
+                        Buf cb; buf_init(&cb);
+                        buf_printf(&cb, "(void *)(intptr_t)(%s)", hv);
+                        buf_putc(&cb, '\0');
+                        char *cast = strdup(cb.data);
+                        buf_free(&cb);
+                        free(hv);
+                        return cast;
+                    }
+                    return hv;
+                }
                 char *base = fresh_tmp(ctx);
                 char *slots = fresh_tmp(ctx);
                 char *out = fresh_tmp(ctx);
@@ -17224,6 +17320,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                                        : type_c_name(pt));
                         dpc[i] = typed_ok ? thunk_param_slot_c_name(fnt_params[i]) : "int64_t";
                         if (strcmp(apc[i], dpc[i]) != 0) differs = true;
+                        /* The default shim also CALLS the function at dpc.  A
+                         * lambda whose niche parameter arrives as the carrier
+                         * box (arrives_as_carrier_box: a typed comparator
+                         * handed to `map-eq?`) is defined `int64_t` there,
+                         * not at its declared pointer type. */
+                        if (strcmp(rpc[i], dpc[i]) != 0) differs = true;
                     }
                     const char *arc = ctx->fat_box_sink_erased_res
                         ? "int64_t" : thunk_result_slot_c_spelling(type_c_name(srt));

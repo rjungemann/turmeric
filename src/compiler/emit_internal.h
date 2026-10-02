@@ -1613,6 +1613,7 @@ char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
                                 const char *crc, const char **cpc,
                                 const char *arc, const char **apc, uint8_t n);
 extern const char EMIT_ADAPT_BARE_SLOT1[];
+extern const char EMIT_ADAPT_FAT_SLOT1[];
 struct EmitAbiSpecialization;
 Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
                             const struct EmitAbiSpecialization *spec);
