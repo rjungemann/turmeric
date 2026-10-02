@@ -464,7 +464,11 @@ cmake --build build -j --config Debug
 bash tests/run.sh                                                                # compiled-fixture suite
 ```
 
-The built compiler lands at `./build/tur`.
+The built compiler lands at `./build/tur`. It carries the MIR JIT engine
+(`tur jit`): `TUR_JIT` defaults ON on 64-bit x86-64/arm64, compiling the MIR
+sources vendored under `external/mir/` -- no configure reaches the network.
+Never edit `external/mir/` by hand; `external/mir/VENDORED.md` says how to
+change MIR.
 
 ### Test suite size and runtime -- READ BEFORE ASSUMING A HANG
 

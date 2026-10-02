@@ -128,33 +128,52 @@ endif()
 # guards the ordering.
 enable_testing()
 
+# J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`, the
+# `jit` engine of `tur run`/`tur repl`, and the c2mir-backed dynamic FFI the
+# interpreter uses for extern-c).  Since the `jit` experiment graduated
+# (2026-08-17) this is the ONLY gate on `tur jit`: a binary built with it runs
+# `tur jit` unprompted, and one built without it says so.  It does not change
+# the default ENGINE -- `tur run` still resolves to "cc" unless asked.
+#
+# ON by default since 2026-10-02, on the hosts CI exercises the engine on:
+# 64-bit x86-64 and arm64 (Linux, macOS, MinGW).  It used to be OFF because it
+# cloned MIR over the network at configure time; MIR is vendored under
+# external/mir/ now (cmake/mir.cmake), so a default configure still never
+# reaches the network.  MIR also targets ppc64, s390x and riscv64, which no CI
+# leg covers -- -DTUR_JIT=ON opts those in.  An Emscripten toolchain build
+# gets no JIT (MIR's wasm32 target is not wired up as a host engine).
+#
+# An EXISTING build directory keeps the value it cached, so one configured
+# before this default changed stays OFF until reconfigured with -DTUR_JIT=ON
+# (or rebuilt from a fresh directory).
+#
+# Declared ABOVE add_subdirectory(src), which reads it: declared after, a fresh
+# configure handed src/ an unset TUR_JIT, and only a second configure (which
+# found it in the cache) saw the default.
+set(_tur_jit_default OFF)
+if(NOT EMSCRIPTEN AND CMAKE_SIZEOF_VOID_P EQUAL 8
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|aarch64|arm64|ARM64)$")
+  set(_tur_jit_default ON)
+endif()
+option(TUR_JIT
+  "build tur with the in-process MIR JIT engine (tur jit; vendored MIR)"
+  ${_tur_jit_default})
+if(TUR_JIT)
+  include(cmake/mir.cmake)   # defines tur_mir from external/mir/
+endif()
+
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
 # J0 JIT spike (docs/archive/jit-engine-plan.md) -- OFF by default.
 # ---------------------------------------------------------------------------
-# The spike harness vendors MIR (c2mir + MIR-gen) via FetchContent, which means
-# a network fetch at configure time.  Same posture as the Z3 oracle block
-# above: a default `cmake -S . -B build` -- Debug, Release, or WASM -- must not
-# reach the network and must not grow a dependency, so this is opt-in and the
-# spike binary is never part of `tur`.
+# A scratch harness over the same vendored MIR as TUR_JIT (cmake/mir.cmake);
+# the spike binary is never part of `tur`.
 option(TUR_JIT_SPIKE
-  "build the Phase J0 JIT spike harness (fetches MIR; not part of tur)"
+  "build the Phase J0 JIT spike harness (not part of tur)"
   OFF)
-
-# J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`).
-# Same network posture as the spike: OFF by default, opt-in fetch.  Since the
-# `jit` experiment graduated (2026-08-17) this is the ONLY gate on `tur jit`:
-# the run-time `--enable=jit` requirement is gone, so a binary built with this
-# ON runs `tur jit` unprompted, and one built without it says so.
-option(TUR_JIT
-  "build tur with the in-process MIR JIT engine (tur jit; fetches MIR)"
-  OFF)
-
-if(TUR_JIT_SPIKE OR TUR_JIT)
-  include(cmake/mir.cmake)   # defines tur_mir (guarded; spike re-include is a no-op)
-endif()
 if(TUR_JIT_SPIKE)
+  include(cmake/mir.cmake)   # guarded; a no-op when TUR_JIT already included it
   add_subdirectory(tools/jit-spike)
 endif()
 
@@ -1398,6 +1417,17 @@ if(TUR_JIT)
   # an alarm that can fire first destroys the diagnostic it exists to protect.
   # Raising this one means raising the alarm in .github/workflows/ci.yml too.
   set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
+  # aot-compiled-repl-plan C1: --enable=repl-jit-inline-c compiles an inline-C
+  # defn the interpreter cannot run, at the prompt and under --interpret.  A
+  # short script (a dozen REPL sessions); it runs in the `test` job's aux part,
+  # not the `jit` job, like any newly registered suite (tests/ctest-parts.py).
+  add_test(
+    NAME tur_repl_jit_inline_c
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/turi/repl-jit-inline-c.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_repl_jit_inline_c PROPERTIES TIMEOUT 300)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
   # `tur jit`.  RUN_SERIAL like the other whole-corpus
   # harnesses -- it fans out across nproc internally.  TUR is pinned to

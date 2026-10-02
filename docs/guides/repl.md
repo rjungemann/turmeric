@@ -71,6 +71,50 @@ To abandon an incomplete expression, enter a blank line.
 
 ---
 
+## Inline-C at the prompt (experimental)
+
+The REPL is the tree-walking interpreter, so it runs an inline-C body only when
+it recognises the shape: a simple `return` of an arithmetic expression, a field
+accessor, a flat constructor. Any other body -- a loop, a branch with two
+returns, a library call -- is `inline-C not supported in interpreter mode`.
+
+On a build with the JIT engine (the default on 64-bit x86-64 and arm64),
+`--enable=repl-jit-inline-c` compiles such a defn instead, the first time it
+is called. Its own source goes through the real compiler and the in-process
+MIR engine, so `#include`s, the C library, and loops all work:
+
+````
+$ tur repl --enable=repl-jit-inline-c
+> (defn count-upper [s : cstr] : int
+    ```c
+    #include <ctype.h>
+    int64_t n = 0;
+    for (const char *p = s; *p; p++) if (isupper((unsigned char)*p)) n++;
+    return n;
+    ```)
+=> #<fn count-upper>
+> (count-upper "Hello Turmeric World")
+=> 3
+````
+
+The first call costs one compile (~135 ms on a Release build); later calls go
+straight to the compiled function, and redefining the defn compiles the new
+body on its next call. `tur --interpret` honours the same flag.
+
+Limits, each reported as an error value:
+
+- Only the defn itself is compiled, so its body cannot call another Turmeric
+  definition.
+- Every parameter and the result must be an `int`-class, `float`, `cstr` or
+  `bool` value; the result may also be unit.
+- The inline-C must be the defn's whole body, and the defn must be written
+  out, not produced by a macro.
+
+The design, and the plan to compile whole turns, are in
+[aot-compiled-repl-plan](../upcoming/aot-compiled-repl-plan.md).
+
+---
+
 ## Switching readers with `#lang`
 
 A line beginning with `#lang ` is handled before evaluation and switches the

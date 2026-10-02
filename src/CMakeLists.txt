@@ -150,6 +150,10 @@ set(TURI_EVAL_SOURCES
     # provider hook + signature vocabulary.  The c2mir-backed provider itself
     # lives in turi/jit_ffi.c inside tur_jit_obj (JIT builds only).
     turi/jit_ffi_hook.c
+    # aot-compiled-repl-plan C1: compile an inline-C defn the interpreter
+    # cannot run, through a host hook (main.c registers it on a JIT build).
+    # MIR-free, like jit_ffi_hook.c.
+    turi/inline_c_jit.c
 )
 
 # ---------------------------------------------------------------------------

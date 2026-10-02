@@ -2422,7 +2422,7 @@ answers.
 ## Found investigating the AOT-compiled REPL plan (filed 2026-09-29)
 
 Found while checking the 2026-06-28 draft of
-[aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md) against
+[aot-compiled-repl-plan](../upcoming/aot-compiled-repl-plan.md) against
 `main`. The first two were resolved the next day; the first was that plan's
 phase C0. The third was filed 2026-09-30 and resolved the same day.
 
