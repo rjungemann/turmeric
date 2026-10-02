@@ -47,6 +47,21 @@ in the same change.
 | [httpd-residual-request-hardening](httpd-residual-request-hardening.md) | low-medium | WP4's httpd read-through.  **Narrowed 2026-10-01:** the quadratic header scan, the async writes that parked forever, silently-empty oversize request-line fields (now 400 / 414), the prefix-matched `Connection` header, the Basic-auth example that leaked username validity, and `mw-log`'s raw control bytes are fixed.  Left, each needing a default or an enhancement: no default in-flight cap on `httpd-new-async`, a rate limiter that hashes IPs to 32 bits and fails open when full, IPv4-only binding, loose multipart parsing |
 | ~~[lock-tracks-ref-not-resolved-commit](../archive/lock-tracks-ref-not-resolved-commit.md)~~ | medium | **RESOLVED 2026-10-01** (archived): a fetch checks out the lock's `:resolved` commit after the clone -- a bare-SHA fetch, else the branch's full history -- and never falls back to the branch tip; a commit that is gone is an error and no clone is kept.  `tur fetch --frozen` holds a fetch to the lock and never writes it.  Pinned by `tests/run-spice-fetch.sh` cases 11, 11b and 16-18 |
 
+## Effect rows and capability tags (filed 2026-10-01)
+
+Found investigating two security-guide questions -- whether `--no-proc-macros`
+should default on, and whether `--strict-effects` should -- and scoping
+`^capability` for `println`. The plan these feed is
+[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md), which also
+answers [security-audit-plan](../upcoming/security-audit-plan.md) open
+question 3 as Option A.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [capability-effect-tag-silently-resolves-to-empty-row](capability-effect-tag-silently-resolves-to-empty-row.md) | medium | An uppercase name in `#fx{...}` that no `defeffect` in the compile declares is dropped with **no diagnostic**, so `#fx{IO}` checks as `#fx{}` -- and a caller that declares `#fx{}` then passes the `TUR-E0009` check the tag existed to trigger. Already documented as a trap at `effects-system-guide.md:375` (`#fx{Bt}` sat decorative on the trail mutators for a month); this is the filing that note never got. `Unsafe` is immune because it is compiler-known (`EFFECT_NAME_UNSAFE`); the five stdlib capability tags are not. Blocks hanging `#fx{IO}` on the `println` builtin |
+| [strict-effects-w0030-names-synthesized-lambdas](strict-effects-w0030-names-synthesized-lambdas.md) | low (diagnostic quality) | 47 of 358 `TUR-W0030` warnings over `tests/fixtures/` + `stdlib/` name an elaborator gensym (`__fn_38`), so the message's own advice names no function the user wrote. `effect_check.c:1511` prints `fn->binding->name->name` and a `fn` literal does get a synthesized binding, so the `<anonymous>` fallback never fires. The `--lint-effects` copy at `:1558` has it too. Gates any `--strict-effects` default |
+| [strict-effects-and-lint-effects-are-indistinguishable](strict-effects-and-lint-effects-are-indistinguishable.md) | low (flag taxonomy) | The two flags emit a byte-identical `TUR-W0030`, and neither can become an error -- `diag.c:110` discards warning severity unconditionally and no `-Werror=` covers W0030. The comment at `effect_check.c:1558` asserting `--lint-effects` is "never promoted to an error" *unlike* `--strict-effects` is wrong. Only real difference: strict also runs W0032, which fires **once** corpus-wide against W0030's 358. Pick one story -- make strict strict, or retire the alias |
+
 ## P0 representation confusion (filed 2026-09-30)
 
 The recurring class -- a value crossing a seam in the emitted C at the wrong
