@@ -2,6 +2,29 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **A fat closure's slot 0 takes an untyped `ptr<void>` parameter as the
+  word (`int64_t`).**  A function-typed parameter already crossed that way, and
+  a program that erases a closure to `ptr<void>` and calls it back as
+  `(fn [ptr<void>] ...)` needs the two to share one spelling, or the call goes
+  through a function pointer of the wrong type (a WASM `call_indirect` trap).
+  Turmeric code is unaffected; **inline C that calls a closure's slot 0 by
+  hand** must spell such a parameter `int64_t` --
+  `TUR_APPLY1_T(void *, int64_t, f, p)`, not `TUR_APPLY1_T(void *, void *, f,
+  p)`.  The closure's own body still sees a `void *`.  See
+  [docs/guides/value-representations-guide.md](docs/guides/value-representations-guide.md#slot-0s-signature-which-parameters-are-the-word).
+
+### Fixed
+
+- `^fat x : (fn ...)` in a `let` bound to a captureless lambda or a named
+  defn stored a bare code pointer, and the first call took SIGSEGV; bound to a
+  closure-returning call such as `(>>> f g)`, a float call printed garbage.
+- The fixture corpus is clean under clang's `-fsanitize=function`, and a new
+  `fnsan` CI job keeps it that way.
+
 ## [0.58.0] -- 2026-10-01
 
 ### Security

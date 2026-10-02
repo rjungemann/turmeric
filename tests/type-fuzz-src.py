@@ -1869,7 +1869,7 @@ def main():
         n_trap = counts.get("FNPTR_TRAP", 0)
         if n_trap:
             print("  fn-pointer traps (report)   : %d   "
-                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
+                  "(TUR_FUZZ_FNSAN_STRICT=0: report-only)" % n_trap)
         print("  known open reports (report) : %d" % n_known)
         # A seam reject is the elaborator refusing a payload it cannot carry --
         # the outcome the session report asks for -- so it is reported, not

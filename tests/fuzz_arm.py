@@ -18,7 +18,7 @@ clang's `-fsanitize=function` checks every indirect call against the callee's
 real signature, WHATEVER shape produced it.  Trap mode (`-fsanitize-trap=`)
 needs no UBSan runtime -- the container toolchains this repo runs on ship
 clang without one -- and turns a mismatch into SIGILL (exit 132 through
-`tur run`), which the fuzzers classify as `FNPTR_TRAP` (see TRAP_CLASS).
+`tur run`), which the fuzzers classify as `BUG_fnptr_trap` (see TRAP_CLASS).
 
 GCC has no equivalent, so this is clang-only.  When no suitable clang is
 found the run proceeds unarmed and SAYS SO; it never pretends.
@@ -50,15 +50,14 @@ FNSAN_TRAP_RC = 132
 
 # How a trap is classified.  The detector is exact -- it traps on `bool` vs
 # `int64_t` and on `char *` vs `int64_t` as readily as on `double` vs
-# `int64_t` -- and the emitter still has ABI-benign mismatches of the first
-# two kinds (see docs/reported/emitted-c-indirect-calls-are-not-type-exact.md).
-# Each of them is a real crash under WASM's call_indirect, but while they
-# remain, failing a run on every trap would make these harnesses red on
-# noise, and red noise is read as "ignore".  So, as the repo ratchets
-# everything else -- report until the corpus sweep is at zero, then gate --
-# a trap is the report-only class FNPTR_TRAP, printed and saved like a
-# finding, and TUR_FUZZ_FNSAN_STRICT=1 makes it the failing BUG_fnptr_trap.
-FNSAN_STRICT = os.environ.get("TUR_FUZZ_FNSAN_STRICT", "0") == "1"
+# `int64_t` -- so while the emitter still had ABI-benign mismatches of the
+# first two kinds, failing a run on every trap would have made these harnesses
+# red on noise.  A trap was therefore the report-only class FNPTR_TRAP until
+# the corpus sweep reached zero (2026-10-02, see
+# docs/archive/emitted-c-indirect-calls-are-not-type-exact.md).  It is a
+# failing BUG_fnptr_trap now; TUR_FUZZ_FNSAN_STRICT=0 restores report-only
+# for a session that is chasing something else.
+FNSAN_STRICT = os.environ.get("TUR_FUZZ_FNSAN_STRICT", "1") != "0"
 TRAP_CLASS = "BUG_fnptr_trap" if FNSAN_STRICT else "FNPTR_TRAP"
 
 _CANARY = r"""
