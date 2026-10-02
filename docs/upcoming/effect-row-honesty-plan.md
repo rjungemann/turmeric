@@ -116,10 +116,59 @@ propagating `#fx{Tainted}`-style marker). It is out of scope here.
 
 ## 4. Work items
 
-Ordered by dependency. W1 and W2 are prerequisites for W4; W3 is independent
-and can land first.
+**Re-sequenced 2026-10-01 at the author's direction:** the syntax question and
+the effect/attribute split come *first*, before the capability work. That is
+the better order, and not only on preference -- **doing the split first deletes
+W1's allowlist entirely.** The allowlist only existed as a workaround for
+tightening resolution while attributes still shared the brackets. Empty the
+collision in W0 and W1's rule becomes the clean one every other effect
+language has.
 
-### W1 -- Make capability-tag resolution honest (prerequisite)
+Ordered by dependency: W0 -> W1 -> W2 -> W4; W3 is independent and can land
+any time.
+
+### W0 -- Split attributes out of `#fx{}` (new, now the foundation)
+
+Move the three compiler attribute markers onto the `^attr` syntax the language
+already has, leaving `#fx{...}` holding effect names and row variables only.
+
+| Today | After | Sites |
+| --- | --- | --- |
+| `#fx{Construct}` | `^construct` | 4 code (`stdlib/result.tur:39,57`, `stdlib/option.tur:33`), 2 guide |
+| `#fx{ByVal}` | `^byval` | 4 code (m5 fixtures), 0 guide |
+| `#fx{NonExhaustive}` | `^non-exhaustive` | 1 code, **6 guide** |
+
+**This is a 9-site code change.** `Unsafe` stays in `#fx{}` -- it is a genuine
+effect (it appears in inferred rows, propagates, and participates in
+`TUR-E0009`), unlike the other three, which are elaborator pragmas that merely
+borrowed the brackets.
+
+Why `^attr` and not a new `#attr{}`: `^<lowercase>` is already the established
+attribute marker -- ~1,100 uses in `stdlib/` alone (`^fat` 327, `^borrow` 195,
+`^mut` 127, `^linear`, `^unique`, `^multishot`, `^tailcall`, `^affine`,
+`^private`, `^deprecated`, `^atomic`, `^persistent`, `^thread-local`), and
+`defeffect` itself takes `^capability` and `^extends`. The case convention
+already encodes the distinction: effect names and row variables inside
+`#fx{}` are uppercase and lowercase respectively; attributes are lowercase
+with a caret. The three markers are uppercase *only* because `#fx{}` required
+it.
+
+Transition, because one of them is published syntax:
+
+- `#fx{NonExhaustive}` has its own documented section at
+  [`sum-types-guide.md:241`](../guides/sum-types-guide.md) and a line in that
+  page's front-matter description. So: **dual-accept** both spellings, emit
+  `^deprecated`-style guidance on the `#fx{}` form, and rewrite the guide to
+  teach `^non-exhaustive`. `^deprecated` and the TUR-W0050 retired-flag
+  machinery are both precedent.
+- `Construct` and `ByVal` are internal (zero spice uses, zero or no user-facing
+  guide text), so they can move outright.
+
+**Exit:** `#fx{...}` contains nothing but effect names and row variables;
+`grep -r '#fx{Construct}\|#fx{ByVal}' --include=*.tur` is empty; the
+`NonExhaustive` dual-accept has a fixture for each spelling.
+
+### W1 -- Make effect-row resolution honest
 
 Filed as
 [capability-effect-tag-silently-resolves-to-empty-row](../reported/capability-effect-tag-silently-resolves-to-empty-row.md).
@@ -129,16 +178,15 @@ then passes a check it should fail.
 
 - Diagnose an unresolved effect name as a hard error naming the tag, with a
   "did you import the module that declares it?" hint.
-- **Allowlist the four compiler attribute markers** that ride `#fx{}` --
-  `Unsafe`, `Construct`, `ByVal`, `NonExhaustive`. Without this the first
-  compile of `stdlib/result.tur` fails. See Q1 in section 6 for why they are
-  there and why migrating them to `^attr` is a separate change.
-- Assert the allowlist is exhaustive against the elaborator's interned
-  markers, so a future attribute cannot silently re-become a dropped effect.
+- **No allowlist** -- W0 removed the reason for one. The rule is simply: an
+  uppercase name in `#fx{...}` resolves to a declared effect or is an error.
+  That is the rule Koka, Unison, OCaml 5, Effekt and the Haskell effect
+  libraries all get for free by keeping effect labels in the ordinary
+  namespace (section 6, Q1).
 
-**The sweep is already done** (Q1): zero undeclared effect tags in `stdlib/`
-plus `tests/fixtures/`, so no warn-then-error transition is needed. The only
-break to manage is the attribute allowlist above.
+**The sizing sweep is already done** (Q1): zero undeclared effect tags in
+`stdlib/` plus `tests/fixtures/`, so after W0 this breaks nothing and needs no
+warn-then-error transition.
 
 **Exit:** the repro in that report errors instead of printing two `#{}` rows,
 and `stdlib/` still compiles.
@@ -160,7 +208,8 @@ only to dodge this problem.
 
 ### W3 -- Guide corrections (independent, no code)
 
-Two factual errors, both in `docs/guides/security-guide.md`:
+Two factual errors, both in `docs/guides/security-guide.md` (plus W0's
+`sum-types-guide.md` rewrite, which lands with W0 rather than here):
 
 1. **`:102-104` is wrong about rust-analyzer.** It says `--no-proc-macros` is
    "what rust-analyzer ships as `procMacro.enable = false`". rust-analyzer
@@ -308,25 +357,82 @@ effect names are uppercase, attributes lowercase -- the three markers above are
 uppercase *only* because `#fx{}` required it. The clean target spelling is
 `^construct` / `^byval` / `^non-exhaustive`.
 
-**Decision: allowlist in W1; migrate separately.** `#fx{NonExhaustive}` is
-documented user-facing syntax with its own section at
-[`sum-types-guide.md:241`](../guides/sum-types-guide.md) and a mention in that
-page's front-matter description, so moving it is a breaking change needing a
-deprecation cycle (`^deprecated` is precedent), not a refactor. W1 does not
-need it:
+**Decision (author, 2026-10-01): do the split FIRST, as W0, and drop the
+allowlist.** The allowlist was only ever a workaround for tightening
+resolution while attributes still shared the brackets; emptying the collision
+first makes W1's rule the clean one. See W0 for the 9-site change and the
+`NonExhaustive` deprecation cycle.
 
-```
-uppercase name in #fx{...}
-  -> in ATTRS allowlist?    ok, attribute
-  -> declared by defeffect? ok, effect
-  -> else                   HARD ERROR naming the tag
-ATTRS = { Unsafe, Construct, ByVal, NonExhaustive }
+### Q1b. Should the effect row stop being `#fx{...}` altogether?
+
+Asked 2026-10-01. **Answer: no -- keep `#fx{}`.** Three things decide it.
+
+**The spelling is not what causes the bug.** Worth separating, because it is
+easy to assume the bespoke syntax is the problem. It is not: the silent drop
+comes from bespoke *resolution* -- names in the row are matched against
+declared effects by an ad-hoc lookup that drops misses. Where the row *sits*
+is independent. W1 fixes the resolution without touching a single `#fx{`.
+
+**`#fx{}` is already the considered answer, and recently.** The row used to be
+bare `#{...}`, with `@{...}` as an alternate sugar; `fx-row-syntax-rename-plan`
+(now `docs/archive/history/`) moved it to `#fx{...}` to join the
+`#map{}` / `#set{}` / `#row{}` / `#refine{}` / `#r{}` reader-literal family and
+free the bare `#{` slot, and retired `@{...}` in the same pass precisely
+because "two ways to spell the same thing was the original problem." Its
+siblings in the *same signature slot* -- `#reads <sym>` and `#writes [...]`
+(`src/compiler/reader.c:1452`) -- share the shape. A third spelling would
+re-create the problem that plan closed.
+
+**The migration is ~10,600 sites across two repos.** Measured:
+
+| | `#fx{` sites | files |
+| --- | --- | --- |
+| turmeric `.tur` | 748 | 227 |
+| turmeric-spices `.tur` | **9,732** | 600 |
+| `docs/guides/` | 157 | 29 |
+
+Spices dominates because `#fx{Unsafe}` sits on every inline-C function. So
+re-spelling the row costs ~1,000x what the split (9 sites) costs, for a
+conceptual gain the split already delivers.
+
+**What the alternative would look like, for the record.** The version worth
+sketching is the Koka/Unison one -- fold the row into the *type*, so effect
+labels become ordinary type-level names:
+
+```turmeric
+;; today
+(defn log-msg   [msg : cstr]            #fx{Write} : nil ...)
+(defn run-twice [f : (fn [] #fx{e} int)] #fx{e}    : int ...)
+(defstruct Action :copy [run : fn #fx{Write}])
+
+;; row folded into the return type (sketch)
+(defn log-msg   [msg : cstr]              : nil / {Write} ...)
+(defn run-twice [f : (fn [] int / {e})]   : int / {e}     ...)
+(defstruct Action :copy [run : (fn [] nil / {Write})])
 ```
 
-The allowlist carries the obvious hazard -- a *future* attribute added to
-`#fx{}` silently becomes a dropped "effect" again -- so W1 should assert the
-allowlist is exhaustive against the elaborator's interned markers, and the
-`^attr` migration gets filed as its own cleanup rather than dropped.
+Its real appeal is structural: effect names in the type grammar are resolved
+by ordinary scoping, so the silent drop becomes *impossible* rather than
+*fixed*. Its costs, beyond the 10,600 sites:
+
+- **The terminator problem is already documented against it.** `#writes`' own
+  rationale (`reader.c:1452-1461`) records that the return-type marker `:`
+  reads as a symbol, so a greedy token run in signature position cannot be
+  delimited -- which is why `#writes` takes a bracketed vector. Any
+  unbracketed effect-name run hits the same wall, so the sketch still needs
+  braces and a separator; it buys grammar placement, not fewer delimiters.
+- **`/` and `!` are both poor separators here.** `!` is Turmeric's
+  established mutation suffix (`vec-push!`, `set!`), and `/` is the module
+  path separator (`tur/fs`, `log/error`). A third meaning for either is worse
+  than a reader tag.
+- Rows are overwhelmingly concrete: 468 uppercase effect names against 29
+  lowercase row variables across turmeric's `.tur` files. The type-level
+  framing pays off most for row polymorphism, which is 6% of uses.
+
+So: the structural property is worth having and W1 delivers it; the syntax
+change that would also deliver it is not worth 10,600 sites. If the row is
+ever revisited, it should be for a reason the type grammar actually needs --
+effect aliases, or rows in more type positions -- not for this bug.
 
 ### Q2. Interpreter parity -- RESOLVED, nothing to do
 
