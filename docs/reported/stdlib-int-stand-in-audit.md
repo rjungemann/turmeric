@@ -492,6 +492,23 @@ same change: it builds an `Either` in inline C and should declare
 > an open `(Left 9)`; `tests/fixtures/generic-call-result-binds-from-expected`
 > pins it.  The `either.tur` rewrite itself has not been redone.
 
+> **2026-10-02: landed.**  `either.tur` is `(Either L R)` throughout --
+> `left?` / `right?` `[L R]`, `from-left [dflt : L]`, `from-right [dflt : R]`,
+> `either [L R C]`, `either-map [L A B] ... : (Either L B)`,
+> `either-map-left [A B R] ... : (Either B R)` -- and `str->int-checked`
+> declares `(Either int int)`.  Every caller in the tree passed unchanged
+> (suite 3502/0 before the new fixtures; the four snapshot moves are uncalled
+> generics no longer emitted at the carrier).  Both engines agree on a
+> `(Either cstr float)` -- `7.25`, `bad`, a doubled `14.5` through
+> `either-map` -- which the `e : int` signatures rejected outright, and on
+> `(either-map inc (Left 9))`; armed `-fsanitize=function` and the
+> float-conversion lint are clean on it.  An `int` default against a
+> `(Either cstr cstr)` -- accepted before, answering a word that was
+> sometimes a string pointer -- is `TUR-E0001`.  Pinned by
+> `tests/fixtures/either-generic-payloads` and
+> `tests/fixtures/errors/either-from-right-default-type`.  No turmeric-spices
+> file calls these functions.
+
 ## See also
 
 - [docs/archive/spices-int-stand-in-audit-2026-06-14.md](../archive/spices-int-stand-in-audit-2026-06-14.md)
