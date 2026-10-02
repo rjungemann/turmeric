@@ -7458,49 +7458,64 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * comes to believe a predicate is enforced when it is not. */
     bool        is_reflect_attr = false;
     const Form *reflect_annot   = NULL;
-    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_reflect) {
-        is_reflect_attr = true;
-        reflect_annot   = name_f;
-        name_idx++;
-        if (name_idx >= call->as.list.len) {
-            diag_emit(DIAG_ERROR, name_f->span,
-                      "^reflect must be followed by the function name");
-            return NULL;
-        }
-        name_f = call->as.list.items[name_idx];
-    }
-    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_deprecated) {
-        is_deprecated_attr = true;
-        name_idx++;
-        if (name_idx >= call->as.list.len) {
-            diag_emit(DIAG_ERROR, name_f->span,
-                      "^deprecated must be followed by an optional message string "
-                      "and the function name");
-            return NULL;
-        }
-        Form *next = call->as.list.items[name_idx];
-        if (next->tag == F_STR) {
-            char *msg_buf = (char *)arena_alloc(e->arena, next->as.s.len + 1);
-            memcpy(msg_buf, next->as.s.p, next->as.s.len);
-            msg_buf[next->as.s.len] = '\0';
-            deprecation_msg = msg_buf;
+    /* effect-row-honesty W0: `^construct` (M2a) and `^byval` (M5) also sit
+     * here.  They used to be spelled inside the effect row, ^construct /
+     * ^byval, and plucked out before the row was built; an attribute is
+     * not an effect, and the row is now only effects and row variables. */
+    bool defn_has_construct_attr = false;
+    bool defn_has_byval_attr = false;
+    /* The pre-name attributes, in any order. */
+    for (;;) {
+        if (name_f->tag != F_SYM) break;
+        const Symbol *as = name_f->as.sym;
+        if (as == e->sym_caret_reflect && !is_reflect_attr) {
+            is_reflect_attr = true;
+            reflect_annot   = name_f;
+        } else if (as == e->sym_caret_construct && !defn_has_construct_attr) {
+            defn_has_construct_attr = true;
+        } else if (as == e->sym_caret_byval && !defn_has_byval_attr) {
+            defn_has_byval_attr = true;
+        } else if (as == e->sym_caret_deprecated && !is_deprecated_attr) {
+            is_deprecated_attr = true;
             name_idx++;
             if (name_idx >= call->as.list.len) {
-                diag_emit(DIAG_ERROR, next->span,
-                          "^deprecated message must be followed by the function name");
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "^deprecated must be followed by an optional message string "
+                          "and the function name");
                 return NULL;
             }
+            Form *next = call->as.list.items[name_idx];
+            if (next->tag == F_STR) {
+                char *msg_buf = (char *)arena_alloc(e->arena, next->as.s.len + 1);
+                memcpy(msg_buf, next->as.s.p, next->as.s.len);
+                msg_buf[next->as.s.len] = '\0';
+                deprecation_msg = msg_buf;
+                name_idx++;
+                if (name_idx >= call->as.list.len) {
+                    diag_emit(DIAG_ERROR, next->span,
+                              "^deprecated message must be followed by the function name");
+                    return NULL;
+                }
+            }
+            name_f = call->as.list.items[name_idx];
+            continue;
+        } else if (as->len > 1 && as->name[0] == '^' &&
+                   as->name[1] >= 'a' && as->name[1] <= 'z') {
+            /* An attribute this position does not take (or one given twice).
+             * Without this, `(defn ^contruct some ...)` defined a function
+             * named `^contruct` and the real name became its parameters. */
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defn: '%s' is not an attribute a defn takes before its name "
+                      "(those are ^construct, ^byval, ^deprecated, ^reflect, each "
+                      "at most once)", as->name);
+            return NULL;
+        } else {
+            break;
         }
-        name_f = call->as.list.items[name_idx];
-    }
-    if (!is_reflect_attr && name_f->tag == F_SYM &&
-        name_f->as.sym == e->sym_caret_reflect) {
-        is_reflect_attr = true;
-        reflect_annot   = name_f;
         name_idx++;
         if (name_idx >= call->as.list.len) {
             diag_emit(DIAG_ERROR, name_f->span,
-                      "^reflect must be followed by the function name");
+                      "%s must be followed by the function name", as->name);
             return NULL;
         }
         name_f = call->as.list.items[name_idx];
@@ -8903,8 +8918,6 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * Uppercase names are concrete effects; lowercase are row variables.
      * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
     EffectRow *declared_effect_row_defn = NULL;
-    bool defn_has_construct_attr = false;
-    bool defn_has_byval_attr = false;
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
     uint64_t reads_params_mask_defn = 0;
@@ -8930,17 +8943,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
             for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
                 Form *item = maybe_row->as.list.items[j];
                 if (item->tag == F_SYM) {
-                    /* M2a: pluck #{Construct} out of the effect row so it
-                     * doesn't leak into PASS_EFFECT_LOWER as a phantom effect. */
-                    if (item->as.sym == e->sym_construct_attr) {
-                        defn_has_construct_attr = true;
-                        continue;
-                    }
-                    /* M5 residual-straddle: pluck #{ByVal} similarly. */
-                    if (item->as.sym == e->sym_byval_attr) {
-                        defn_has_byval_attr = true;
-                        continue;
-                    }
+                    /* `Construct` / `ByVal` are no longer plucked here: they
+                     * are `^construct` / `^byval` before the name now, and
+                     * left in the row they are TUR-E0026 like any other name
+                     * no defeffect declares (with a hint saying where they
+                     * went -- effect_check.c). */
                     syms[n_valid++] = item->as.sym;
                 }
             }
@@ -11449,9 +11456,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* F4: Store ^deprecated attribute on the binding */
     b->is_deprecated = is_deprecated_attr;
     b->deprecation_message = deprecation_msg;
-    /* M2a: propagate #{Construct} marker */
+    /* M2a: propagate ^construct marker */
     b->is_construct_template = defn_has_construct_attr;
-    /* M5 residual-straddle: propagate #{ByVal} marker */
+    /* M5 residual-straddle: propagate ^byval marker */
     b->prefer_byvalue_spec = defn_has_byval_attr;
 
     /* captureless-algebra-arm-thin-through-carrier: when a function returns the

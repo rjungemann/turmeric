@@ -364,6 +364,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0001_FN_TYPE_COLON:             return "TUR-D0001";
         case TUR_D0002_FX_ROW_LEGACY_HASH:        return "TUR-D0002";
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
+        case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -546,6 +547,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0001") == 0) return TUR_D0001_FN_TYPE_COLON;
     if (strcmp(s, "TUR-D0002") == 0) return TUR_D0002_FX_ROW_LEGACY_HASH;
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
+    if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -1970,7 +1972,7 @@ static const DiagExplanation diag_explanations_[] = {
       "                 `(Cons _ t) (+ 1 (len t))`), or a subterm of one.\n"
       "                 Arithmetic on the argument (`(f (- n 1))`), calls\n"
       "                 through variables, and mutual recursion all reject.\n"
-      "  coverage    -- every `match` is proven exhaustive: a `#{NonExhaustive}`\n"
+      "  coverage    -- every `match` is proven exhaustive: a `^non-exhaustive`\n"
       "                 opt-out, or a literal-scrutinee match with no `_` /\n"
       "                 variable arm, rejects.  So does any form the reflection\n"
       "                 walk does not positively recognise (macros, lambdas,\n"
@@ -2596,6 +2598,23 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Run tools/migrate-fx-rows.py to rewrite a tree.  Removed in a future\n"
       "release.\n",
+    },
+    /* effect-row-honesty-plan W0 */
+    { TUR_D0004_NONEXHAUSTIVE_FX_MARKER,
+      "TUR-D0004: `#fx{NonExhaustive}` is deprecated; write `^non-exhaustive`\n"
+      "\n"
+      "The opt-out from match exhaustiveness checking is an attribute of the\n"
+      "match, not an effect, so it no longer borrows the effect-row brackets.\n"
+      "`#fx{...}` now holds effects and row variables only.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (match #fx{NonExhaustive} e (Left l) l)\n"
+      "\n"
+      "Fix:\n"
+      "  (match ^non-exhaustive e (Left l) l)\n"
+      "\n"
+      "The old spelling still opts out, so a program keeps compiling; under\n"
+      "--Werror=deprecated it is an error.  It is removed in a future release.\n",
     },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,

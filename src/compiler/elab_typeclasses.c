@@ -2190,7 +2190,7 @@ static Type m7_box_hkt_element_fns_ex(Arena *arena, Type t, bool inner_slots) {
 
 /* M7 HKT layer-4 (flag-gated): is this instance-method body genuinely
  * by-value-constructible?  The emit-side per-(f, A) by-value spec only works
- * when the method body constructs its `(f b)` result IN-BODY via `#{Construct}`
+ * when the method body constructs its `(f b)` result IN-BODY via `^construct`
  * calls (`some`/`none`/`ok`/...) -- so its inner constructs recover by value.
  * A body that DELEGATES to a carrier helper (e.g. `Bifunctor [Result]`'s
  * `(result-bimap container ...)`, where `result-bimap` takes a `:int` carrier)
@@ -2235,7 +2235,7 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
              * of the result applied family -- directly, e.g.
              * `(if (some? x) x y)`.  Under the by-value spec the param's type is
              * the by-value `Option__int`, so returning it is already by value;
-             * no in-body `#{Construct}` is needed.  Restrict to the applied
+             * no in-body `^construct` is needed.  Restrict to the applied
              * `(f b)` family (TY_APP) so a bare-element return (the `extract` /
              * Foldable shape, whose result is not an applied type) stays on the
              * uniform carrier path until its own probe hardens it. */
@@ -2266,7 +2266,7 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
 /* M7 HKT layer-4 (flag-gated): is this instance-method body a by-value-safe
  * BARE-ELEMENT return?  The Comonad `extract [w : (f a)] : a` / Foldable shape
  * returns a bare element (`a`, grounding to a scalar/struct), not an applied
- * `(f b)` -- so there is no `#{Construct}` to recover, and m7_body_constructs_
+ * `(f b)` -- so there is no `^construct` to recover, and m7_body_constructs_
  * byvalue (which looks for one) correctly rejects it.  A bare-element body is
  * by-value-safe when its tail merely READS a scalar out of the (now by-value)
  * receiver -- a field access `(.value w)` -- or returns a bare element binding

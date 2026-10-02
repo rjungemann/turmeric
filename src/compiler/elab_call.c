@@ -10069,7 +10069,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                          type_bindings, &n_type_bindings);
     }
     /* option-consumer-retype-byvalue step 2 (0-arg constructor abi_bindings):
-     * a `#{Construct}` constructor whose declared result is a parameterised
+     * a `^construct` constructor whose declared result is a parameterised
      * TY_APP (`none : (Option A)`, `err : (Result A B)`) and that takes no
      * argument carrying its result tyvar gets no argument-derived bindings.
      * When such a call sits in the return position of an *enclosing* generic
@@ -10085,7 +10085,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * none's `A` -> option-map's `B`).  emit composes it through the active
      * specialization's concrete bindings (B -> int) so `construct_recovered_-
      * byvalue` mints a per-instantiation clone returning `Option__int` by
-     * value.  Gated to `#{Construct}` callees so the broad non-constructor
+     * value.  Gated to `^construct` callees so the broad non-constructor
      * relay case (which the ground-only guard above deliberately keeps on the
      * carrier) is untouched. */
     else if (saved_expected_return && fn_type.kind == TY_FN &&
@@ -10099,7 +10099,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                          type_bindings, &n_type_bindings);
     }
     /* zero-arg-construct-ground-byvalue-return: the GROUND counterpart of the
-     * step-2 branch above.  A 0-arg `#{Construct}` constructor whose declared
+     * step-2 branch above.  A 0-arg `^construct` constructor whose declared
      * result is a parameterised TY_APP (`none : (Option A)`) sitting in a
      * return position whose expected type is a *ground* (tyvar-free) TY_APP
      * (`(Option BoundedIdx)` -- a monomorphic defn's declared return) gets no
@@ -10114,7 +10114,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * (`A -> BoundedIdx`) so `emit_abi_register_call` mints (and records the
      * call Expr* against) a by-value `none__spec__Option__BoundedIdx` clone.
      * Gated to a GROUND expected return so a tyvar-bearing context keeps using
-     * the step-2 (compose-through-spec) path, and to `#{Construct}` callees so
+     * the step-2 (compose-through-spec) path, and to `^construct` callees so
      * a plain relay return is untouched. */
     else if (saved_expected_return && fn_type.kind == TY_FN &&
              fn_binding && fn_binding->is_construct_template &&

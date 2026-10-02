@@ -2394,10 +2394,16 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_used_attr = intern_cstr(st, "#used");
     /* Phase M6: (export-as "c_name") attribute head symbol */
     e->sym_export_as_attr = intern_cstr(st, "export-as");
-    /* M2a: #{Construct} polymorphic-constructor synthesis marker */
-    e->sym_construct_attr = intern_cstr(st, "Construct");
-    /* M5 residual-straddle: #{ByVal} prefer-byvalue-spec marker */
-    e->sym_byval_attr = intern_cstr(st, "ByVal");
+    /* M2a: `^construct` polymorphic-constructor synthesis marker, and M5
+     * residual-straddle: `^byval` prefer-byvalue-spec marker.  Both used to
+     * be spelled inside the effect row (^construct / ^byval);
+     * effect-row-honesty-plan W0 moved them onto the defn's attributes. */
+    e->sym_caret_construct = intern_cstr(st, "^construct");
+    e->sym_caret_byval     = intern_cstr(st, "^byval");
+    /* W0: `(match ^non-exhaustive x ...)`, and the deprecated spelling it
+     * replaces, `(match #fx{NonExhaustive} x ...)` (TUR-D0004). */
+    e->sym_caret_non_exhaustive = intern_cstr(st, "^non-exhaustive");
+    e->sym_non_exhaustive_legacy = intern_cstr(st, "NonExhaustive");
     e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
     e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");
     e->sym_panic_payload_line = intern_cstr(st, "panic-payload-line");

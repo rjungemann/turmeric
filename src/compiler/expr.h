@@ -399,7 +399,8 @@ struct Binding {
     bool          is_deprecated;
     const char   *deprecation_message;   /* NUL-terminated, arena-owned, or NULL */
     /* M2a (end-to-end-monomorphization-plan): true if this binding's defn was
-     * annotated with `#{Construct}`. The constructor's body is synthesized by
+     * annotated `(defn ^construct ...)` (formerly `^construct`). The
+     * constructor's body is synthesized by
      * the codegen as a direct by-value struct construction per ABI spec,
      * rather than going through the int64 carrier helper in the inline-C
      * body. The inline-C body is retained as a fallback for the existential /
@@ -408,7 +409,8 @@ struct Binding {
     bool          is_construct_template;
     /* M5 residual-straddle retirement (docs/artifacts/m5-residual-straddle-
      * retirement.md): true if this binding's defn was annotated with
-     * `#{ByVal}`. Forces emit_abi_intern_spec to mint by-value specs for
+     * `(defn ^byval ...)` (formerly `^byval`). Forces emit_abi_intern_spec
+     * to mint by-value specs for
      * TY_APP arg types that would otherwise be rejected by the
      * `arg_types[i].kind == TY_STRUCT` gate at emit_module.c.
      *

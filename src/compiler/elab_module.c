@@ -30,15 +30,9 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         if (h->tag == F_SYM && h->as.sym == e->sym_def) { elab_pre_declare_any_mut_def(e, f); continue; }
         if (h->tag != F_SYM || h->as.sym != e->sym_defn) continue;
         if (f->as.list.len < 3) continue;
-        /* Skip optional #[no-unwind] / #[used] bare attribute symbols
-         * (either order) before the name. */
-        uint32_t name_idx = 1;
-        while ((uint32_t)f->as.list.len > name_idx &&
-               f->as.list.items[name_idx]->tag == F_SYM &&
-               (f->as.list.items[name_idx]->as.sym == e->sym_no_unwind_attr ||
-                f->as.list.items[name_idx]->as.sym == e->sym_used_attr)) {
-            name_idx++;
-        }
+        /* Skip every pre-name attribute -- #[no-unwind]/#[used], export-as,
+         * and the ^attrs (^construct, ^deprecated, ^reflect, ...). */
+        uint32_t name_idx = elab_defn_name_index(e, f);
         if ((uint32_t)f->as.list.len <= name_idx) continue;
         Form *fn_name_f = f->as.list.items[name_idx];
         if (fn_name_f->tag != F_SYM) continue;

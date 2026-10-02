@@ -1346,6 +1346,25 @@ static bool is_effects_tur_name(const Symbol *name) {
     return false;
 }
 
+/* The compiler attributes that used to be written inside `#fx{...}`
+ * (effect-row-honesty-plan W0) and their spellings now.  Left in a row they
+ * are TUR-E0026 like any undeclared name; this only makes the message say
+ * where they went. */
+static const char *moved_attr_spelling(const Symbol *name) {
+    if (strcmp(name->name, "Construct") == 0)     return "^construct";
+    if (strcmp(name->name, "ByVal") == 0)         return "^byval";
+    if (strcmp(name->name, "NonExhaustive") == 0) return "^non-exhaustive";
+    return NULL;
+}
+
+static const char *moved_attr_example(const Symbol *name) {
+    if (strcmp(name->name, "NonExhaustive") == 0)
+        return "(match ^non-exhaustive x ...)";
+    if (strcmp(name->name, "ByVal") == 0)
+        return "(defn ^byval name [A] [...] : A ...)";
+    return "(defn ^construct name [A] [...] : (Option A) ...)";
+}
+
 /* The declared effect closest to `name` by edit distance, for a typo hint;
  * NULL when nothing is close enough to be a plausible misspelling. */
 static const Symbol *closest_declared_effect(const Symbol *name, EffectEnv *env) {
@@ -1384,6 +1403,13 @@ static EffectRow *resolve_declared_row(EffectRow *row, EffectEnv *env, Arena *a,
                     "(an effect name starts with an uppercase letter, a row "
                     "variable with a lowercase one: #fx{IO e})",
                     name->name);
+            } else if (moved_attr_spelling(name)) {
+                /* effect-row-honesty-plan W0: an attribute that used to
+                 * borrow the row brackets. */
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                    "'%s' in effect row is not an effect: it is the attribute %s "
+                    "now, e.g. %s",
+                    name->name, moved_attr_spelling(name), moved_attr_example(name));
             } else if (is_effects_tur_name(name)) {
                 diag_emit_with_code(DIAG_ERROR, span, TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
                     "unknown effect '%s' in effect row: no defeffect declares it "
