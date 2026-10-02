@@ -810,40 +810,95 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 > correctness path only. The loop-invariants row should not be held open in
 > expectation of RE2.
 >
-> **The unchecked-variant design space**, for whoever picks this up. To make a
+> **The unchecked variant: option (c) is the direction.** To make a
 > caller-side proof buy anything at runtime, the callee needs an entry point
-> whose precondition is *assumed* rather than checked. Three shapes, increasing
-> ambition:
+> whose precondition is *assumed* rather than checked -- the third mode the
+> guide's goal/hypothesis split does not currently have. Three shapes were
+> considered; **(c) is the one to pursue**, and (a) and (b) are recorded as
+> rejected so they are not re-proposed.
 >
-> - **(a) Two functions, one `#fx{Unsafe}`.** Ship `sized-dense-get` (checked)
->   and `sized-dense-get-unchecked`, and have the macro expand to the latter.
->   No compiler work -- and no connection between the proof and the call: the
->   macro asserts the bound and nothing verifies the assertion. A trusted
->   comment in place of a check. Defensible only while the macro is the sole
->   caller.
-> - **(b) Elide the callee check when all callers are visible.** Sound, needs
->   no new syntax, and dies exactly where RE2 needs it: an exported accessor's
->   callers are not all visible, and an indirect call never is.
-> - **(c) Make the proof the authorization.** An entry point declaring a
->   precondition that is *never* checked at runtime and that every call site
->   must discharge statically or fail to compile. The obligation, the solver,
->   the diagnostics and `--strict-refine`'s promotion all exist already; what is
->   new is a declaration meaning "refuse to compile rather than fall back to a
->   runtime check", plus a decision about non-strict builds (probably: this
->   flavour is always strict, since having no fallback is the point). Its real
->   cost is virality -- a generic wrapper forwarding to such an accessor must
->   carry the precondition too, which is the `#reads` propagation problem in a
->   new coat -- and it needs the checked entry point kept as the escape hatch
->   for callers that cannot prove the bound.
+> - **(a) Two functions, one `#fx{Unsafe}` -- rejected as a destination.**
+>   Ship `sized-dense-get` (checked) and `sized-dense-get-unchecked`, and have
+>   the macro expand to the latter. Zero compiler work, and `#fx{Unsafe}` is
+>   genuinely enforced -- only `(unsafe ...)` or an already-`Unsafe` caller
+>   discharges it -- so every such call site is marked and the effect system
+>   can enumerate them. What it does not do is connect the proof to the call:
+>   the macro asserts the bound and nothing verifies the assertion. Fine as a
+>   stopgap while a macro is the sole caller; not a place to stop, because the
+>   guarantee degrades silently the moment anyone calls the unchecked form by
+>   hand.
+> - **(b) Elide the callee check when every caller is visible -- rejected as
+>   insufficient.** Sound and needs no new syntax, but it dies exactly where
+>   this is needed: an exported spice accessor's callers are not all visible,
+>   and an indirect call never is. Worth having for its own sake someday;
+>   useless for this.
+> - **(c) Make the proof the authorization -- the direction.** An entry point
+>   declaring a precondition that is **never** checked at runtime and that
+>   every call site must discharge statically or fail to compile. Most of the
+>   machinery exists: the crossing obligation, the solver, `TUR-E0371`, and
+>   `--strict-refine`'s promotion. What is new is a declaration meaning
+>   "refuse to compile rather than fall back to a runtime check".
 >
-> (c) belongs with
-> [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md)
-> rather than here: that plan already owns "what promise does a refinement rest
-> on, and is the promise checkable", and an assumed precondition is a new entry
-> in its taxonomy. Note also that even (c) only pays off where the eliminated
-> check is a measurable cost, which per the 2026-08-20 profile the ECS bounds
-> check is not -- so (c) is interesting as a language feature and a poor fit as
-> RE2's motivation.
+> **What (c) has to answer.** Written down now so the first attempt does not
+> rediscover them:
+>
+> 1. **Always-strict, by construction.** The whole point is that there is no
+>    runtime fallback, so this flavour cannot soften under a non-strict build
+>    the way `TUR-W0372` does. An unproved call site is an error at every
+>    strictness level -- which means the declaration is also a promise to the
+>    *caller* that its build will fail, not merely warn.
+> 2. **Virality is the real cost.** The assumed-ness must reach a call site
+>    that can actually prove the bound. An intermediate wrapper
+>    (`(defn helper [cap : int i : int] (get-assumed cap i))`) cannot discharge
+>    it and must declare the precondition itself -- at which point, under
+>    today's rules, the wrapper emits its own runtime check and the cost moves
+>    rather than disappears. Every wrapper in the chain has to be in the
+>    assumed mode. This is the `#reads` propagation problem in a new coat.
+>    *Mitigating observation:* the win concentrates in macro expansion, where
+>    the loop and the access are generated together at the proving site with no
+>    wrapper in between -- which is exactly the ECS `for-each` shape. So (c) is
+>    cheap in the macro case and expensive in the general library case, and a
+>    first cut could legitimately support only the former.
+> 3. **It moves refinement proofs into the memory-safety TCB.** This is the
+>    heaviest consideration and the reason (c) should not be built casually.
+>    Today a solver bug in a *goal* elision means a missing check on a value
+>    the body computed -- bad, contained. A solver bug in an *assumed
+>    precondition* is an unchecked out-of-range index into a buffer: memory
+>    unsafety produced by a prover mistake. Both historical refinement
+>    soundness bugs lived in the encoder, and as of 2026-10-02 the encoder's
+>    newest work (`^reflect`'s RF3/RF4) has no differential fuzz coverage at
+>    all -- see
+>    [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../../reported/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md).
+>    **Closing that gap is a prerequisite, not a nicety**, if proofs are going
+>    to be load-bearing for memory safety. A bisection hatch
+>    (`TUR_<NAME>=0` re-enabling every suppressed check) and a harness kept on
+>    the off path are the other half -- per the INVERTS-not-retires rule in
+>    [experimental-flags-guide](../../guides/experimental-flags-guide.md).
+> 4. **Keep the checked entry point.** A caller that cannot prove the bound
+>    needs somewhere to go that is not `unsafe`. Two entry points over one body
+>    is the shape, which makes (a) the fallback *inside* (c) rather than a
+>    rival to it.
+> 5. **A candidate framing worth trying first:** make *defining* such an entry
+>    point `#fx{Unsafe}` while *calling* it is safe exactly when the obligation
+>    discharges. That puts the feature inside machinery that already exists,
+>    makes the audit surface enumerable by the effect system, and states the
+>    asymmetry honestly -- the body does unchecked indexing; the call site has
+>    earned it. It also means a call site that cannot prove the bound falls
+>    back to the ordinary `Unsafe` discharge rules rather than to silence.
+> 6. **Where it lives.** Not in this plan. It is a compiler feature, so per
+>    [CLAUDE.md](../../../CLAUDE.md) it needs its own `docs/upcoming/` plan and
+>    an `EXPERIMENTS[]` row behind `--enable=`, and it belongs beside
+>    [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md),
+>    which already owns "what promise does a refinement rest on, and is the
+>    promise checkable" -- an assumed precondition is a new entry in that
+>    taxonomy rather than a variation on `#reads`.
+>
+> **Sequencing, stated plainly:** (c) only pays off where the eliminated check
+> is a measurable cost, and per the 2026-08-20 profile the ECS bounds check is
+> not one. **So (c) should not be motivated by RE2.** It wants a case where the
+> per-access check demonstrably dominates -- a tight numeric kernel over a
+> refined index is the likely candidate -- plus prerequisite 3 above. RE2
+> remains a consumer that would benefit, not the reason to build it.
 
 ### RE3 -- Documentation (DONE 2026-07-26)
 
