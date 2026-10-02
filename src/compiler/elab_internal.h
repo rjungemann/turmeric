@@ -1506,6 +1506,46 @@ int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
  * self/mutually recurse.  A non-defn form is a no-op. */
 void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
 void elab_pre_declare_any_mut_def(Elab *e, const Form *f);
+/* forward-call-to-generic-callee-typed-as-placeholder: Pass 2 elaborates a
+ * defn that calls a not-yet-elaborated GENERIC defn of the same statement
+ * list after that callee, since the generic's pass-1 forward decl has no
+ * parameter types to instantiate its type variables from (likewise a callee
+ * with a function-typed parameter, whose forward decl does not mark it as
+ * the `:fn` carrier).  A defn deferred
+ * this way holds back the defns that name it in turn, and any other form
+ * that names it elaborates it first (fwd_gen_order_next_flush).  Shared by
+ * the top-level driver and the defmodule body loop; see elab_toplevel.c. */
+typedef struct FwdGenOrder {
+    const Symbol **name;     /* per slot: the tracked defn's name, or NULL */
+    uint8_t       *state;    /* per slot: FGO_* */
+    bool          *primed;   /* per slot: tried speculatively in a cycle */
+    const Symbol **keys;     /* open-addressed: every defn name in the list */
+    uint32_t      *counts;   /* per key: slots under the name still waiting */
+    uint32_t      *slot_of;  /* per key: the tracked slot, or UINT32_MAX */
+    uint32_t       cap;      /* power of two; 0 = no generic defn, inert */
+    uint32_t       n;
+    bool           any_deferred;
+} FwdGenOrder;
+void fwd_gen_order_init(FwdGenOrder *o, const Elab *e, Form *const *forms,
+                        uint32_t n);
+bool fwd_gen_order_should_defer(const FwdGenOrder *o, Form *const *forms,
+                                uint32_t i);
+void fwd_gen_order_defer(FwdGenOrder *o, uint32_t i);
+/* A waiting defn `f` names, which must be elaborated before `f` is (mark it
+ * done first), or UINT32_MAX. */
+uint32_t fwd_gen_order_next_flush(const FwdGenOrder *o, const Form *f);
+void fwd_gen_order_done(FwdGenOrder *o, uint32_t i);
+/* The second chance: calls `retry(ctx, i)` once for every slot deferred by
+ * the order or flagged in `extra` (the symptom-A instance deferral), clearing
+ * `extra[i]`.  With nothing deferred by the order this is the old single
+ * source-order pass over `extra`.  `probe(ctx, i)` elaborates a slot
+ * speculatively -- true when it succeeded and was kept, false when it was
+ * rolled back -- and is how a cycle of lossy defns is primed (see the
+ * definition). */
+void fwd_gen_order_drain(FwdGenOrder *o, Form *const *forms, bool *extra,
+                         void (*retry)(void *ctx, uint32_t i),
+                         bool (*probe)(void *ctx, uint32_t i), void *ctx);
+void fwd_gen_order_free(FwdGenOrder *o);
 /* r7rs-lang-plan R3: full types for a forward decl's compound parameters in a
  * dynamic file (NULL when none); marks the matching arg_kinds slots TY_APP. */
 Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,

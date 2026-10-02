@@ -82,6 +82,18 @@ spelling from different information:
 | --- | --- | --- | --- | --- |
 | `ptr<void>` used as a function type | `fat-captureless-closure-ptr-void`, `vec-captureless-fat-closure-readback`, `vec-typed-fat-closure-readback`, `fat-shim-void-ptr-arrow-compose` | the closure's own thunk, or the word shim, at its real signature: a function-typed parameter is `int64_t` (`void *__fn_25(void *, int64_t)`) | the sink's declared `(fn [ptr<void>] ptr<void>)`, so `void *(*)(void *, void *)` | the program erases a closure to `ptr<void>` and calls it at a `ptr<void>` signature.  Both are words, so the type-exact answer is ONE spelling for the two: either a `ptr<void>` thunk slot is the word (as a b4box slot is), or a function-typed one is `void *`.  Either is an ABI-wide change to every thunk typedef and closure definition, not a local fix |
 
+**Re-measured 2026-10-02: still these 4, and a local adapter cannot reach
+them.**  The eighth sweep's `{ adapter, handle }` wrap needs a call site that
+knows the closure's real type.  Here three of the four
+(`vec-captureless-fat-closure-readback`, `vec-typed-fat-closure-readback`,
+`fat-shim-void-ptr-arrow-compose`) erase the closure into a `(Vec ptr<void>)`
+or a `ptr<void>` value before the `(fn [ptr<void>] ptr<void>)` call, so no
+site sees both spellings; the fourth (`fat-captureless-closure-ptr-void`)
+traps twice -- the captureless closure is boxed behind the generic
+`int64_t (*)(void *, int64_t)` word shim, and the capturing one's thunk takes
+its fn-typed parameter as `int64_t`.  So the decision above stands as the
+next step, not more adapters.
+
 One clang-only wrong answer turned up and was a FIXTURE bug, not a compiler
 one: `rc-of-byvalue-aggregate-payload`'s own `tag-of` read an 8-byte word where
 the tag is a C `int`, taking in four bytes of struct padding that a struct copy
