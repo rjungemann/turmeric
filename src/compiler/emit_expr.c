@@ -874,11 +874,17 @@ ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
             return REPR_SCALAR_BITS;
         return REPR_HEAP_PTR;
     }
-    if (strcmp(cty, "bool") == 0 || strcmp(cty, "double") == 0 ||
-        strcmp(cty, "float") == 0 || strcmp(cty, "void") == 0 ||
-        strstr(cty, "int8_t") || strstr(cty, "int16_t") ||
-        strstr(cty, "int32_t") || strstr(cty, "uint"))
-        return REPR_SCALAR_BITS;
+    /* Exact spellings: a substring test read the AGGREGATE
+     * `tur_adt_Option__uint8` as a scalar (it contains "uint"), and the shadow
+     * then ICEd on `(let [nn (none)] (cx nn (:: 200 uint8)))` -- uint8, uint16
+     * and uint32 payloads, never a signed one, whose names carry no `_t`. */
+    static const char *const scalar_ctys[] = {
+        "bool", "double", "float", "void",
+        "int8_t", "int16_t", "int32_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    };
+    for (size_t si = 0; si < sizeof scalar_ctys / sizeof scalar_ctys[0]; si++)
+        if (strcmp(cty, scalar_ctys[si]) == 0) return REPR_SCALAR_BITS;
     return REPR_BYVAL_AGG;             /* a bare aggregate type name */
 }
 
@@ -3130,6 +3136,18 @@ static bool emit_call_drop_after_stamped(EmitCtx *ctx, const Expr *e) {
     if (!e) return false;
     if (e->sum_box_drop_after) return true;
     return ctx->sum_drop_admit != NULL && ctx->sum_drop_admit == e;
+}
+
+/* The CPS emitter's view of RM1: does a statically dispatched call, emitted by
+ * the CPS backend itself, owe the free-after-reader drop its result would get
+ * on the direct path?  The caller still gates it on the result being the
+ * carrier word, exactly as the direct hoist does. */
+bool emit_call_owes_sum_drop(EmitCtx *ctx, const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_CALL) return false;
+    if (e->as.call_.dict_arg && !call_dispatch_is_static(e)) return false;
+    return emit_call_drop_after_stamped(ctx, e) &&
+           emit_call_returns_fresh_sum_box(ctx, e);
 }
 
 /* value-struct-payload-sum-monomorph-box-has-no-owner (the let-bound reader
@@ -19307,10 +19325,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* match-adt-var-arm-does-not-bind: a variable catch-all arm
                      * binds the WHOLE scrutinee.  `__scrut` is the by-value
                      * aggregate, a pbp pointer to it, or the carrier pointer,
-                     * so the read matches how it was bound above. */
+                     * so the read matches how it was bound above.
+                     *
+                     * A by-value binder is declared at the scrutinee's own C
+                     * type: inside a generic's spec the binding's type is
+                     * still the declared `(Option A)`, which type_c_name
+                     * spells as the int64 carrier, while `__scrut` is the
+                     * monomorph's aggregate -- `int64_t other = *__scrut;`,
+                     * invalid C at every instantiation. */
                     if (pat->is_var && pat->var_binding) {
                         const char *vct = type_c_name(pat->var_binding->type);
                         char *vname = name_for_binding(ctx, pat->var_binding);
+                        if (adt_byval || adt_byval_pbp) {
+                            vct = adt_c_name;
+                            emit_localvar_record_ctype(vname, vct);
+                        }
                         indent_buf(body, ctx->indent);
                         if (adt_byval_pbp)
                             buf_printf(body, "%s %s = *__scrut;\n", vct, vname);
@@ -19698,10 +19727,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     ctx->indent += 4;
 
                     /* match-adt-var-arm-does-not-bind: the variable catch-all
-                     * binds the whole scrutinee (carrier pointer here). */
+                     * binds the whole scrutinee (carrier pointer here).  A
+                     * by-value binder takes the scrutinee's C type, as in the
+                     * if-chain path above. */
                     if (pat->is_var && pat->var_binding) {
                         const char *vct = type_c_name(pat->var_binding->type);
                         char *vname = name_for_binding(ctx, pat->var_binding);
+                        if (adt_byval) {
+                            vct = adt_c_name;
+                            emit_localvar_record_ctype(vname, vct);
+                        }
                         indent_buf(body, ctx->indent);
                         if (adt_byval)
                             /* Copy, never `&__scrut_v`: the binding can outlive

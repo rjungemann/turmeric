@@ -1081,6 +1081,7 @@ const char *match_binder_c_type(const Type *t);
  * (`__tur_any_drop`), 2 = boxed value-struct payload.  `name` is any C
  * expression naming the value; it is parenthesised where the walk needs it. */
 void emit_pending_drop_stmt(EmitCtx *ctx, Buf *body, int kind, const char *name, Type t);
+bool emit_call_owes_sum_drop(EmitCtx *ctx, const Expr *e);
 /* global-def-store-misses-int-ptr-bridge: the int64<->pointer bridge for a
  * STORE (module-level def init, thread-local init return, `set!`).  Returns a
  * malloc'd bridged spelling of `iv` or NULL when no bridge is needed. */

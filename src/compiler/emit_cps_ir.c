@@ -5984,7 +5984,8 @@ typedef struct {
      * join local is DECLARED with (so a delivery can tell whether the slot is a
      * one-word carrier or the by-value aggregate itself -- see
      * deliver_slot_cty / the cps->direct aggregate bridge). */
-    struct { uint32_t id; const char *param; const char *cty; } joins[MAX_JOINS];
+    struct { uint32_t id; const char *param; const char *cty;
+             uint32_t param_id; const Binding *param_bind; } joins[MAX_JOINS];
     int         n_joins;
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
     /* perform-inside-loop-has-no-lowering (escaping joins): joins reified as DK
@@ -6930,6 +6931,26 @@ static void cps_deferred_capture(CE *ce, const CTerm *t,
     }
 }
 
+/* The producer twin of cps_deferred_capture: a call the CPS emitter writes
+ * ITSELF (a cps->direct letcall or tail call), so there is no emit_value hoist
+ * to queue its result.  When elab stamped it for the drop-after-reader free
+ * (`(ok? (result-map (ok 1) f))`: `result-map` returns a fresh carrier box and
+ * `ok?` keeps nothing) and it really returns the carrier word, register the
+ * drop on the binder the value lands in; the reader's consume fires it.  A
+ * by-value result is boxed and reaped at delivery instead, so it is never
+ * registered.  The leak this closes surfaced once that call stopped resolving,
+ * by accident, to a spec another call in the unit had minted at the carrier
+ * argument (typed/result-basic under tests/run-leak-check.sh). */
+static void cps_deferred_note_producer(CE *ce, const Expr *call, const char *ret_cty,
+                                       uint32_t cvar_id, const Binding *bind) {
+    if (!call || !ret_cty || strcmp(ret_cty, "int64_t") != 0) return;
+    if (!emit_call_owes_sum_drop(ce->ctx, call)) return;
+    if (g_n_cps_deferred >= 256) return;
+    CpsDeferredDrop *d = &g_cps_deferred[g_n_cps_deferred++];
+    d->cvar_id = cvar_id; d->bind = bind;
+    d->kind = 0; d->t = call->type; d->owned = false;
+}
+
 static bool cps_deferred_any_atom(const CAtom *args, uint32_t n) {
     if (g_n_cps_deferred == 0 || !args) return false;
     for (uint32_t i = 0; i < n; i++)
@@ -7155,6 +7176,12 @@ static void emit_term(CE *ce, const CTerm *t) {
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
+            /* A by-value clone result is boxed and reaped above, so only the
+             * unresolved callee's carrier word can owe the reader's drop. */
+            if (!mclone_lc && !rr_lc && t->as.letcall.x.ty != TY_NIL)
+                cps_deferred_note_producer(ce, t->as.letcall.call_expr,
+                                           emit_sig_lookup_ret_ctype(fn),
+                                           t->as.letcall.x.id, t->as.letcall.x.bind);
             free(bn); free(fn); free(argv);
             /* cps-body-panic-not-propagated: a cps->direct callee that panicked
              * under a handler signals by return; propagate before running the
@@ -7528,6 +7555,17 @@ static void emit_term(CE *ce, const CTerm *t) {
                      * word already derefs it (`tur_is_ok`, and the spec clone's own
                      * `(tur_adt_Result *)(intptr_t)r` parameter cast). */
                     const char *slot_cty = deliver_slot_cty(ce, &t->as.tailcall.kont);
+                    /* A carrier word delivered to an inline join: the join
+                     * parameter is the binder its reader consumes. */
+                    if (t->as.tailcall.kont.kind == KK_VAR && !rr) {
+                        for (int ji = ce->n_joins - 1; ji >= 0; ji--) {
+                            if (ce->joins[ji].id != t->as.tailcall.kont.id) continue;
+                            cps_deferred_note_producer(ce, t->as.tailcall.call_expr, drt,
+                                                       ce->joins[ji].param_id,
+                                                       ce->joins[ji].param_bind);
+                            break;
+                        }
+                    }
                     if (cty_is_byval_agg(drt) && !cty_is_byval_agg(slot_cty)) {
                         Buf bx; buf_init(&bx);
                         buf_printf(&bx,
@@ -7578,6 +7616,8 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * value's (the cps->direct aggregate bridge). */
                 ce->joins[ce->n_joins].cty =
                     binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type);
+                ce->joins[ce->n_joins].param_id = t->as.letcont.param.id;
+                ce->joins[ce->n_joins].param_bind = t->as.letcont.param.bind;
                 ce->n_joins++;
             }
             emit_term(ce, t->as.letcont.body);
