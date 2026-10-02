@@ -63,6 +63,25 @@ question 3 as Option A.
 | ~~[strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md)~~ | low (flag taxonomy) | **RESOLVED 2026-10-02** (archived): one flag with a real promotion path -- `-Werror=strict-effects` makes `TUR-W0030`/`W0032` errors and implies `--strict-effects`; `--lint-effects` is a deprecated alias (`TUR-W0050`); the duplicated emitter and its wrong comment are gone.  Pinned by `tests/run-flags.sh` `lint-effects-alias`, `strict-effects-werror`, `strict-effects-werror-clean` |
 | [module-members-skip-effect-row-checking](module-members-skip-effect-row-checking.md) | medium | `effect_check_pass` walks only top-level `EX_FN_DEF` items, so a `defn` inside a `(defmodule ...)` body is never resolved, inferred or checked: `#fx{}` on a module member that prints, performs, or names an undeclared effect compiles silently.  The CPS coloring had the same blind spot and descends into `mod->body` (`cps.c`); the effect pass never got the equivalent.  Filed rather than fixed with W4 because fixing it breaks annotated spice-test `main`s that print (e.g. `sqlite/tests/linear_handles_test.tur`) |
 
+## Refinement experiments reviewed at the v0.59.0 cut (filed 2026-10-02)
+
+Found reviewing the two live `EXPERIMENTS[]` rows --
+[loop-invariants](../upcoming/loop-invariants-plan.md) (`expires_at 0.58.0`,
+so due) and [reflected-measures](../upcoming/reflected-measures-plan.md)
+(`expires_at 0.61.0`, not due) -- against what graduating each would freeze.
+Every row below was reproduced against a v0.59.0 Debug build. None is a
+soundness bug: in all four the runtime check is kept, so the programs are
+correct. They are the completeness and diagnostic gaps the `prototype`
+lifecycle label is currently covering for, and each one is a thing to decide
+before either row graduates.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [loop-invariant-silently-unverified-outside-a-defn](loop-invariant-silently-unverified-outside-a-defn.md) | medium | A `while` with an `:invariant` in a `definstance` method or a top-level lambda gets **no analysis and no diagnostic** -- not a proof, not a decline, not even the `TUR-W0372` every other unanalysable loop gets, at any strictness level.  It keeps both runtime checks and verifies nothing, while the stats line reports `0 loop(s) declined`.  `li_analyze_loops` has one call site, inside `elab_defn` (`elab_fns.c:10625`), but `elab_while` registers a site and emits checks for every annotated loop regardless of enclosing form.  Same enclosing-form blind spot as [module-members-skip-effect-row-checking](module-members-skip-effect-row-checking.md) |
+| [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md) | medium | RF3 calls `--n 400` at two seeds "non-optional" because both prior refinement soundness bugs lived in the encoder.  The run passes (table in the report: 0 soundness bugs at seeds 11 and 23) but the only admitted measure the fuzzer generates, `reflect_if`, is scalar and non-recursive by design, so recursive unfolding, fuel, arm selection and RF4's tag-fact selection -- the entire RF3/RF4 encoder addition -- are unfuzzed.  `loop-invariants` got a dedicated `shape_loop` + `--only-shape loop`; `^reflect` got helper kinds and has no way to run at density |
+| [reflect-two-provable-facts-report-as-not-holding](reflect-two-provable-facts-report-as-not-holding.md) | low-medium | Two independent provable facts come back unknown, both with the note `the predicate ... does not hold for every input here` -- a claim the code is wrong when it is not.  (1) `(= r true)` is unknown where bare `r` proves: the goal path gets a plain `VC_EQ` over two propositions, the atom that `refine_collect.c:938` already works around with an implication pair for the measure's own equation.  (2) The same RF4 fact proves at a return obligation and is unknown at a call-site crossing, because `rt_collect_path_conds` records only guards and literal-pattern equalities, never a constructor arm's tag/selector facts.  RF6.1 landing may have removed the reason that extension was deferred |
+| [loop-invariant-declines-more-than-soundness-requires](loop-invariant-declines-more-than-soundness-requires.md) | low | Two declines broader than their own reason.  (1) An inner loop assigning a purely inner-local counter declines the outer invariant; the trigger at `elab_fns.c:5169` tests only "the nested loop assigns *something*", never whether the assigned names are visible outside it.  (2) An early `return` declines initiation and preservation too, though neither depends on how the loop exits -- only the post-loop fact `p AND (not c)` is genuinely unavailable.  Also: the nested-loop decline path has no fixture, the one decline in `li_compose` that `loop-invariant-declines` does not cover |
+
 ## P0 representation confusion (filed 2026-09-30)
 
 The recurring class -- a value crossing a seam in the emitted C at the wrong
