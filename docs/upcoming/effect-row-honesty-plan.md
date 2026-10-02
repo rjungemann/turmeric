@@ -330,8 +330,13 @@ re-derive it.
 > before and after.  Partly for a bad reason: module members are not
 > effect-checked at all (only top-level functions are), and every spice-test
 > `main` that prints under a row sits inside a `defmodule`.  That gap is filed
-> as [module-members-skip-effect-row-checking](../reported/module-members-skip-effect-row-checking.md);
+> as [module-members-skip-effect-row-checking](../archive/module-members-skip-effect-row-checking.md);
 > closing it is the next step toward `#fx{}` meaning something everywhere.
+>
+> **Closed 2026-10-02:** module members (and defns inside a top-level `do`)
+> are effect-row checked.  Re-measured over the same 777 files, exactly three
+> spice tests go from clean to `TUR-E0009` -- each a `#fx{Unsafe}` that
+> prints and now needs `#fx{Unsafe IO}`.
 
 With W1 and W2 landed, tag the `println` builtin `#fx{IO}`.
 

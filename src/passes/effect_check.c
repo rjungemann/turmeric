@@ -3,7 +3,9 @@
 #include "effect_check.h"
 
 #include <ctype.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "buf.h"
 #include "builtins.h"
@@ -15,12 +17,13 @@
 
 /* ---------------------------------------------------------------------------
  * Binding → FnDef index
- * A simple flat array used to look up the FnDef for a callee binding during
- * propagation.  Sized conservatively; top-level defn counts rarely exceed a
- * few hundred in realistic programs.
+ * An open-addressed hash on the binding pointer, used to look up the FnDef for
+ * a callee binding during propagation.  It grows: a callee that is not in the
+ * index contributes only its declared row, so a fixed cap that dropped entries
+ * (the old 1024-slot array did) silently loses every inferred effect of the
+ * functions past it -- and a `#lang r7rs` program indexes well over 1024
+ * (tests/fixtures/errors/effect-row-past-1024-fns).
  * --------------------------------------------------------------------------- */
-
-#define FN_INDEX_CAP 1024
 
 typedef struct {
     const Binding *binding;
@@ -28,8 +31,9 @@ typedef struct {
 } FnEntry;
 
 typedef struct {
-    FnEntry  entries[FN_INDEX_CAP];
-    uint32_t n;
+    FnEntry  *slots;   /* cap entries; binding == NULL marks an empty slot */
+    uint32_t  n;
+    uint32_t  cap;     /* a power of two, or 0 before the first add */
 } FnIndex;
 
 /* The env's effect named `name` (a C string), or NULL. */
@@ -77,18 +81,43 @@ static bool expr_has_inline_c(Expr *e) {
     return false;
 }
 
+static uint32_t fn_index_slot(const FnEntry *slots, uint32_t cap,
+                              const Binding *b) {
+    uint64_t h = (uint64_t)(uintptr_t)b;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    uint32_t mask = cap - 1;
+    uint32_t i = (uint32_t)h & mask;
+    while (slots[i].binding && slots[i].binding != b) i = (i + 1) & mask;
+    return i;
+}
+
+/* The first FnDef added for a binding wins; a later add is ignored. */
 static void fn_index_add(FnIndex *idx, const Binding *b, FnDef *fn) {
-    if (idx->n >= FN_INDEX_CAP) return; /* silently drop if full */
-    idx->entries[idx->n].binding = b;
-    idx->entries[idx->n].fn      = fn;
+    if (!b) return;
+    if ((idx->n + 1) * 2 > idx->cap) {
+        uint32_t cap = idx->cap ? idx->cap * 2 : 256;
+        FnEntry *grown = calloc(cap, sizeof(FnEntry));
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t i = 0; i < idx->cap; i++) {
+            if (!idx->slots[i].binding) continue;
+            grown[fn_index_slot(grown, cap, idx->slots[i].binding)] = idx->slots[i];
+        }
+        free(idx->slots);
+        idx->slots = grown;
+        idx->cap = cap;
+    }
+    uint32_t i = fn_index_slot(idx->slots, idx->cap, b);
+    if (idx->slots[i].binding) return;
+    idx->slots[i].binding = b;
+    idx->slots[i].fn      = fn;
     idx->n++;
 }
 
 static FnDef *fn_index_lookup(const FnIndex *idx, const Binding *b) {
-    for (uint32_t i = 0; i < idx->n; i++) {
-        if (idx->entries[i].binding == b) return idx->entries[i].fn;
-    }
-    return NULL;
+    if (!b || idx->cap == 0) return NULL;
+    return idx->slots[fn_index_slot(idx->slots, idx->cap, b)].fn;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1472,6 +1501,48 @@ static EffectRow *resolve_declared_row(EffectRow *row, EffectEnv *env, Arena *a,
 }
 
 /* ---------------------------------------------------------------------------
+ * The items the pass sees: every top-level item, with `(defmodule ...)` bodies
+ * and top-level `(do ...)` forms spread in place, recursively -- the same
+ * flattening the emitter does (emit_core.c, flatten_program_items).  A module
+ * member's EX_FN_DEF lives in EX_DEFMODULE's `mod->body`, and a macro's
+ * `(do (defn ...) (defn ...))` keeps its defns inside the EX_DO; a walk over
+ * `program->as.program.items` alone never resolved, inferred or checked
+ * either, so a member's `#fx{}` was a promise nothing read.  The array is
+ * malloc'd; the caller frees it.
+ * --------------------------------------------------------------------------- */
+
+static void effect_items_push(Expr *e, Expr ***arr, uint32_t *n, uint32_t *cap) {
+    if (!e) return;
+    if (e->kind == EX_DEFMODULE && e->as.defmodule_.mod) {
+        DefModule *mod = e->as.defmodule_.mod;
+        for (uint32_t j = 0; j < mod->n_body; j++)
+            effect_items_push(mod->body[j], arr, n, cap);
+        return;
+    }
+    if (e->kind == EX_DO) {
+        for (uint32_t j = 0; j < e->as.do_.n; j++)
+            effect_items_push(e->as.do_.items[j], arr, n, cap);
+        return;
+    }
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 64;
+        Expr **grown = realloc(*arr, *cap * sizeof(Expr *));
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        *arr = grown;
+    }
+    (*arr)[(*n)++] = e;
+}
+
+static Expr **effect_check_items(Expr *program, uint32_t *out_n) {
+    Expr **arr = NULL;
+    uint32_t n = 0, cap = 0;
+    for (uint32_t i = 0; i < program->as.program.n; i++)
+        effect_items_push(program->as.program.items[i], &arr, &n, &cap);
+    *out_n = n;
+    return arr;
+}
+
+/* ---------------------------------------------------------------------------
  * effect_check_pass
  * --------------------------------------------------------------------------- */
 
@@ -1479,12 +1550,15 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     if (!program || program->kind != EX_PROGRAM) return 0;
     if (!env) return 0;
 
+    uint32_t n_items = 0;
+    Expr **items = effect_check_items(program, &n_items);
+
     /* --- Step -1: Populate the effect env from EX_DEFECT nodes.
      * PASS_EFFECT_LOWER creates a fresh empty env; we scan the elaborated AST
      * for (defeffect ...) nodes and register each one so the env is populated
      * before ERK_UNRESOLVED resolution and inference run. --- */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
         EffectDef *def = item->as.effect_def_.def;
         /* Re-registering takes the node's declaration.  In one program that is
@@ -1505,8 +1579,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     }
     /* ET4: Second pass to set parent pointers from ^extends declarations.
      * Must happen after all effects are registered so parent lookup works. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
         EffectDef *def = item->as.effect_def_.def;
         if (!def->parent_name) continue;
@@ -1519,8 +1593,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     /* stdlib-effect-rows: propagate the ^capability flag onto each registered
      * effect.  (The fresh env populated above does not carry it through
      * effect_env_register, which predates the flag.) */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
         EffectDef *def = item->as.effect_def_.def;
         if (!def->is_capability) continue;
@@ -1535,8 +1609,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
      * Every resolution goes through resolve_declared_row, which reports a
      * name no defeffect declares (TUR-E0026) instead of dropping it. --- */
     int rc = 0;
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
         FnDef *fn = item->as.fn_def_.fn;
         if (fn->binding && fn->binding->type.as.fn.effect_row) {
@@ -1572,8 +1646,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
      * the field call against the handler.  Both effect_check and the CPS pass
      * (cps_ir.c expr_fn_effect_row) read the same CtorField.effect_row, so an
      * in-place resolve fixes both. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item) continue;
         AdtDef *adt = NULL;
         if (item->kind == EX_DEFDATA) adt = item->as.defdata_.def;
@@ -1593,8 +1667,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
 
     /* --- Step 0b: Resolve typeclass method effect rows + update instance method bindings. ---
      * Pass 1: Resolve all ERK_UNRESOLVED effect rows on typeclass method signatures. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_TYPECLASS_DEF) continue;
         TypeClass *tc = item->as.typeclass_def_.typeclass;
         if (!tc) continue;
@@ -1607,8 +1681,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         }
     }
     /* Pass 2: Update instance method impl bindings with the resolved method effect rows. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_INSTANCE_DEF) continue;
         TypeClassInstance *inst = item->as.instance_def_.instance;
         if (!inst || !inst->typeclass) continue;
@@ -1628,8 +1702,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
      * Default method bodies are registered as EX_FN_DEF nodes, but their binding
      * types are set up before typeclass method effect rows are resolved.  Copy
      * the now-resolved effect_row so effect_check_pass validates them correctly. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_TYPECLASS_DEF) continue;
         TypeClass *tc = item->as.typeclass_def_.typeclass;
         if (!tc) continue;
@@ -1647,12 +1721,12 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
      * a record ADT and its capability-field effect rows resolve on the CtorField
      * along the defdata path, so this StructDef-keyed pre-pass is dead. */
 
-    /* --- Step 1: Collect all top-level FnDef nodes into an index. --- */
+    /* --- Step 1: Collect every FnDef (top-level and module members) into an index. --- */
     FnIndex idx;
     memset(&idx, 0, sizeof(idx));
 
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (item && item->kind == EX_FN_DEF && item->as.fn_def_.fn) {
             FnDef *fn = item->as.fn_def_.fn;
             if (fn->binding) {
@@ -1668,8 +1742,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     while (changed) {
         changed = false;
 
-        for (uint32_t i = 0; i < program->as.program.n; i++) {
-            Expr *item = program->as.program.items[i];
+        for (uint32_t i = 0; i < n_items; i++) {
+            Expr *item = items[i];
             if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
 
             FnDef *fn = item->as.fn_def_.fn;
@@ -1701,8 +1775,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     s_current_analysis_module = NULL;
 
     /* --- Step 3: Validate each function against its declared row. --- */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
         FnDef *fn = item->as.fn_def_.fn;
         EffectRow *declared = fn->binding ? fn->binding->type.as.fn.effect_row : NULL;
@@ -1722,8 +1796,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     }
 
     /* ER1: Check closures with declared effect rows. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
         if (check_closures_in_expr(a, item->as.fn_def_.fn->body, &idx, env) != 0)
             rc = 1;
@@ -1732,8 +1806,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     /* --- Step 3b: ER4 -- Call-site effect-row subtype checking.
      * For each top-level function, walk its body and verify that any function
      * value passed to a concrete-row parameter has a compatible (subset) row. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
         if (check_call_site_rows_in_expr(a, item->as.fn_def_.fn->body,
                                           &idx, env) != 0)
@@ -1743,12 +1817,14 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     /* --- Step 3c: ET1-C -- Unreachable handler clause warnings (TUR-W0033).
      * For each top-level function, walk its body and warn when a handler clause
      * names an effect that the handled body does not actually perform. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
         check_unreachable_handlers_in_expr(a, item->as.fn_def_.fn->body, &idx, env);
     }
 
+    free(idx.slots);
+    free(items);
     return rc;
 }
 
@@ -1757,8 +1833,10 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
  * so that row variables (e.g. #{e}) appear in the output for polymorphic defns. */
 void effect_check_dump_effects(Expr *program, FILE *out) {
     if (!program || program->kind != EX_PROGRAM) return;
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
+    uint32_t n_items = 0;
+    Expr **items = effect_check_items(program, &n_items);
+    for (uint32_t i = 0; i < n_items; i++) {
+        Expr *item = items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
         FnDef *fn = item->as.fn_def_.fn;
         if (!fn->binding || !fn->binding->name) continue;
@@ -1782,4 +1860,5 @@ void effect_check_dump_effects(Expr *program, FILE *out) {
                 (int)row_str.len, row_str.data);
         buf_free(&row_str);
     }
+    free(items);
 }
