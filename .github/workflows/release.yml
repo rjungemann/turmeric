@@ -87,6 +87,11 @@ jobs:
           # failed at the C compile step.  Verified broken on macOS and Windows
           # before this; docs/archive/release-archive-cannot-compile.md.
           cp build/src/libturt_runtime.a dist/lib/
+          # libturt_preamble.a is what lets a default build skip recompiling the
+          # runtime preamble in every program (cc-path-preamble-split-plan).
+          # Without it the build still works -- it keeps the whole preamble --
+          # so a missing copy here would only ever show up as slowness.
+          cp build/src/libturt_preamble.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
           cp -R stdlib dist/share/turmeric/
 
@@ -232,6 +237,7 @@ jobs:
 
           cp build/tur.exe dist/bin/
           cp build/src/libturt_runtime.a dist/lib/
+          cp build/src/libturt_preamble.a dist/lib/
           cp build/src/libturi.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
           cp -R stdlib dist/share/turmeric/
