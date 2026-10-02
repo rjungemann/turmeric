@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """tests/shard_util.py -- parse an "i/N" shard spec and slice a work list.
 
 Shared by tests/generic-spec-matrix.py and

@@ -113,7 +113,11 @@ SAMPLED = {
 
 # Where --check reads the macOS sample size from, to compare against SAMPLED.
 CI_WORKFLOW = os.path.join(".github", "workflows", "ci.yml")
-GSM_SHARD_RE = re.compile(r"TUR_GSM_SHARD:.*?'(\d+/\d+)'\s*\)?\s*\|\|")
+# The first quoted i/N on the `TUR_GSM_SHARD:` line itself.  Same-line and
+# shape-agnostic on purpose: a tighter pattern that encoded the surrounding
+# expression would break on a reformat.  When it finds nothing --check FAILS
+# rather than passing, so a reformat that does defeat it is loud.
+GSM_SHARD_RE = re.compile(r"^\s*TUR_GSM_SHARD:[^\n]*?'(\d+/\d+)'", re.M)
 
 
 def part_pattern(leg, part):
@@ -157,18 +161,36 @@ def ci_gsm_shard():
     return m.group(1) if m else None
 
 
-def registered(build):
-    """Test names ctest reports, optionally filtered by a part's pattern."""
-    out = subprocess.run(["ctest", "-N", "--test-dir", build],
+def _ctest_n(build, *args):
+    """`ctest -N` with `args`, as a set of test names.
+
+    The EXIT STATUS is a signal, not the line count: an empty result from a bad
+    --test-dir or a missing ctest looks exactly like a part that selects
+    nothing, and the second is a finding while the first is a broken
+    invocation.  `ctest -N -R <no match>` exits 0 (it prints "Total Tests: 0"),
+    so a non-zero status here really is an error.  run-shard-partition.sh
+    records the same lesson from a CI round spent on "(Failed)" and no reason.
+    """
+    out = subprocess.run(["ctest", "-N", "--test-dir", build] + list(args),
                          capture_output=True, text=True, cwd=REPO)
+    if out.returncode != 0:
+        print("FAIL check-ctest-partition -- `ctest -N %s` exited %d; this is a "
+              "broken invocation, not a finding about the parts."
+              % (" ".join(args), out.returncode))
+        for line in (out.stderr or out.stdout or "").splitlines()[:4]:
+            print("     %s" % line)
+        raise SystemExit(1)
     return _names(out.stdout)
+
+
+def registered(build):
+    """Every test name ctest reports for this build tree."""
+    return _ctest_n(build)
 
 
 def selected(build, kind, pattern):
-    flag = "-R" if kind == "include" else "-E"
-    out = subprocess.run(["ctest", "-N", "--test-dir", build, flag, pattern],
-                         capture_output=True, text=True, cwd=REPO)
-    return _names(out.stdout)
+    """The test names one part's own pattern selects."""
+    return _ctest_n(build, "-R" if kind == "include" else "-E", pattern)
 
 
 # `Test   #1: name` ... `Test #177: name` -- ctest RIGHT-ALIGNS the number, so
