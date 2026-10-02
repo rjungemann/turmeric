@@ -73,10 +73,10 @@ are environmental and not counted.
 A fifth pass (56): an E2a registry entry declared with a pointer or narrow
 parameter registers an adapter in the call site's word convention (`<fn>__e2w`).
 
-Remaining after the eighth sweep (4 traps; 7 measured with the full suite under
-the command above at `-O2` before the two parametric-field changes, which removed
-the other three, each confirmed at `-O0 -g`).  One cluster, ONE slot whose
-producer and consumer decided the spelling from different information:
+Remaining after the eighth sweep (4 traps, measured with the full suite under
+the command above at `-O2` -- 3482 passed, 4 failed -- and each confirmed at
+`-O0 -g`).  One cluster, ONE slot whose producer and consumer decided the
+spelling from different information:
 
 | Cluster | Fixtures | Producer in the slot | Consumer's cast | What a fix has to decide |
 | --- | --- | --- | --- | --- |
