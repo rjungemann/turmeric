@@ -672,8 +672,14 @@ add_test(
           --baseline tests/generic-spec-matrix.baseline
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# TIMEOUT 4500, raised from 3000 on 2026-10-01: the unsharded suite measured
+# 2050s on the macOS leg, 68% of the old budget, which is not enough headroom
+# for a cold runner or a nightly that adds cells.  CI shards this test
+# (TUR_GSM_SHARD, see .github/workflows/ci.yml), so the budget is now sized for
+# the UNSHARDED run -- a local `ctest` and the nightly arm64 leg -- not for what
+# any one CI job does.
 set_tests_properties(tur_generic_spec_matrix PROPERTIES
-  RUN_SERIAL TRUE TIMEOUT 3000 DEPENDS tur)
+  RUN_SERIAL TRUE TIMEOUT 4500 DEPENDS tur)
 # TUR_TEST_SHARD must partition the corpus: disjoint slices whose union is the
 # whole thing.  Neither half is observable from a sharded run itself -- a shard
 # that silently skipped fixtures, or ran some twice, still prints a clean
@@ -683,6 +689,17 @@ set_tests_properties(tur_generic_spec_matrix PROPERTIES
 add_test(
   NAME tur_shard_partition
   COMMAND bash tests/run-shard-partition.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The same invariant one level up: the `test` job's ctest PARTS must between
+# them run every registered suite.  A suite in no part stops running and CI
+# still goes green -- `--no-tests=error` catches only a pattern that empties a
+# part outright, not one that loses a test from the middle.  That check used to
+# be a sentence in ci.yml telling a human to add up `ctest -N` totals.
+# Enumeration only (`ctest -N`), so it costs no test time and needs no tur.
+add_test(
+  NAME tur_ctest_partition
+  COMMAND python3 tests/ctest-parts.py --check "${CMAKE_BINARY_DIR}"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # `cmd | grep -q` under `set -o pipefail` reports a FALSE failure when the

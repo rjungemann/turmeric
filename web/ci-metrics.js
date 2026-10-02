@@ -19,6 +19,7 @@
 // incomparable across. The env <select> therefore does not touch that panel.
 
 import './icons.js'; // <t-icon>
+import { GITHUB_URL } from './repo.js';
 
 const API = '/api/ci-timings';
 const LOC_API = '/api/ci-loc';
@@ -453,7 +454,7 @@ function renderProvenance() {
   document.getElementById('ci-provenance').innerHTML = `
     <span>Latest run</span>
     <a class="mono ci-link"
-       href="https://github.com/rjungemann/turmeric/commit/${esc(latest.sha)}">${esc(short)}</a>
+       href="${GITHUB_URL}/commit/${esc(latest.sha)}">${esc(short)}</a>
     <span class="dot-sep">/</span>
     <span>${esc(fmtDateTime(latestTs))}</span>
     <span class="dot-sep">/</span>
@@ -903,7 +904,7 @@ function renderLoc() {
     ? `${esc(fmtCount(latest.code_lines))} product / ${esc(fmtCount(latest.test_lines))} test
        tracked lines at
        <a class="mono ci-link"
-          href="https://github.com/rjungemann/turmeric/commit/${esc(latest.sha ?? '')}"
+          href="${GITHUB_URL}/commit/${esc(latest.sha ?? '')}"
           >${esc((latest.sha ?? '').slice(0, 7))}</a>.
        Blank lines and comments included; committed machine output is counted
        separately.`

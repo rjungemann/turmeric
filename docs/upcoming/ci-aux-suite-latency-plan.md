@@ -1,9 +1,22 @@
 # CI auxiliary-suite latency -- shard on Linux, thin on macOS
 
-> **Status: PROPOSED 2026-10-01; nothing landed.** S1-S7 are all open: no
-> `--shard` in `tests/generic-spec-matrix.py` or
-> `tests/check-emitted-float-conversions.py`, no ctest-partition check, and
-> `.github/workflows/ci.yml` still runs three parts per OS. Written in response
+> **Status: S1-S7 IMPLEMENTED 2026-10-01, not yet observed in CI.** All seven
+> work items are written and verified locally; the projected durations in this
+> document are still projections, because no run of the new shape has happened
+> yet. First thing to do after this merges is compare the real `ci-metrics`
+> trend against section 5.1 and section 6.3, and correct both tables plus the
+> `ci.yml` job comment to measured numbers.
+>
+> What landed: `--shard i/N` on both scripts via `tests/shard_util.py` (S1); the
+> matrix ctest timeout at 4500s (S2); `tests/ctest-parts.py` as the single source
+> of the part patterns plus the `tur_ctest_partition` check (S3); `fconv` and
+> `gsm1`/`gsm2` parts on Linux only (S4); `TUR_GSM_SHARD=1/4` inside the macOS
+> `aux` part and `--suite-shard` in the collector (S5);
+> `.github/workflows/nightly-arm64.yml` (S6); the stale comment numbers and a
+> `timeout-minutes: 90` on the `test` job (S7). All four open questions are
+> resolved -- see section 9.
+>
+> Written in response
 > to "why do the macOS auxiliary suites take 56m currently?" against
 > [#1010](https://github.com/rjungemann/turmeric/pull/1010), and then widened
 > when the measurement showed the macOS runner POOL, not macOS CPU, is the
@@ -403,6 +416,24 @@ Order: S2, then S1 and S3 in either order, then S4, then S5 and S6, then S7.
 S4 and S5 are the two that change check names and durations, so they are worth
 landing on separate days to keep the timing trend readable.
 
+**As implemented**, the order above was followed, with two deviations worth
+knowing about:
+
+- **S3 carries the macOS table rows that S5 uses.** The part table has to be
+  complete for its own check to pass, so `tests/ctest-parts.py` landed with both
+  legs described -- including the macOS `NIGHTLY_ONLY` row for the float lint --
+  before `ci.yml` read any of it. The table is inert until a workflow asks it
+  for a pattern, so no behaviour moved early; but between S3 and S6 that row
+  names a nightly workflow that does not exist yet.
+- **S4 and S5 are one commit.** Their `ci.yml` edits interleave in a single hunk
+  of the job's `env` block, and the two halves are one coherent change to one
+  job. That forgoes the separate-days advice above: landing them together means
+  the trend sees the Linux split and the macOS thinning at the same point. The
+  `--suite-shard` tag (question 4) is what keeps that readable anyway, since the
+  macOS matrix row now says it measured a quarter rather than silently dropping
+  4x -- so the reason for separate days is weaker than it was when the plan was
+  written. Split the PR if the trend matters more than the round trip.
+
 ## 8. Also found, not caused by this
 
 The `test` job has **no `timeout-minutes`**, so it inherits GitHub's 360-minute
@@ -412,30 +443,63 @@ with a diagnostic; the JIT job sets 60 and has a measured rationale for it
 but it needs a number chosen against the post-S4/S5 durations, not today's --
 so it is deliberately last, and noted rather than specified.
 
-## 9. Open questions
+**Done in S7, at 90 minutes, and deliberately loose.** It went last as this
+section asks, so it could be chosen against the post-S4/S5 shape (~27 min for
+the slowest part plus a cold build) rather than against the 67-minute job.
+Loose because a `timeout-minutes` kill is the one outcome with *no* diagnostics
+-- it cancels the job and leaves the `if: always()` timing uploads pending, so a
+run killed by it tells you less than the slow run it replaced. ctest's per-test
+`TIMEOUT` properties are the tight bound and they name the offending suite; this
+is only the outer fence. Tighten it once the real durations are in the trend.
 
-1. **Does the macOS queueing have a cause we control?** Section 3 establishes
-   the pattern over two runs but not its source. If it is a per-repo macOS
-   concurrency setting rather than pool scarcity, raising it would beat S5
-   outright and would change decision 1 of the header block. Worth one look at
-   the Actions concurrency settings before S5.
+## 9. Open questions -- all four resolved 2026-10-01
+
+1. **Does the macOS queueing have a cause we control?** **No.** Checked before
+   S5: `ci.yml` declares no top-level `concurrency` group (only
+   `publish-timings` has one, by design), the repo's Actions permissions are
+   `enabled: true` / `allowed_actions: all` with no runner-group restriction,
+   and the repo is public, so standard-runner concurrency is the account's, not
+   a repo setting. Nothing repo-side to raise. Decision 1 of the header block
+   stands, and S5 is the right shape.
 2. **Should the nightly macOS matrix rotate shards instead of running in
-   full?** Rotating (`run_number % 4`) would make every PR-adjacent run cover
-   a different quarter at 8.5 min, with no nightly leg at all. Simpler
-   infrastructure, but it trades a reproducible nightly signal for a
-   run-number-dependent one, which is a bad trade the first time a nightly
-   goes red and cannot be re-run identically.
+   full?** **Full run**, as the section argued. Rotating (`run_number % 4`)
+   would make every PR-adjacent run cover a different quarter at 8.5 min, with
+   no nightly leg at all -- simpler infrastructure, but it trades a reproducible
+   nightly signal for a run-number-dependent one, which is a bad trade the first
+   time a nightly goes red and cannot be re-run identically.
 3. **Is `tur_emitted_float_conversions` worth keeping on macOS at all**, even
-   nightly? Section 6.1 argues the legs are near-redundant for a pure AST
-   lint. If that holds up, S6 covers only the matrix.
+   nightly? **Yes, nightly.** Section 6.1's argument is that the legs are
+   *near*-redundant, and near-redundant is not redundant: AppleClang and Linux
+   clang are different front ends, and the two legs emit for different ABIs. A
+   nightly run costs no PR latency, so it is the cheap way to find out whether
+   the legs ever disagree -- and if they never do over a few months, dropping it
+   then is a decision with evidence behind it. So S6 covers both suites, not
+   only the matrix.
 4. **How should the macOS matrix row be labeled once it measures a quarter of
-   the cells?** Section 4.3 states the problem: the `aux` job is not sharded as
-   a whole, so the row is untagged and the series drops ~2050s -> ~512s with no
-   explanation in the data. Three options -- accept it and annotate the
-   changeover; pass `--shard` to the collector for that part alone, which means
-   teaching it a per-suite shard rather than a per-job one; or give the macOS
-   shard its own part after all, paying the extra queue slot section 3 argues
-   against. Decide before S5 lands.
+   the cells?** **Option two: a per-suite shard in the collector.**
+   `collect-suite-timings.py` grew `--suite-shard SUITE=i/N`, which tags one
+   row and leaves the job's other 160 alone. The two rejected options were
+   worse in kind, not just in degree: accepting the discontinuity leaves a
+   series that drops ~2050s -> ~512s with nothing in the data explaining it,
+   which is exactly the sort of graph that costs someone an afternoon in six
+   months; and giving the macOS shard its own part pays the queue slot section 3
+   spends the whole plan arguing against. The job-level `$TUR_TEST_SHARD` was
+   never an option here -- it would label all 161 rows as replicas of a slice
+   they never ran, which is the trap section 4.3 documents.
+
+### 9.1 Follow-ups this implementation leaves open
+
+Neither is a gap in S1-S7; both are things to do once the new shape has run.
+
+- **Correct the projections to measurements.** Sections 5.1 and 6.3 and the
+  `ci.yml` job comment all carry projected durations. The `ci.yml` comment says
+  so in place and asks the next reader to fix it from the trend.
+- **The nightly's timing rows are an artifact, not a trend series.**
+  `nightly-arm64.yml` writes `timings.jsonl` and uploads it, but `ci.yml`'s
+  `publish-timings` job aggregates one run of `ci.yml` and does not see another
+  workflow's artifacts. Wiring the nightly into the `ci-metrics` branch is a
+  separate change; until then the full-matrix arm64 durations are retrievable
+  per run but not plotted.
 
 ## 10. Not in scope
 
