@@ -1,6 +1,8 @@
 # Effect-row honesty -- answer WP8 as Option A, and make `#fx{}` mean something
 
-> **Status: PROPOSED 2026-10-01.** Nothing implemented. Written in response to
+> **Status: PROPOSED 2026-10-01, all three open questions resolved the same
+> day** (section 6 -- Q1 and Q2 by measurement, Q3 by the author). Nothing
+> implemented. Written in response to
 > two questions about the security guide -- whether `--no-proc-macros` should
 > default on "because Rust defaults `procMacro.enable = false`", and whether
 > `--strict-effects` should default to true -- plus the observation that
@@ -127,10 +129,19 @@ then passes a check it should fail.
 
 - Diagnose an unresolved effect name as a hard error naming the tag, with a
   "did you import the module that declares it?" hint.
-- Sweep `tests/fixtures/` and `stdlib/` for existing undeclared tags first, to
-  size the break. `#fx{Bt}` sat decorative for a month, so expect some.
+- **Allowlist the four compiler attribute markers** that ride `#fx{}` --
+  `Unsafe`, `Construct`, `ByVal`, `NonExhaustive`. Without this the first
+  compile of `stdlib/result.tur` fails. See Q1 in section 6 for why they are
+  there and why migrating them to `^attr` is a separate change.
+- Assert the allowlist is exhaustive against the elaborator's interned
+  markers, so a future attribute cannot silently re-become a dropped effect.
 
-**Exit:** the repro in that report errors instead of printing two `#{}` rows.
+**The sweep is already done** (Q1): zero undeclared effect tags in `stdlib/`
+plus `tests/fixtures/`, so no warn-then-error transition is needed. The only
+break to manage is the attribute allowlist above.
+
+**Exit:** the repro in that report errors instead of printing two `#{}` rows,
+and `stdlib/` still compiles.
 
 ### W2 -- Make `IO` available where `println` is (prerequisite)
 
@@ -171,6 +182,13 @@ Two factual errors, both in `docs/guides/security-guide.md`:
 
 Also correct the audit plan's own M-7 row (`:166`), which describes only the
 default-off lint half and reads as though nothing is enforced.
+
+3. **Say which print path to reach for** (from Q3). Nothing today tells a
+   reader when to use `println` versus `(perform (Write s))`. The effects
+   guide should state it: `println` for output you are not trying to control,
+   `perform (Write s)` when a handler should be able to intervene -- mapped
+   onto the `Debug.Trace` / `putStrLn` pair in section 2, which is what makes
+   the split legible.
 
 **Note on the `--no-proc-macros` default while here:** the premise for
 flipping it was the false rust-analyzer claim, so the author's 2026-09-30
@@ -242,16 +260,101 @@ W0030 cannot fail a build no matter what it is pointed at.
 - **No Option B marker.** A propagating taint marker is a real future feature
   under its own name; nothing here forecloses it.
 
-## 6. Open questions
+## 6. Open questions -- all three resolved 2026-10-01
 
-1. **W1's blast radius.** How many undeclared `#fx{...}` tags exist in
-   `tests/fixtures/` and `stdlib/` today? If the sweep is large, W1 may need a
-   warn-then-error transition. Measure before writing the error.
-2. **Does `#fx{IO}` on `println` want to extend to the interpreter?** The
-   builtin table is shared, but `turi`'s dispatch is separate; parity needs
-   checking before W4's exit is claimed.
-3. **Should `with-write` stay?** If `#fx{IO}` on `println` becomes the
-   ergonomic tracked path, `Write` + `with-write` is a second mechanism for
-   nearly the same thing, used by 15 files. Keep (it is handleable, which
-   `#fx{IO}` is not -- you can intercept `Write` to redirect output) or
-   deprecate. Leaning keep, for that reason.
+### Q1. W1's blast radius -- RESOLVED by measurement
+
+**Zero undeclared effect tags in the corpus.** Over `stdlib/` plus
+`tests/fixtures/`: 146 files carry a `#fx{...}` tag, 28 distinct names, and
+every one that is an effect resolves. Eight files initially looked like drops;
+all eight are detector artifacts -- docstring text, the `defeffect`
+declaration sites themselves, and rows written in a *type* position
+(`[run : fn #fx{Write}]` in a struct field) which `--dump-effects` does not
+print because it prints `defn` rows only.
+
+So the blast radius is not existing breakage. **It is that `#fx{}` is a shared
+namespace**: three names in it are not effects at all but compiler attributes,
+interned by name in the elaborator rather than declared by `defeffect`:
+
+| Marker | Interned at | Used by |
+| --- | --- | --- |
+| `Construct` | `src/compiler/elab_core.c:2398` | `ok`/`err` (`stdlib/result.tur:39,57`), `some` (`stdlib/option.tur:33`) |
+| `ByVal` | `src/compiler/elab_core.c:2400` | m5 by-value accessor marker, fixtures |
+| `NonExhaustive` | `src/compiler/elab_structs.c:3568,3607` | `match` exhaustiveness opt-out |
+
+(`Unsafe` is a fourth, via `sym_effect_unsafe`, `elab_core.c:2243`.)
+
+A naive "hard error on an unknown name in `#fx{...}`" therefore breaks
+`stdlib/result.tur` and `stdlib/option.tur` on the first compile.
+
+**What other effect languages do.** They do not have this problem
+structurally. In [Koka](https://arxiv.org/pdf/1406.2061), Unison, OCaml 5,
+Effekt and the Haskell effect libraries, an effect label is an ordinary
+*type-level name* resolved by normal scoping, so an unknown effect name is
+simply an unbound identifier -- a plain type error. None of them carries a
+special "unknown effect" rule, because none of them built a bespoke
+sub-namespace with its own ad-hoc resolution. Their collective answer to W1 is
+"resolve effect names the way every other name is resolved." Equally: none of
+them puts compiler attributes inside the effect syntax -- attributes are
+separate pragma syntax (`{-# ... #-}`, `[@@...]`, `@ann`).
+
+**Turmeric already has that separate syntax, and it is `^attr`.** Not a new
+`#attr{}`: `^<lowercase>` is the established attribute marker, ~1,100 uses in
+`stdlib/` alone (`^fat` 327, `^borrow` 195, `^mut` 127, `^linear`, `^unique`,
+`^multishot`, `^tailcall`, `^affine`, `^relevant`, `^private`, `^deprecated`,
+`^atomic`, `^persistent`, `^thread-local`). `defeffect` itself takes
+`^capability` and `^extends`. The case convention corroborates the split:
+effect names are uppercase, attributes lowercase -- the three markers above are
+uppercase *only* because `#fx{}` required it. The clean target spelling is
+`^construct` / `^byval` / `^non-exhaustive`.
+
+**Decision: allowlist in W1; migrate separately.** `#fx{NonExhaustive}` is
+documented user-facing syntax with its own section at
+[`sum-types-guide.md:241`](../guides/sum-types-guide.md) and a mention in that
+page's front-matter description, so moving it is a breaking change needing a
+deprecation cycle (`^deprecated` is precedent), not a refactor. W1 does not
+need it:
+
+```
+uppercase name in #fx{...}
+  -> in ATTRS allowlist?    ok, attribute
+  -> declared by defeffect? ok, effect
+  -> else                   HARD ERROR naming the tag
+ATTRS = { Unsafe, Construct, ByVal, NonExhaustive }
+```
+
+The allowlist carries the obvious hazard -- a *future* attribute added to
+`#fx{}` silently becomes a dropped "effect" again -- so W1 should assert the
+allowlist is exhaustive against the elaborator's interned markers, and the
+`^attr` migration gets filed as its own cleanup rather than dropped.
+
+### Q2. Interpreter parity -- RESOLVED, nothing to do
+
+Both halves check out:
+
+- **One table.** The interpreter consults the same builtin table --
+  `src/turi/eval.c:80` includes `builtins.h`, calls `builtin_lookup`
+  (`:13155`), and runs `builtins_init`. `src/turi/docstrings.c:215` holds only
+  a doc string for `println`, not a second registration. So an effect-row
+  field on the builtin row is **one edit covering both paths**.
+- **The check already runs on both.** Measured with a declared capability
+  effect and a `#fx{}` caller: `tur check` and `tur --interpret` emit the
+  *identical* `TUR-E0009`, same span, same text.
+
+W4's exit criterion therefore needs no interpreter-specific clause; add an
+`--interpret` fixture to keep it honest.
+
+### Q3. `with-write` -- RESOLVED: keep both (author, 2026-10-01)
+
+`Write` + `with-write` stays alongside `#fx{IO}` on `println`, because the two
+are not redundant: **`Write` is handleable and `#fx{IO}` is not.** A capability
+tag can only be declared, so it cannot intercept, redirect or capture output;
+`(handle ... (Write [s] k) ...)` can. That is a real capability no tag
+replaces, and it is why `with-write`'s 15 files are not the measure of its
+worth.
+
+**Follow-on doc item:** nothing today tells a reader which to reach for. The
+effects guide should say it plainly -- `println` for output you are not trying
+to control, `perform (Write s)` when a handler should be able to intervene --
+mapped onto the Haskell pair in section 2 (`Debug.Trace` vs `putStrLn`), which
+is the analogy that makes the split obvious. Fold this into W3.

@@ -79,9 +79,27 @@ a builtin until resolution is honest.
 
 1. **Diagnose an unresolved effect name** (preferred). An uppercase name in
    `#fx{...}` with no `defeffect` in the compile is a hard error naming the
-   tag, with a "did you import the module that declares it?" hint. This is a
-   breaking change for any tree carrying a `#fx{Typo}` today -- worth a sweep
-   of `tests/fixtures/` and `stdlib/` first to size it.
+   tag, with a "did you import the module that declares it?" hint.
+
+   **The sizing sweep is done (2026-10-01): zero undeclared effect tags** in
+   `stdlib/` plus `tests/fixtures/` -- 146 files carry a `#fx{...}`, 28
+   distinct names, every effect among them resolves. So this breaks no
+   existing effect annotation.
+
+   It does break something else. **Three names in `#fx{}` are not effects at
+   all** but compiler attributes, interned by name in the elaborator rather
+   than declared by `defeffect`, so a naive rule rejects them:
+
+   | Marker | Interned at | Used by |
+   | --- | --- | --- |
+   | `Construct` | `src/compiler/elab_core.c:2398` | `ok`/`err` (`stdlib/result.tur:39,57`), `some` (`stdlib/option.tur:33`) |
+   | `ByVal` | `src/compiler/elab_core.c:2400` | m5 by-value accessor marker |
+   | `NonExhaustive` | `src/compiler/elab_structs.c:3568,3607` | `match` exhaustiveness opt-out |
+
+   (`Unsafe` is a fourth, via `sym_effect_unsafe`, `elab_core.c:2243`.)
+   Allowlist all four, and assert the allowlist is exhaustive against the
+   interned set so a future attribute cannot silently re-become a dropped
+   effect.
 2. **Make the five stdlib capability tags compiler-known**, as `Unsafe`
    already is, so `IO`/`FS`/`Net`/`Proc`/`Rand` resolve without an import and
    `Bt`'s hand-placement stops being special. Does not fix `#fx{Typo}`;
@@ -92,3 +110,27 @@ a builtin until resolution is honest.
 
 Directions 1 and 2 are independent and both wanted: 1 makes a typo loud, 2
 makes the common tags work where they are needed.
+
+## A related wart, worth its own change
+
+`#fx{}` is doing two jobs: effect rows and compiler attributes. Every other
+effect-system language keeps these apart -- in Koka, Unison, OCaml 5, Effekt
+and the Haskell effect libraries an effect label is an ordinary type-level
+name, so an unknown one is a plain unbound-identifier error and this failure
+mode cannot arise; attributes live in separate pragma syntax (`{-# ... #-}`,
+`[@@...]`, `@ann`).
+
+Turmeric already has that separate syntax: `^<lowercase>`, ~1,100 uses in
+`stdlib/` (`^fat`, `^borrow`, `^mut`, `^linear`, `^multishot`, `^private`,
+`^deprecated`, and `^capability`/`^extends` on `defeffect` itself). The case
+convention agrees -- effects uppercase, attributes lowercase -- and the three
+markers above are uppercase only because `#fx{}` demanded it. The clean
+spelling is `^construct` / `^byval` / `^non-exhaustive`.
+
+Not folded into direction 1 because `#fx{NonExhaustive}` is **documented
+user-facing syntax**, with its own section at
+[`sum-types-guide.md:241`](../guides/sum-types-guide.md) and a line in that
+page's description, so it needs a deprecation cycle rather than a rename.
+Tracked in
+[effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md) section 6
+Q1.
