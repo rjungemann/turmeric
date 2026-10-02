@@ -54,7 +54,18 @@ struct BuiltinSpec {
     Type           result_type;
     BuiltinShape   shape;
     const char    *c_op;
+    /* effect-row-honesty-plan W4: the builtin's declared effect row, as the
+     * name of one compiler-known `^capability` effect ("IO" on `println`), or
+     * NULL for a pure builtin.  A name rather than an Effect* because the
+     * effect pass resolves it against its own env.  Last field so the
+     * positional initializers that predate it read as NULL. */
+    const char    *effect;
 };
+
+/* The declared effect (see BuiltinSpec.effect) of the builtin `name` --
+ * the same for every overload of it -- or NULL.  For callers that have a
+ * name rather than a spec (a Saffron EX_DYN_OP). */
+const char *builtin_effect_for_name(const char *name);
 
 /* One-time setup. Interns the names of every builtin into `st`. */
 void builtins_init(SymbolTable *st);

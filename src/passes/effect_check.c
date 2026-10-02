@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "buf.h"
+#include "builtins.h"
 #include "diag.h"
 #include "effect.h"
 #include "expr.h"
@@ -30,6 +31,27 @@ typedef struct {
     FnEntry  entries[FN_INDEX_CAP];
     uint32_t n;
 } FnIndex;
+
+/* The env's effect named `name` (a C string), or NULL. */
+static Effect *find_effect_named(EffectEnv *env, const char *name) {
+    if (!env || !name) return NULL;
+    for (uint32_t i = 0; i < env->n_effects; i++) {
+        Effect *eff = env->effects[i];
+        if (eff && eff->name && eff->name->name && strcmp(eff->name->name, name) == 0)
+            return eff;
+    }
+    return NULL;
+}
+
+/* effect-row-honesty-plan W4: a builtin's declared capability (IO on
+ * `println`) enters the caller's inferred row, exactly as a callee's declared
+ * capability does for an ordinary call. */
+static EffectRow *merge_builtin_effect(Arena *a, EffectRow *row, EffectEnv *env,
+                                       const char *effect_name) {
+    Effect *eff = find_effect_named(env, effect_name);
+    if (!eff) return row;
+    return effect_row_merge(a, row, effect_row_single(a, eff));
+}
 
 static Effect *find_unsafe_effect(EffectEnv *env) {
     if (!env) return NULL;
@@ -461,6 +483,8 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         for (uint32_t i = 0; i < e->as.builtin.n; i++) {
             row = collect_effects_in_expr(a, e->as.builtin.args[i], row, idx, env, subst);
         }
+        if (e->as.builtin.spec && e->as.builtin.spec->effect)
+            row = merge_builtin_effect(a, row, env, e->as.builtin.spec->effect);
         return row;
 
     case EX_RETURN:
@@ -671,6 +695,12 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
          * dispatch. */
         for (uint32_t i = 0; i < saffron_dyn_child_count(e); i++)
             row = collect_effects_in_expr(a, saffron_dyn_child(e, i), row, idx, env, subst);
+        /* A dynamic `println` (Saffron, an `any` argument) is the same builtin,
+         * dispatched at run time: it carries the same declared effect. */
+        if (e->kind == EX_DYN_OP && e->as.dyn_op_.op && e->as.dyn_op_.op->name) {
+            const char *bfx = builtin_effect_for_name(e->as.dyn_op_.op->name);
+            if (bfx) row = merge_builtin_effect(a, row, env, bfx);
+        }
         return row;
 
     case EX_ASCRIBE:
@@ -721,11 +751,12 @@ int effect_row_check_declared(FnDef *fd, Arena *a) {
                 buf_init(&decl_str);
                 effect_row_print(&decl_str, declared);
 
+                char who[256];
                 diag_emit_with_code(DIAG_ERROR, fn_span,
                     TUR_E0009_EFFECT_ROW_MISMATCH,
-                    "function '%s' performs effect '%s' but its declared row %.*s "
+                    "%s performs effect '%s' but its declared row %.*s "
                     "does not include it",
-                    fd->binding ? fd->binding->name->name : "<anonymous>",
+                    binding_fn_describe(fd->binding, who, sizeof(who)),
                     eff->name->name,
                     (int)decl_str.len, decl_str.data);
                 buf_free(&decl_str);
@@ -740,10 +771,11 @@ int effect_row_check_declared(FnDef *fd, Arena *a) {
         effect_row_print(&inferred_str, inferred);
         effect_row_print(&decl_str, declared);
 
+        char who[256];
         diag_emit_with_code(DIAG_ERROR, fn_span,
             TUR_E0009_EFFECT_ROW_MISMATCH,
-            "function '%s': inferred effect row %.*s is not a subset of declared row %.*s",
-            fd->binding ? fd->binding->name->name : "<anonymous>",
+            "%s: inferred effect row %.*s is not a subset of declared row %.*s",
+            binding_fn_describe(fd->binding, who, sizeof(who)),
             (int)inferred_str.len, inferred_str.data,
             (int)decl_str.len,    decl_str.data);
         buf_free(&inferred_str);
@@ -762,6 +794,12 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
                             : NULL;
     /* Only annotated functions with concrete declared rows */
     if (!declared || declared->kind != ERK_CONCRETE) return 0;
+    /* An instance method's row is copied from its class method (Step 0b): it
+     * is what the class allows every instance, not a claim this instance
+     * made, and an instance that performs less than the class allows is
+     * normal.  The instance cannot change the row, so the warning would have
+     * nothing for its reader to do. */
+    if (fd->binding && fd->binding->is_instance_method) return 0;
     EffectRow *inferred = fd->inferred_effect_row;
     if (!inferred) inferred = effect_row_empty(a);
 
@@ -795,10 +833,11 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
                     suppress = true;
                 }
                 if (!suppress) {
+                    char who[256];
                     diag_emit_with_code(DIAG_WARNING, fn_span,
                         TUR_W0031_EFFECT_OVER_ANNOTATED,
-                        "function '%s' declares effect '%s' but never performs it",
-                        fd->binding ? fd->binding->name->name : "<anonymous>",
+                        "%s declares effect '%s' but never performs it",
+                        binding_fn_describe(fd->binding, who, sizeof(who)),
                         eff->name->name);
                 }
             }
@@ -807,32 +846,80 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
     return 0;
 }
 
+/* The level of a --strict-effects lint: a warning, or an error under
+ * -Werror=strict-effects. */
+static DiagLevel strict_effects_level(void) {
+    return g_werror_strict_effects ? DIAG_ERROR : DIAG_WARNING;
+}
+
 /* ER2: Under --strict-effects, warn when a function declares a row variable
  * (e.g., #{e}) but the inferred row is always a concrete effect set.
  * Suggests replacing the variable with the concrete row. */
-static void effect_row_check_var_always_concrete(FnDef *fd, Arena *a) {
-    if (!fd) return;
+static int effect_row_check_var_always_concrete(FnDef *fd, Arena *a) {
+    (void)a;
+    if (!fd) return 0;
     EffectRow *declared = fd->binding ? fd->binding->type.as.fn.effect_row : NULL;
-    if (!declared || declared->kind != ERK_VAR) return;
-    EffectRow *inferred = fd->inferred_effect_row;
-    if (!inferred || inferred->kind != ERK_CONCRETE) return;
-    if (inferred->as.concrete.n_effects == 0) return;
+    if (!declared || declared->kind != ERK_VAR) return 0;
+    /* Capability tags (IO from a `println`, FS, Bt) do not count: they say
+     * what the body may touch, not what flows through the row variable, so a
+     * row-polymorphic function that also prints is not "always concrete". */
+    EffectRow *inferred = effect_row_without_capabilities(a, fd->inferred_effect_row);
+    if (!inferred || inferred->kind != ERK_CONCRETE) return 0;
+    if (inferred->as.concrete.n_effects == 0) return 0;
 
     Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
     Buf inferred_str;
     buf_init(&inferred_str);
     effect_row_print(&inferred_str, inferred);
-    diag_emit_with_code(DIAG_WARNING, fn_span,
+    char who[256];
+    diag_emit_with_code(strict_effects_level(), fn_span,
         TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,
-        "function '%s' declares row variable '#{%s}' but always performs "
-        "concrete effects #%.*s; consider replacing '#{%s}' with '#%.*s'",
-        fd->binding ? fd->binding->name->name : "<anonymous>",
+        "%s declares row variable '#fx{%s}' but always performs "
+        "concrete effects #fx%.*s; consider replacing '#fx{%s}' with '#fx%.*s'",
+        binding_fn_describe(fd->binding, who, sizeof(who)),
         declared->as.var.var_name->name,
         (int)inferred_str.len, inferred_str.data,
         declared->as.var.var_name->name,
         (int)inferred_str.len, inferred_str.data);
     buf_free(&inferred_str);
-    (void)a;
+    return g_werror_strict_effects ? 1 : 0;
+}
+
+/* ER1: --strict-effects: TUR-W0030 on a function that performs effects but
+ * declares no row.  The one place this is emitted -- --lint-effects used to
+ * carry a byte-identical copy, which is how the two flags came to be the same
+ * flag under two names (docs/archive/strict-effects-and-lint-effects-are-
+ * indistinguishable.md).  Returns 1 when -Werror=strict-effects made it an
+ * error. */
+static int effect_row_check_unannotated(FnDef *fd, EffectRow *declared,
+                                        EffectRow *inferred) {
+    if (!fd || declared || !inferred || effect_row_is_empty(inferred)) return 0;
+    /* A rank-2 forwarding wrapper performs exactly what it wraps, and the
+     * wrapped function gets its own TUR-W0030 (or is annotated); the wrapper
+     * itself has no source form to annotate. */
+    if (fd->binding && fd->binding->synth_kind == SYNTH_FORWARDING_WRAPPER) return 0;
+    Span fn_span = fd->binding ? fd->binding->span : SPAN_UNKNOWN;
+    Buf inferred_str;
+    buf_init(&inferred_str);
+    effect_row_print(&inferred_str, inferred);
+    char who[256];
+    /* An instance method's row, and a class default body's, is the class
+     * method's, so that is where the annotation goes; everything else takes
+     * it after its parameter vector. */
+    bool from_class = fd->binding &&
+                      (fd->binding->is_instance_method ||
+                       fd->binding->synth_kind == SYNTH_DEFAULT_METHOD);
+    diag_emit_with_code(strict_effects_level(), fn_span,
+        TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
+        "%s performs effects %.*s but has no effect-row annotation "
+        "(add #fx%.*s %s, or handle those effects inside it)",
+        binding_fn_describe(fd->binding, who, sizeof(who)),
+        (int)inferred_str.len, inferred_str.data,
+        (int)inferred_str.len, inferred_str.data,
+        from_class ? "to the method's signature in its defclass"
+                   : "after its parameter vector");
+    buf_free(&inferred_str);
+    return g_werror_strict_effects ? 1 : 0;
 }
 
 /* ER1: Recursively find EX_CLOSURE nodes with declared effect rows and check them.
@@ -1185,8 +1272,12 @@ static void check_unreachable_handlers_in_expr(
             return;
         }
         EffectRowSubst *subst = effect_row_subst_new(a);
-        EffectRow *body_row = collect_effects_in_expr(
-            a, h->body, effect_row_empty(a), idx, env, subst);
+        /* What the body PERFORMS: a capability tag in its row (IO from a
+         * `println`) is never performed, and since IO is the parent of
+         * Write/Read, leaving it in would make every Write clause over a body
+         * that merely prints look reachable. */
+        EffectRow *body_row = effect_row_without_capabilities(a,
+            collect_effects_in_expr(a, h->body, effect_row_empty(a), idx, env, subst));
         for (uint8_t i = 0; i < h->n_cases; i++) {
             const Symbol *eff_name = h->cases[i].effect_name;
             if (!eff_name) continue;
@@ -1266,6 +1357,121 @@ static void check_unreachable_handlers_in_expr(
 }
 
 /* ---------------------------------------------------------------------------
+ * TUR-E0026: an effect name no defeffect declares.
+ *
+ * effect_row_resolve drops a name it cannot find -- there is nothing to
+ * resolve it to -- and for years that was the whole story: `#fx{IO}` in a
+ * file that never loaded stdlib/effects.tur checked as `#fx{}`, and a
+ * caller's `#fx{}` then passed a TUR-E0009 check it should have failed.
+ * Every declared row now comes through resolve_declared_row, which reports
+ * the names first.  (docs/archive/capability-effect-tag-silently-resolves-
+ * to-empty-row.md)
+ * --------------------------------------------------------------------------- */
+
+/* The effects stdlib/effects.tur declares that the compiler does not know
+ * already (IO / FS / Net / Proc / Rand are compiler-known since W2, so they
+ * are never unknown).  That module is not autoloaded, so these are the names
+ * most likely to be written before it is loaded, and for them the hint can
+ * say exactly what to load.  A name missing from this list still gets the
+ * general hint; it does not change what is an error. */
+static const char *const k_effects_tur_names[] = {
+    "Write", "Fail", "Read", "GetEnv", "Log", "Abort", "Async", "Await",
+};
+
+static bool is_effects_tur_name(const Symbol *name) {
+    for (size_t i = 0; i < sizeof(k_effects_tur_names) / sizeof(k_effects_tur_names[0]); i++)
+        if (strcmp(name->name, k_effects_tur_names[i]) == 0) return true;
+    return false;
+}
+
+/* The compiler attributes that used to be written inside `#fx{...}`
+ * (effect-row-honesty-plan W0) and their spellings now.  Left in a row they
+ * are TUR-E0026 like any undeclared name; this only makes the message say
+ * where they went. */
+static const char *moved_attr_spelling(const Symbol *name) {
+    if (strcmp(name->name, "Construct") == 0)     return "^construct";
+    if (strcmp(name->name, "ByVal") == 0)         return "^byval";
+    if (strcmp(name->name, "NonExhaustive") == 0) return "^non-exhaustive";
+    return NULL;
+}
+
+static const char *moved_attr_example(const Symbol *name) {
+    if (strcmp(name->name, "NonExhaustive") == 0)
+        return "(match ^non-exhaustive x ...)";
+    if (strcmp(name->name, "ByVal") == 0)
+        return "(defn ^byval name [A] [...] : A ...)";
+    return "(defn ^construct name [A] [...] : (Option A) ...)";
+}
+
+/* The declared effect closest to `name` by edit distance, for a typo hint;
+ * NULL when nothing is close enough to be a plausible misspelling. */
+static const Symbol *closest_declared_effect(const Symbol *name, EffectEnv *env) {
+    const Symbol *best = NULL;
+    int best_d = 3;   /* accept distance <= 2 */
+    for (uint32_t i = 0; i < env->n_effects; i++) {
+        const Effect *eff = env->effects[i];
+        if (!eff || !eff->name) continue;
+        int d = sym_levenshtein_distance(name, eff->name);
+        if (d < best_d && d < (int)name->len) { best_d = d; best = eff->name; }
+    }
+    return best;
+}
+
+/* Report the unknown effect names in `row` (once per row object), then
+ * resolve it.  `fallback` is used when the row carries no span of its own.
+ * Sets *rc to 1 if anything was reported. */
+static EffectRow *resolve_declared_row(EffectRow *row, EffectEnv *env, Arena *a,
+                                       Span fallback, int *rc) {
+    if (!row || row->kind != ERK_UNRESOLVED) return row;
+    if (!row->as.unresolved.unknown_reported) {
+        row->as.unresolved.unknown_reported = true;
+        const Symbol *unknown[16];
+        uint8_t n = effect_row_unknown_names(row, env, unknown, 16);
+        if (n > 16) n = 16;
+        Span span = row->as.unresolved.span;
+        if (span.line == 0) span = fallback;
+        for (uint8_t i = 0; i < n; i++) {
+            const Symbol *name = unknown[i];
+            const Symbol *near = closest_declared_effect(name, env);
+            if (!(name->name[0] >= 'A' && name->name[0] <= 'Z')) {
+                /* `#fx{|e}` (Koka's row-tail spelling) and other names that
+                 * start with neither case of letter. */
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                    "'%s' in effect row is neither an effect nor a row variable "
+                    "(an effect name starts with an uppercase letter, a row "
+                    "variable with a lowercase one: #fx{IO e})",
+                    name->name);
+            } else if (moved_attr_spelling(name)) {
+                /* effect-row-honesty-plan W0: an attribute that used to
+                 * borrow the row brackets. */
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                    "'%s' in effect row is not an effect: it is the attribute %s "
+                    "now, e.g. %s",
+                    name->name, moved_attr_spelling(name), moved_attr_example(name));
+            } else if (is_effects_tur_name(name)) {
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                    "unknown effect '%s' in effect row: no defeffect declares it "
+                    "('%s' is declared in stdlib/effects.tur, which is not "
+                    "autoloaded; add (load \"stdlib/effects.tur\"))",
+                    name->name, name->name);
+            } else if (near) {
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                    "unknown effect '%s' in effect row: no defeffect declares it "
+                    "(did you mean '%s'?)",
+                    name->name, near->name);
+            } else {
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+                    "unknown effect '%s' in effect row: no defeffect declares it "
+                    "(did you load the module that declares it?)",
+                    name->name);
+            }
+            *rc = 1;
+        }
+    }
+    return effect_row_resolve(row, env, a);
+}
+
+/* ---------------------------------------------------------------------------
  * effect_check_pass
  * --------------------------------------------------------------------------- */
 
@@ -1325,7 +1531,10 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     /* --- Step 0: Resolve ERK_UNRESOLVED declared effect rows.
      * Effect row annotations are parsed during elaboration as ERK_UNRESOLVED
      * (symbolic names).  Now that PASS_EFFECT_LOWER has populated the effect
-     * environment, we can resolve each annotation to ERK_CONCRETE/ERK_VAR. --- */
+     * environment, we can resolve each annotation to ERK_CONCRETE/ERK_VAR.
+     * Every resolution goes through resolve_declared_row, which reports a
+     * name no defeffect declares (TUR-E0026) instead of dropping it. --- */
+    int rc = 0;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         Expr *item = program->as.program.items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
@@ -1334,7 +1543,7 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             EffectRow *decl = fn->binding->type.as.fn.effect_row;
             if (decl->kind == ERK_UNRESOLVED) {
                 fn->binding->type.as.fn.effect_row =
-                    effect_row_resolve(decl, env, a);
+                    resolve_declared_row(decl, env, a, fn->binding->span, &rc);
             }
         }
         /* ER2: Also resolve effect rows on TY_FN parameter types.
@@ -1346,7 +1555,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             if (!param || param->type.kind != TY_FN) continue;
             EffectRow *pr = param->type.as.fn.effect_row;
             if (pr && pr->kind == ERK_UNRESOLVED) {
-                param->type.as.fn.effect_row = effect_row_resolve(pr, env, a);
+                param->type.as.fn.effect_row =
+                    resolve_declared_row(pr, env, a, param->span, &rc);
             }
         }
     }
@@ -1375,7 +1585,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 EffectRow *fr = ctor->fields[fi].effect_row;
                 if (fr && fr->kind == ERK_UNRESOLVED)
-                    ctor->fields[fi].effect_row = effect_row_resolve(fr, env, a);
+                    ctor->fields[fi].effect_row =
+                        resolve_declared_row(fr, env, a, item->span, &rc);
             }
         }
     }
@@ -1390,7 +1601,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
             TypeClassMethod *meth = &tc->methods[mi];
             if (meth->effect_row && meth->effect_row->kind == ERK_UNRESOLVED) {
-                meth->effect_row = effect_row_resolve(meth->effect_row, env, a);
+                meth->effect_row = resolve_declared_row(meth->effect_row, env, a,
+                                                        item->span, &rc);
             }
         }
     }
@@ -1489,7 +1701,6 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     s_current_analysis_module = NULL;
 
     /* --- Step 3: Validate each function against its declared row. --- */
-    int rc = 0;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         Expr *item = program->as.program.items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
@@ -1503,26 +1714,10 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         /* ER1: over-annotation warning (TUR-W0031). */
         effect_row_check_over_annotated(fn, a);
 
-        /* ER2: --strict-effects: warn when row variable is always concrete (TUR-W0032). */
+        /* ER1/ER2: --strict-effects lints (TUR-W0030, TUR-W0032). */
         if (g_strict_effects) {
-            effect_row_check_var_always_concrete(fn, a);
-        }
-
-        /* ER1: --strict-effects: warn on unannotated effectful functions (TUR-W0030). */
-        if (g_strict_effects && !declared &&
-            inferred && !effect_row_is_empty(inferred)) {
-            Span fn_span = fn->binding ? fn->binding->span : (Span){0, 0, 0, 0, 0, 0};
-            /* Build inferred row string for the message. */
-            Buf inferred_str;
-            buf_init(&inferred_str);
-            effect_row_print(&inferred_str, inferred);
-            diag_emit_with_code(DIAG_WARNING, fn_span,
-                TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
-                "function '%s' performs effects %.*s but has no effect-row annotation "
-                "(add #{...} or handle all effects inside the function)",
-                fn->binding ? fn->binding->name->name : "<anonymous>",
-                (int)inferred_str.len, inferred_str.data);
-            buf_free(&inferred_str);
+            if (effect_row_check_var_always_concrete(fn, a) != 0) rc = 1;
+            if (effect_row_check_unannotated(fn, declared, inferred) != 0) rc = 1;
         }
     }
 
@@ -1552,31 +1747,6 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         Expr *item = program->as.program.items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
         check_unreachable_handlers_in_expr(a, item->as.fn_def_.fn->body, &idx, env);
-    }
-
-    /* --- ER6: --lint-effects: advisory warnings for unannotated effectful functions.
-     * Behaves like --strict-effects (TUR-W0030) but is never promoted to an error. */
-    if (g_lint_effects) {
-        for (uint32_t i = 0; i < program->as.program.n; i++) {
-            Expr *item = program->as.program.items[i];
-            if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
-            FnDef *fn = item->as.fn_def_.fn;
-            EffectRow *declared = fn->binding ? fn->binding->type.as.fn.effect_row : NULL;
-            EffectRow *inferred = fn->inferred_effect_row;
-            if (!declared && inferred && !effect_row_is_empty(inferred)) {
-                Span fn_span = fn->binding ? fn->binding->span : (Span){0, 0, 0, 0, 0, 0};
-                Buf inferred_str;
-                buf_init(&inferred_str);
-                effect_row_print(&inferred_str, inferred);
-                diag_emit_with_code(DIAG_WARNING, fn_span,
-                    TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
-                    "function '%s' performs effects %.*s but has no effect-row annotation "
-                    "(add #{...} or handle all effects inside the function)",
-                    fn->binding ? fn->binding->name->name : "<anonymous>",
-                    (int)inferred_str.len, inferred_str.data);
-                buf_free(&inferred_str);
-            }
-        }
     }
 
     return rc;

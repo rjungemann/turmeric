@@ -14950,6 +14950,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             effect_env_register_builtin_unsafe(
                 eff_env, eval_arena,
                 symtab_intern(&env->st, strslice(EFFECT_NAME_UNSAFE, 6)));
+            effect_env_register_builtin_capabilities(eff_env, eval_arena,
+                                                     &env->st);
             env->effect_env = eff_env;
         }
         effect_check_pass(eval_arena, prog, eff_env);

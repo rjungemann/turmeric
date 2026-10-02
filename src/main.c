@@ -707,6 +707,8 @@ static int run_core_passes(PassContext *ctx) {
             effect_env_register_builtin_unsafe(
                 ctx->effect_env, ctx->arena,
                 symtab_intern(ctx->st, strslice(EFFECT_NAME_UNSAFE, 6)));
+            effect_env_register_builtin_capabilities(ctx->effect_env, ctx->arena,
+                                                     ctx->st);
             ctx->prog = effect_lower(ctx->arena, ctx->st,
                                      ctx->prog, ctx->effect_env);
             if (!ctx->prog || diag_had_error()) return 1;
@@ -9564,7 +9566,14 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
         else if (strcmp(tok, "--dump-refine=json") == 0) g_dump_refine_json         = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
-        else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
+        /* --lint-effects: deprecated alias for --strict-effects; the parent
+         * already printed TUR-W0050 for it. */
+        else if (strcmp(tok, "--lint-effects")      == 0) g_strict_effects           = true;
+        else if (strcmp(tok, "--Werror=strict-effects") == 0 ||
+                 strcmp(tok, "-Werror=strict-effects") == 0) {
+            g_werror_strict_effects = true;
+            g_strict_effects        = true;
+        }
         else if (strcmp(tok, "--lint-unsafe")       == 0) { g_lint_unsafe_enabled = true; g_unsafe_warn_nested = true; }
         else if (strncmp(tok, "--lint-unsafe-max-lines=", 24) == 0) {
             g_lint_unsafe_enabled = true;
@@ -10415,13 +10424,14 @@ static int usage(void) {
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --strict-effects                 warn on unannotated effectful functions (ER1)\n"
+        "  -Werror=strict-effects           make the --strict-effects warnings errors (implies it)\n"
         "  --strict-refine                  hard-fail refinement obligations the solver cannot prove\n"
         "  --dump-effects                   print inferred effect row for each defn (ER6)\n"
         "  --dump-write-frames              print the checked verdict for each `#writes` frame (G1)\n"
         "  --dump-read-frames               print the verification verdict for each `#reads` frame (R4)\n"
         "  --dump-cps-coloring              print whole-program may-capture coloring per defn (CPS1)\n"
         "  --dump-cps                       print the ANF/CPS IR for each colored defn (CPS2)\n"
-        "  --lint-effects                   advisory warnings for unannotated effectful functions (ER6)\n"
+        "  --lint-effects                   deprecated alias for --strict-effects (TUR-W0050)\n"
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
         "  --dump-cps-coloring              dump CPS coloring (colored/uncolored) per top-level defn (CPS1)\n"
@@ -11321,6 +11331,18 @@ static bool parse_werror_inline_c_narrow_params(int argc, char **argv) {
     return false;
 }
 
+/* -Werror=strict-effects promotes the --strict-effects lints (TUR-W0030,
+ * TUR-W0032) to errors.  It implies --strict-effects; main applies that. */
+static bool parse_werror_strict_effects(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--Werror=strict-effects") == 0 ||
+            strcmp(argv[i], "-Werror=strict-effects") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Phase R6: Handle --lint-panic flag */
 static bool parse_lint_panic(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -12035,6 +12057,9 @@ static int tur_main_inner(int argc, char **argv) {
     g_werror_deprecated = parse_werror_deprecated(argc, argv);
     /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param warnings */
     g_werror_inline_c_narrow_params = parse_werror_inline_c_narrow_params(argc, argv);
+    /* -Werror=strict-effects: promote the effect-annotation lints to errors. */
+    g_werror_strict_effects = parse_werror_strict_effects(argc, argv);
+    if (g_werror_strict_effects) g_strict_effects = true;
     /* SC4: --no-auto-spice disables enclosing-spice auto-discovery in
      * per-file subcommands (check/emit-c/emit-h/run). */
     g_no_auto_spice = parse_no_auto_spice(argc, argv);
@@ -12108,6 +12133,14 @@ static int tur_main_inner(int argc, char **argv) {
         } else if (strcmp(argv[i], "--Werror=inline-c-narrow-params") == 0 ||
                    strcmp(argv[i], "-Werror=inline-c-narrow-params") == 0) {
             /* Phase C: already parsed into g_werror_inline_c_narrow_params; remove. */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--Werror=strict-effects") == 0 ||
+                   strcmp(argv[i], "-Werror=strict-effects") == 0) {
+            /* Already parsed into g_werror_strict_effects; remove. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -12317,8 +12350,15 @@ static int tur_main_inner(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "--lint-effects") == 0) {
-            /* ER6: advisory warnings for unannotated effectful functions */
-            g_lint_effects = true;
+            /* Retired: it was a byte-identical copy of --strict-effects
+             * (docs/archive/strict-effects-and-lint-effects-are-
+             * indistinguishable.md).  Still accepted, as an alias, so
+             * existing scripts keep working; TUR-W0050 says so. */
+            fprintf(stderr, "warning [TUR-W0050]: --lint-effects is deprecated; "
+                            "use --strict-effects, which emits the same "
+                            "TUR-W0030 warnings (-Werror=strict-effects makes "
+                            "them errors)\n");
+            g_strict_effects = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

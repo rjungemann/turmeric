@@ -71,7 +71,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[strings-guide.md](strings-guide.md)** -- The `cstr` vs `str` vs `String` tiering -- which string type to reach for, and when an owned `String` must replace a borrowed `cstr`
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, and exports
 - **[structs-guide.md](structs-guide.md)** -- Defining and using struct types with `defstruct`
-- **[sum-types-guide.md](sum-types-guide.md)** -- Declaring sum types with `defdata`, pattern matching, exhaustiveness, the `#fx{NonExhaustive}` opt-out, the FFI layout, and the stdlib `Either` module
+- **[sum-types-guide.md](sum-types-guide.md)** -- Declaring sum types with `defdata`, pattern matching, exhaustiveness, the `^non-exhaustive` opt-out, the FFI layout, and the stdlib `Either` module
 - **[function-arity-guide.md](function-arity-guide.md)** -- When to use positional parameters, defstruct options, and variadic rest parameters
 - **[currying-guide.md](currying-guide.md)** -- Haskell-style partial application and over-application of Turmeric functions
 - **[symbols-guide.md](symbols-guide.md)** -- First-class runtime symbols (`:Sym` type) with compile-time interning and optional dynamic interning

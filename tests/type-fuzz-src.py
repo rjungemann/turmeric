@@ -309,9 +309,13 @@ KNOWN_PROBES = [
     # entry), and effect-annotated fn params are fat-normalized like every
     # other nominal fn param.  Kept as a FIXED regression probe; pinned by
     # tests/fixtures/effect-capturing-closure-thin-param/.
+    # `Write` is declared (an undeclared row name is TUR-E0026) and main's row
+    # names IO because it prints (`println` is #fx{IO}) -- the same two edits
+    # that fixture got; without them the probe reads `fires (reject)`.
     ("poly-result-hof-capturing-closure-sigbus (effect row)",
+     "(defeffect Write [s :cstr] :nil)\n"
      "(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))\n"
-     "(defn main [] #fx{Write} : int\n"
+     "(defn main [] #fx{Write IO} : int\n"
      "  (let [k 7] (println (run (fn [] #fx{Write} : int (+ k 1)))))\n  0)\n"),
     # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
     # archived; probe retired -- pinned by
