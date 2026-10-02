@@ -2,11 +2,55 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.58.0] -- 2026-10-01
 
 ### Security
 
-- **Untrusted-input parsers hardened (security-audit-plan WP4).**
+- **The security audit's remaining work packages landed (WP2, WP5, WP6, WP7).**
+  WP1 and WP3 shipped in the 0.57 line; this release closes the rest of
+  [docs/upcoming/security-audit-plan.md](docs/upcoming/security-audit-plan.md).
+  - **WP2 -- compiler driver and filesystem.** Every command the driver
+    constructs and every path it touches was reviewed against the plan's nine
+    D rows; three of them were wrong as filed and are corrected in the plan's
+    own verification pass. Covered by 27 assertions in ctest
+    `tur_security_driver`.
+  - **WP5 -- runtime memory safety.** Caller-supplied sizes are range-checked
+    before they reach an allocation (M-5, and 26 further sites the sweep
+    found); a wire length is checked against the input before it sizes a
+    `malloc`; two region store-hook gaps are closed and a third class the
+    survey did not have (M-6); format strings are policed under `-Werror`; and
+    the concurrency fixtures run nightly under ThreadSanitizer.
+  - **WP6 -- the web app and the published site.** One Content-Security-Policy
+    (`web/csp.js`) is applied by the dev and preview servers, stamped into the
+    built `_headers`, and set by the worker on its own responses. `escapeHtml`
+    escapes both quote characters, the Try Turmeric console transcript is
+    stored and rehydrated as data rather than HTML, the wasm eval worker has a
+    watchdog and a Stop, and the doc-page generators write their scripts as
+    files instead of inline `<script>` blocks, so every page under
+    `/docs/html/` runs under the policy.
+  - **WP7 -- supply chain.** Release assets carry
+    [build provenance](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations):
+    each one, `sha256sums.txt` included, is signed through Sigstore from the
+    release job's OIDC token, verifiable with
+    `gh attestation verify <asset> --repo rjungemann/turmeric` (C-4). Every
+    GitHub Action is pinned to a SHA, emsdk and pip dependencies are pinned,
+    and each workflow declares its permissions (C-5). Dependabot and CodeQL
+    are on (C-8). `tvm` fails closed when it cannot verify a checksum (C-2),
+    and `/install` bootstraps `tvm` and installs a checksum-verified release
+    rather than building from a moving branch (C-1).
+
+- **A sandboxed interpreter refuses forged handles (S-5, direction 1).**
+  Interpreter handles were bare integers that natives cast back to pointers
+  unchecked, so `(vec-get 4096 0)` inside a sandbox or a `defmacro*` was a wild
+  read and the setters a wild write. A per-restricted-env handle-provenance
+  registry plus a 242-row per-native handle-kind table make the native dispatch
+  reject any handle argument no matching constructor minted, closing the
+  arbitrary read/write, kind confusion and use-after-free while real handles
+  round-trip. A `panic` or native error inside a restricted env now returns
+  `TURI_ERROR` instead of ending the host process. The value-model channel
+  (an erasing ascription, continuation resume) stays open as direction 2.
+
+- **Untrusted-input parsers hardened (WP4).**
   - Serialized continuations are checked inside the runtime on every rebuild
     route: `bytes->serial-cont` returns an `Err`, while `resume-cont!` and
     `image/blob-resume!` panic. A forged buffer could previously hand a
@@ -21,8 +65,10 @@ All notable changes to Turmeric are documented here.
       any `Transfer-Encoding`, before reading a body.
     - It caps bodies at 8 MiB (`httpd-set-max-body!`).
     - It drops response headers that would split the response.
-    - It keeps `mw-static` inside its root, symlinks included.
+    - It keeps `mw-static` inside its root, symlinks included, and sizes its
+      `realpath` buffers without trusting `PATH_MAX`.
     - It fixes a stack overrun in `httpd-set-cookie!`.
+    - Six residual request-path items from WP4's own follow-up report.
   - The reader no longer `free()`s arena memory on `f[x]` in a neoteric or
     sweet-exp file. That was a crash in `tur check` and the language server.
   - `tur run --list` no longer hangs, allocating without bound, on a Justfile
@@ -30,7 +76,16 @@ All notable changes to Turmeric are documented here.
     overflows the stack on deeply nested parentheses: nesting past 256 is a
     parse error.
   - The parsers now run nightly under libFuzzer (`tests/fuzz`,
-    `-DTUR_FUZZ=ON`).
+    `-DTUR_FUZZ=ON`), reporting findings to Sentry.
+
+### Added
+
+- **`tur fetch --frozen`.** The `npm ci` / `cargo --locked` shape: fetch
+  exactly what `tur.lock` pins and fail if anything would move, if a dep is
+  missing from the lock, or if there is no lock at all. `--frozen` and
+  `--update` contradict each other and are refused together. Plain `tur fetch`
+  also **checks out the commit the lock pins** rather than re-resolving the
+  ref it was written from -- a lock that named a branch used to float.
 
 ### Changed
 
@@ -64,6 +119,31 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **P0 representation confusion: the generic-spec matrix is at zero and the
+  emitted-C indirect-call corpus is down from 328 trapping fixtures to 9.**
+  The long-running family where a value crosses between a typed
+  representation and the int64 carrier -- and is read back at the wrong one --
+  is the bulk of this release. Two detectors now police the mechanism rather
+  than the shape: `tests/generic-spec-matrix.py` (ctest
+  `tur_generic_spec_matrix`) walks every PRODUCER x SINK x TYPE cell compiled,
+  interpreted and linted, and its open-cell baseline is now **empty**; and
+  clang's `-fsanitize=function` is armed in all four source fuzzers, where the
+  count of fixtures making an indirect call through a wrongly-typed function
+  pointer fell 328 -> 165 -> 106 -> 66 -> 16 -> 9 across seven sweeps
+  (report-only until it reaches zero; the remaining nine are tracked in
+  [docs/reported/emitted-c-indirect-calls-are-not-type-exact.md](docs/reported/emitted-c-indirect-calls-are-not-type-exact.md)).
+  Several of the crossings were **silently wrong answers**, not just C
+  undefined behavior, whenever the differing type was a `double` or a 16-byte
+  tagged `any`: a dictionary slot converting a class-variable `float`
+  parameter by value, a `tvar` float payload, a rank-2 class method result,
+  a boxed `(Option float32)` read at the wrong offset, and a sub-word payload
+  box. Sixteen reports in this family are archived under `docs/archive/`;
+  the fixes span carrier adapters, fat-box spelling keyed on the callee the
+  call selects, variadic rest shims, runtime callbacks, CPS joins and
+  typed-pointer binders, class-var applied results inside constrained
+  generics, and applied type annotations (which were going unchecked
+  against return, argument and `let` positions).
+
 - **`#lang r7rs`: a re-entrant `call/cc` no longer gives a wrong value when
   the unit also calls `eval`.** Fixed by `7c90e00b8`: the re-entry path's
   thread-local stores were made through a stale address after `setjmp`'s
@@ -71,8 +151,35 @@ All notable changes to Turmeric are documented here.
   read back as a non-number (`error: +: not a number`) or, on another base,
   faulted inside the capture. `(scheme eval)` mattered only because linking
   the embedded interpreter changed where the stale store landed.
-  `tests/fixtures/docs-r7rs-guide-examples` covers it. Report archived at
+  `tests/fixtures/docs-r7rs-guide-examples` covers it. The fix shipped inside
+  0.57.0 undocumented; the note lands here. Report archived at
   [docs/archive/r7rs-reentrant-callcc-wrong-with-eval.md](docs/archive/r7rs-reentrant-callcc-wrong-with-eval.md).
+
+- **Try Turmeric share links encode and decode.** Share has never worked:
+  `pako` was never loaded, so the compressor the encoder called was
+  `undefined`. The codec moved into `web/share-codec.js` with a Playwright
+  spec over a real round trip.
+
+- **Eight more compiler and runtime defects, each with its report archived.**
+  A phantom-parametric `:heap` `let` binding ICEd during representation
+  selection; a transparent `:int` newtype bound in a `let` was freed as a
+  pointer; a refined ADT return type miscompiled; `turi`'s inline-C `bool`
+  return was tagged as an int; `vec-push!` of a by-value struct parameter
+  emitted an unbridged pointer; a Saffron dynamic witness defaulted every
+  function's arity to unary; a `tvar` captured by a closure inside `stm` was
+  reported undeclared; and `musttail` across a by-value aggregate argument
+  dangled on aarch64 (now refused). Closure captures are tracked under every
+  binding form, and `with-handler` over a literal is treated as a `handle`.
+
+- **`Buf` keeps `data[len]` NUL on every append.** `buf_puts` did not, while
+  `main.c` reads the `aux_includes` / `aux_sources` buffers as C strings --
+  a heap overread the fixture suite could not see, because it only compares
+  printed output.
+
+- **The documentation pack.** Deploying a pack built without the spices
+  checkout is refused rather than silently shipping a pack missing every
+  spice page, and a cross-spice README link resolves instead of failing
+  `--strict-links`.
 
 ## [0.57.0] -- 2026-09-30
 
