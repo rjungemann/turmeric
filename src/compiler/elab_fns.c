@@ -6504,6 +6504,29 @@ static bool type_mentions_named_tyvar(const Type *t, const char *name) {
         case TY_APP:
             return type_mentions_named_tyvar(t->as.app.fn, name) ||
                    type_mentions_named_tyvar(t->as.app.arg, name);
+        /* A constraint tyvar can reach a parameter ONLY through a
+         * function-typed parameter -- `fold-map`'s shape, where the Monoid
+         * variable B appears nowhere but inside `^fat f : (fn [A] B)`.  Before
+         * this case such a tyvar was classified return-resolved and its
+         * `cur_fn_constraint_param_mask` bit left clear, so the
+         * return-directed representative search refused a carrier-compatible
+         * opaque newtype and `(mempty)` reported `no instance 'Monoid tyvar'`.
+         * The signature IS a parameter type, so walk it.  Monomorphization
+         * still has something to split on: `(fn [A] Sum)` and `(fn [A]
+         * Product)` are distinct Types, so the arg vector interns two specs
+         * and Gap H's `__h<n>` discriminator separates the identically
+         * rendered `int64_t` signatures -- the same soundness argument the
+         * mask already rests on for a directly-mentioned tyvar.  See
+         * docs/archive/nullary-class-method-unresolvable-over-newtype-tyvar.md
+         * and docs/design/multiple-monoids-across-languages.md. */
+        case TY_FN:
+            if (t->as.fn.arg_full_types) {
+                for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+                    if (type_mentions_named_tyvar(t->as.fn.arg_full_types[i], name))
+                        return true;
+                }
+            }
+            return type_mentions_named_tyvar(t->as.fn.result_full_type, name);
         default:
             return false;
     }
