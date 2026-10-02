@@ -2470,6 +2470,16 @@ cmake floor sits exactly at CMake 4's cutoff.
 | --- | --- | --- |
 | [docs-offline-cold-pane-never-boots](docs-offline-cold-pane-never-boots.md) | medium | `docs-offline.spec.js:145` (`docs browse offline on a cold pane`) fails on every run: with the origin stopped, `page.reload()` never reaches `window.turmericApp` and times out at 30s. The describe block is `mode: 'serial'`, so the two tests after it **did not run** -- three of the four offline-docs assertions are unexercised, not one. Verified on `main`'s own tip (run 36901587136, `8bb60d0`: 1 failed, 2 did not run, 128 passed) as well as on #1009, so it is not the PR's. Invisible because `Run broader smoke suite (desktop, non-blocking)` is `continue-on-error`: the step renders with a green check and only a `::warning` says otherwise -- the arrangement [try-turmeric-browser-suites-green-while-failing](../archive/try-turmeric-browser-suites-green-while-failing.md) describes, whose JUnit row does put an honest `status: fail` on `/ci`'s `web_desktop`. **Mechanism NOT established** -- filed from two CI runs; reproducing needs a production build (the spec skips without `dist/sw.js`). Leads in the report, starting with whether `sw.js`'s precache still covers the app shell after the Vite output moved to `dist/client/`. Either way the reporting wants fixing: a test that has failed every run for an unknown length of time makes the suite's failure count meaningless |
 
+## Found adding a platform matrix to the turmeric-spices README (filed 2026-10-01)
+
+Found as four red `turmeric-spices` CI jobs on a README-only PR, which made the
+compiler the only candidate. Bisected to the day: the spices CI re-pins turmeric
+`main` per run, and the last green run predates PR #1007.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [forward-call-to-aggregate-result-types-as-carrier](forward-call-to-aggregate-result-types-as-carrier.md) | high | A call to a helper **defined later in the same module** whose return type is `(Result T E)` with `T` an opaque **imported from another module** is typed as the int64 carrier, so the enclosing function trips TUR-E0709 ("body returns int"). Moving the helpers above the caller compiles the identical code. Two-file 15-line repro; needs all three of cross-module payload type, caller-before-callee, and an aggregate return. Broke `secret` (2 files), `valkey` and `tourist-session-valkey` on 2026-10-01; clean on `a5edd6df8` the day before. Diagnostic site is `elab_fns.c:10474` and is faithful -- the defect is the forward call's placeholder type. Not narrowed to a commit: the `8bb60d016^1` build died on ENOSPC, do that first |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

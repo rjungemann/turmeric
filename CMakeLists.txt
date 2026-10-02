@@ -1353,12 +1353,25 @@ if(TUR_JIT)
   # instead, and names which one, which is most of the diagnosis.
   #
   # The numbers are hang bounds, not performance assertions.  Measured off the
-  # ci-metrics branch, tur_jit_fixture_tests runs ~440s median on Linux, ~348s
+  # ci-metrics branch, tur_jit_fixture_tests ran ~440s median on Linux, ~348s
   # on a 5-core mac and ~730s median / ~940s p90 on the 3-core mac CI draws
-  # ~97% of the time; 1500 is ~1.6x that p90.  repl-spice-jit is a short
-  # script.  The workflow also alarms the whole ctest invocation at 2100s, as a
-  # backstop for the case where more than one target runs long at once -- these
-  # per-test values are what catch the single hang, which is what has happened.
+  # ~97% of the time, against a corpus of ~2663 fixtures; 1500 was ~1.6x that
+  # p90.  repl-spice-jit is a short script.
+  #
+  # 2026-10-01: the corpus has outgrown that bound and 1500 was raised to 2400.
+  # It is now 3413 dirs, and the FAST (5-core) draw alone takes 1102s -- above
+  # the old 3-core p90 -- so 1500 had stopped being a hang bound and had become
+  # a throughput assertion that a slow draw fails.  rjungemann/turmeric#1002
+  # tripped it: 2393 dirs in 1500s = 1.6/s against the same hour's green `main`
+  # run at 3.1/s, i.e. work at half speed, not a stall.  2400 is ~1.1x the
+  # ~2140s that slow rate implies for the whole corpus and ~2.2x the fast draw.
+  # See docs/reported/macos-jit-leg-stall-unexplained.md.
+  #
+  # Keep the ordering per-test TIMEOUT < the workflow's whole-ctest alarm <
+  # the job's timeout-minutes: the alarm is the backstop for several targets
+  # running long at once, and only the per-test value NAMES the offender, so
+  # an alarm that can fire first destroys the diagnostic it exists to protect.
+  # Raising this one means raising the alarm in .github/workflows/ci.yml too.
   set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
   # `tur jit`.  RUN_SERIAL like the other whole-corpus
@@ -1372,7 +1385,7 @@ if(TUR_JIT)
             bash tests/run-jit.sh
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
-  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 1500)
+  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 2400)
 endif()
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture

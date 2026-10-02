@@ -166,7 +166,7 @@ jobs:
       # looks for emcc, and the harness only needs it on PATH at test time.
       - name: Set up Emscripten (for tur_refine_wasm)
         if: matrix.part == 'aux'
-        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           # C-5: an exact SDK version, not `latest`.  This is what `latest`
           # resolved to when the pin was taken, so behaviour is unchanged --
@@ -425,7 +425,14 @@ jobs:
     #      engine, so this leg exercises a configuration most builds do not
     #      have.  It should not gate merges at the same strength as the AOT
     #      suite, which covers what everyone actually ships.
-    timeout-minutes: 45
+    #
+    # 60, raised from 45 on 2026-10-01: the whole-ctest alarm below went to
+    # 2550s to stay above tur_jit_fixture_tests' raised per-test TIMEOUT, and
+    # this has to clear that alarm plus the build and the uploads.  A
+    # timeout-minutes kill is the one outcome with NO diagnostics (it cancels
+    # the job and leaves the `if: always()` uploads pending), so it stays the
+    # outermost bound by a wide margin.
+    timeout-minutes: 60
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 500M
@@ -600,7 +607,7 @@ jobs:
           # STREAMED, not redirected-then-filtered.  This step used to do
           # `ctest > jit-ctest.log` and run the grep afterwards, which is fine
           # for a run that finishes and useless for one that does not: when the
-          # job hits `timeout-minutes: 45` ctest is killed, the grep never runs,
+          # job hits `timeout-minutes: 60` ctest is killed, the grep never runs,
           # and the log dies with the runner -- so a HANG printed literally
           # nothing and there was no way to tell how far it got.  That is not
           # hypothetical; it is how both `main` (f865097db, 2026-08-02 19:52)
@@ -646,23 +653,27 @@ jobs:
           # macos-jit-hang-loses-both-diagnostics: BOUNDED INSIDE THE JOB
           # BUDGET, which is the whole reason the instrumentation above finally
           # produces something.  On 2026-09-28 this step hung and was killed by
-          # `timeout-minutes: 45` -- and a timeout-minutes kill does NOT run the
+          # `timeout-minutes: 60` -- and a timeout-minutes kill does NOT run the
           # job's remaining `if: always()` steps, so "Upload JIT ctest log"
           # never ran, the runner took the log with it, and the occurrence was
           # as blind as the ones the tee/grep were added for.  The `if:
           # always()` claim had only ever been exercised on a run that
           # SUCCEEDED.
           #
-          # 35 minutes, against a 13-19 min baseline for this step on recent
-          # `main` runs: comfortably above any observed run, and ~10 minutes
-          # inside the 45 so the uploads below get to run on a step that FAILS
-          # rather than a job that is killed.  `perl -e alarm` rather than
+          # 42.5 minutes, against an 18-22 min baseline for this step on recent
+          # `main` runs: comfortably above any observed run, and ~17 minutes
+          # inside the 60 so the uploads below get to run on a step that FAILS
+          # rather than a job that is killed.  It must also stay ABOVE the
+          # per-test TIMEOUT properties in CMakeLists.txt (2400s for
+          # tur_jit_fixture_tests, raised 2026-10-01 with this) -- only those
+          # name the offending target, so an alarm that fires first destroys
+          # the diagnostic.  `perl -e alarm` rather than
           # `timeout`, because stock macOS ships no coreutils `timeout` -- the
           # same idiom as the engine-present probe above.  It heads the
           # pipeline, so PIPESTATUS[0] carries its 142 (128+SIGALRM) and the
           # step fails; `tee` has already written everything it got.
           set +e
-          perl -e 'alarm 2100; exec @ARGV' \
+          perl -e 'alarm 2550; exec @ARGV' \
             ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
                 --test-output-size-passed 262144 --test-output-truncation head \
                 -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
@@ -670,7 +681,7 @@ jobs:
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
           rc=${PIPESTATUS[0]}
           if [ "$rc" -eq 142 ]; then
-            echo "::error::Run JIT suites exceeded its 35-minute budget and was killed. The partial ctest log is uploaded as an artifact by the next step; the per-test TIMEOUT properties in CMakeLists.txt should normally name the test first."
+            echo "::error::Run JIT suites exceeded its 42.5-minute budget and was killed. The partial ctest log is uploaded as an artifact by the next step; the per-test TIMEOUT properties in CMakeLists.txt should normally name the test first."
           fi
           exit $rc
 
@@ -1599,7 +1610,7 @@ jobs:
         run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Set up Emscripten
-        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           # Pinned to a modern release; bump alongside the wasm build if the
           # emcc surface changes (currently only the -sSTACK_SIZE / INITIAL_MEMORY
