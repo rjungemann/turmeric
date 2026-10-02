@@ -353,9 +353,12 @@ A capability effect is a coarse *authority* tag rather than something you
   therefore fails effect-row checking with `TUR-E0009`, exactly like the
   built-in `#fx{Unsafe}`.
 
-The standard library ships five capability tags in
-[`stdlib/effects.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/effects.tur), used to annotate the
-I/O-touching modules:
+Five capability tags are **compiler-known**, like `Unsafe`: they resolve in
+every program, with nothing loaded, and are used to annotate the I/O-touching
+modules. [`stdlib/effects.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/effects.tur)
+re-declares them, which is where their docs live; a declaration of one of these
+names is accepted only when it matches the built-in exactly (`(defeffect FS []
+:nil ^extends IO ^capability)`), and anything else is an error.
 
 | Tag       | Used by                                     |
 |-----------|---------------------------------------------|
@@ -365,8 +368,8 @@ I/O-touching modules:
 | `#fx{Proc}` | `process.tur`, `env.tur`                     |
 | `#fx{Rand}` | `random.tur`                                |
 
-A sixth lives outside `effects.tur`, because the module that uses it is
-autoloaded and `effects.tur` is not:
+A sixth, `Bt`, is an ordinary `^capability` declaration in the autoloaded
+`trail.tur`, next to the trail mutators it annotates:
 
 | Tag       | Declared in       | Used by                                                     |
 |-----------|-------------------|-------------------------------------------------------------|
@@ -377,21 +380,23 @@ state, not an authority over a resource outside the process. See the
 [Backtrackable State Guide](backtrackable-state-guide.md#the-bt-capability).
 
 Every name in `#fx{...}` must be declared. An uppercase name that no
-`defeffect` in the compile declares is **`TUR-E0026`**, with a did-you-mean
-for a near miss and the module to load for the `stdlib/effects.tur` names:
+`defeffect` in the compile declares (and that is not compiler-known) is
+**`TUR-E0026`**, with a did-you-mean for a near miss and the module to load for
+the `stdlib/effects.tur` names:
 
 ```
-error [TUR-E0026]: unknown effect 'IO' in effect row: no defeffect declares it
-  ('IO' is declared in stdlib/effects.tur, which is not autoloaded;
+error [TUR-E0026]: unknown effect 'Write' in effect row: no defeffect declares
+  it ('Write' is declared in stdlib/effects.tur, which is not autoloaded;
    add (load "stdlib/effects.tur"))
 ```
 
 It used to be dropped silently, so `#fx{Typo}` checked as `#fx{}` -- and a
 caller's `#fx{}` then passed the `TUR-E0009` check the tag existed to buy.
 That is how `#fx{Bt}` sat decorative on the trail mutators for a month before
-`Bt` was declared, and why `Bt` lives in the autoloaded `trail.tur`. The same
-check caught a stdlib `#fx{FS}` that had never resolved and a fixture's
-`#fx{|e}` (a row variable is just `e`).
+`Bt` was declared. The same check caught a stdlib `#fx{FS}` that had never
+resolved and a fixture's `#fx{|e}` (a row variable is just `e`). `#fx{...}`
+holds effects and row variables only: compiler attributes are `^attr`s
+(`^construct`, `^byval`, `(match ^non-exhaustive ...)`).
 
 Discipline stays **opt-in**: a function with no effect-row annotation is never
 checked, so existing code that ignores effect rows keeps compiling. Only when a

@@ -707,6 +707,8 @@ static int run_core_passes(PassContext *ctx) {
             effect_env_register_builtin_unsafe(
                 ctx->effect_env, ctx->arena,
                 symtab_intern(ctx->st, strslice(EFFECT_NAME_UNSAFE, 6)));
+            effect_env_register_builtin_capabilities(ctx->effect_env, ctx->arena,
+                                                     ctx->st);
             ctx->prog = effect_lower(ctx->arena, ctx->st,
                                      ctx->prog, ctx->effect_env);
             if (!ctx->prog || diag_had_error()) return 1;

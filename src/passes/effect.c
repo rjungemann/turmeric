@@ -490,6 +490,49 @@ Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
                                NULL, NULL, 0, TY_NIL, NULL, false);
 }
 
+/* effect-row-honesty-plan W2: the capability tags the stdlib's I/O modules
+ * are annotated with.  `IO` is the umbrella; the rest `^extends IO`.  They
+ * were declared only in stdlib/effects.tur, which is not autoloaded, so
+ * `#fx{IO}` meant nothing (and, after W1, was TUR-E0026) in exactly the small
+ * programs most likely to write it.  Order matters: a parent precedes its
+ * children. */
+static const struct { const char *name; const char *parent; } k_builtin_caps[] = {
+    { "IO",   NULL },
+    { "FS",   "IO" },
+    { "Net",  "IO" },
+    { "Proc", "IO" },
+    { "Rand", "IO" },
+};
+
+bool effect_builtin_capability(const char *name, const char **parent_out) {
+    if (!name) return false;
+    for (size_t i = 0; i < sizeof(k_builtin_caps) / sizeof(k_builtin_caps[0]); i++) {
+        if (strcmp(name, k_builtin_caps[i].name) == 0) {
+            if (parent_out) *parent_out = k_builtin_caps[i].parent;
+            return true;
+        }
+    }
+    return false;
+}
+
+void effect_env_register_builtin_capabilities(EffectEnv *env, Arena *a,
+                                              SymbolTable *st) {
+    if (!env || !a || !st) return;
+    for (size_t i = 0; i < sizeof(k_builtin_caps) / sizeof(k_builtin_caps[0]); i++) {
+        const char *nm = k_builtin_caps[i].name;
+        const Symbol *sym = symtab_intern(st, strslice(nm, (uint32_t)strlen(nm)));
+        Effect *eff = effect_env_register(env, a, sym, NULL, NULL, 0, TY_NIL,
+                                          NULL, false);
+        if (!eff) continue;
+        eff->is_capability = true;
+        if (k_builtin_caps[i].parent) {
+            const char *pn = k_builtin_caps[i].parent;
+            eff->parent = effect_env_lookup(
+                env, symtab_intern(st, strslice(pn, (uint32_t)strlen(pn))));
+        }
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * Phase P19-4: EffectRowSubst — effect-row variable unification
  * --------------------------------------------------------------------------- */

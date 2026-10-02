@@ -221,6 +221,19 @@ bool effect_env_contains(EffectEnv *env, const Symbol *name);
 Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
                                            const Symbol *unsafe_name);
 
+/* effect-row-honesty-plan W2: the compiler-known capability tags -- IO, and
+ * FS / Net / Proc / Rand `^extends IO` -- registered with their parent links
+ * and is_capability set, so `#fx{IO}` resolves in a program that loads
+ * nothing.  Idempotent.  Every EffectEnv that registers Unsafe registers
+ * these too (elab, PASS_EFFECT_LOWER, the interpreter's session env). */
+void effect_env_register_builtin_capabilities(EffectEnv *env, Arena *a,
+                                              SymbolTable *st);
+
+/* True when `name` is one of those tags; *parent_out (if non-NULL) receives
+ * its built-in parent's name, or NULL for IO.  A `defeffect` of such a name
+ * is accepted only when it declares exactly the built-in (elab_effects.c). */
+bool effect_builtin_capability(const char *name, const char **parent_out);
+
 /* ---------------------------------------------------------------------------
  * Phase P19-4: Effect-row substitution for row-variable unification.
  * An EffectRowSubst maps effect-row variables (Symbol names) to concrete or

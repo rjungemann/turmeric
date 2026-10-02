@@ -6,7 +6,8 @@
 ;; (docs/archive/capability-effect-tag-silently-resolves-to-empty-row.md).
 ;; One line of expected.diag per position: a misspelt effect (with a
 ;; did-you-mean), a `fn` literal, a fn-typed parameter, a record field, a class
-;; method, and `|e`, which is neither an effect nor a row variable.
+;; method, `|e` (neither an effect nor a row variable), and an effects.tur
+;; name used without loading it.
 
 (defeffect Bang [] :nil)
 
@@ -26,5 +27,10 @@
 
 (defn bad-row-var [f : (fn [] #fx{|e} int)] : int
   (f))
+
+;; `Write` lives in stdlib/effects.tur, which is not loaded here; the hint
+;; says so.  (IO / FS / Net / Proc / Rand are compiler-known and never land
+;; here.)
+(defn logs [] #fx{Write} : int 0)
 
 (defn main [] : int 0)

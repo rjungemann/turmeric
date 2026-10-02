@@ -1331,13 +1331,14 @@ static void check_unreachable_handlers_in_expr(
  * to-empty-row.md)
  * --------------------------------------------------------------------------- */
 
-/* The effects stdlib/effects.tur declares.  That module is not autoloaded,
- * so these are the names most likely to be written before it is loaded, and
- * for them the hint can say exactly what to load.  A name missing from this
- * list still gets the general hint; it does not change what is an error. */
+/* The effects stdlib/effects.tur declares that the compiler does not know
+ * already (IO / FS / Net / Proc / Rand are compiler-known since W2, so they
+ * are never unknown).  That module is not autoloaded, so these are the names
+ * most likely to be written before it is loaded, and for them the hint can
+ * say exactly what to load.  A name missing from this list still gets the
+ * general hint; it does not change what is an error. */
 static const char *const k_effects_tur_names[] = {
-    "IO", "FS", "Net", "Proc", "Rand", "Write", "Fail", "Read", "GetEnv",
-    "Log", "Abort", "Async", "Await",
+    "Write", "Fail", "Read", "GetEnv", "Log", "Abort", "Async", "Await",
 };
 
 static bool is_effects_tur_name(const Symbol *name) {

@@ -2242,6 +2242,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_cont_pred = intern_cstr(st, "cont?");
     e->sym_effect_unsafe = intern_cstr(st, EFFECT_NAME_UNSAFE);
     effect_env_register_builtin_unsafe(e->effect_env, e->arena, e->sym_effect_unsafe);
+    effect_env_register_builtin_capabilities(e->effect_env, e->arena, st);
     /* ET3: handler type expression and compose-handlers */
     e->sym_handler_type     = intern_cstr(st, "handler");
     e->sym_compose_handlers = intern_cstr(st, "compose-handlers");
