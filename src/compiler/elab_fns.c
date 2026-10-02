@@ -7402,6 +7402,10 @@ static bool form_vec_has_literal_item(const Form *v) {
 }
 
 Expr *elab_defn(Elab *e, const Form *call) {
+    /* forward-call-to-aggregate-result-types-as-carrier: a module type
+     * elaborated since the last defn may be what a pending forward decl's
+     * return was waiting on; settle those before this body calls them. */
+    if (e->fwd_pending_results) elab_fwd_refresh_pending(e);
     /* Phase R5: Check for #[no-unwind] attribute before name.
      * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
      * Both are bare-symbol attributes and may appear in either order. */
