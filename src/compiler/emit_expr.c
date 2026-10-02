@@ -9595,6 +9595,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 FnDef *ba_reresolved = emit_reresolve_method_fndef(ctx, e);
                 char **arg_strs = n ? (char **)malloc(n * sizeof(char *)) : NULL;
                 if (n && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                const char *poly_param_ctype[MAX_FN_ARITY];
                 for (uint32_t i = 0; i < n; i++) {
                     char *raw = emit_value(ctx, body, e->as.call_.args[i]);
                     if (!phase_f_concrete) {
@@ -9708,6 +9709,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             raw = fat_dispatch_box_arg(ctx, body, av,
                                                        e->as.call_.args[i]->type, raw);
                     }
+                    /* fnsan-poly-phase-f-pointer-param: a typed carrier's thunk
+                     * is natively typed (F5 above), so a parameter the declared
+                     * `(fn [a] b)` resolves to a POINTER under the spec is that
+                     * pointer in slot 0's signature -- `int64_t (void *,
+                     * tur_adt_Point *)` for a lens's getter.  The argument may
+                     * still be the carrier word (`run-id`'s spec answers
+                     * `int64_t` at a := Point); spelling the cast from it was a
+                     * -fsanitize=function trap.  Bridge the word instead. */
+                    if (i < MAX_FN_ARITY) poly_param_ctype[i] = NULL;
+                    if (i < MAX_FN_ARITY && phase_f_concrete && typed_carrier &&
+                        fn_binding->poly_type->as.fn.arg_full_types &&
+                        i < fn_binding->poly_type->as.fn.arity &&
+                        fn_binding->poly_type->as.fn.arg_full_types[i] &&
+                        !emit_type_is_wide_byval_adt(ctx, e->as.call_.args[i]->type)) {
+                        Type dt = emit_resolve_type(ctx,
+                            *fn_binding->poly_type->as.fn.arg_full_types[i]);
+                        const char *dc = emit_type_c_name(ctx, dt);
+                        const char *ac = emit_type_c_name(ctx, e->as.call_.args[i]->type);
+                        size_t dl = dc ? strlen(dc) : 0;
+                        if (dl > 0 && dc[dl - 1] == '*' && ac &&
+                            strcmp(ac, "int64_t") == 0 &&
+                            !emit_repr_type_mentions_tyvar(&dt) &&
+                            !type_is_b4box_closure_slot(dt)) {
+                            Buf cast; buf_init(&cast);
+                            buf_printf(&cast, "(%s)(intptr_t)(%s)", dc, raw);
+                            buf_putc(&cast, '\0');
+                            free(raw);
+                            raw = strdup(cast.data);
+                            buf_free(&cast);
+                            poly_param_ctype[i] = dc;
+                        }
+                    }
                     /* Phase F concrete path: args used as-is, no int64_t widening. */
                     arg_strs[i] = raw;
                 }
@@ -9736,6 +9769,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * spells the param int64_t and the thunk deref+copies. */
                         if (emit_type_is_wide_byval_adt(ctx, e->as.call_.args[i]->type))
                             buf_puts(&out, ", int64_t");
+                        else if (i < MAX_FN_ARITY && poly_param_ctype[i])
+                            buf_printf(&out, ", %s", poly_param_ctype[i]);
                         else
                             buf_printf(&out, ", %s", emit_type_c_name(ctx, e->as.call_.args[i]->type));
                     }
