@@ -8901,6 +8901,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* Heap-own the HandleExpr + cases: a captured continuation may
                  * outlive this driver frame, so they cannot live on the C stack. */
                 HandleExpr *h = (HandleExpr *)turi_val_alloc(env, sizeof(HandleExpr));
+                /* Not zeroed by the allocator: `shallow` (which the resume path
+                 * reads to decide whether to re-install this prompt) was
+                 * garbage, a UBSan invalid-bool load on every resume through a
+                 * handler value.  Handler values are deep (F2). */
+                memset(h, 0, sizeof *h);
                 HandleCase *cs = (HandleCase *)turi_val_alloc(env, (size_t)hv->n_cases * sizeof(HandleCase));
                 for (uint8_t i = 0; i < hv->n_cases; i++) cs[i] = *hv->cases[i];
                 h->body = control->as.with_handler_.body;

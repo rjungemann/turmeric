@@ -1908,7 +1908,14 @@ struct Expr {
          * sites cast slot 0 at exactly those types, so the box's shim must be
          * spelled the same way (fnsan-concrete-sink-bare-fn).  NULL when not
          * known or erased somewhere. */
+        /* nil_result_word: with inner_is_fat, the closure returns nil and the
+         * sink's declared result is a bare type variable: every consumer of
+         * the slot calls it through the erased `int64_t (*)(void *...)` cast,
+         * so the wrapper's shim calls the closure and answers the zero word
+         * (ensure_nilres_fatshim).  Calling the `void` thunk through that cast
+         * was a -fsanitize=function trap and reads rax garbage. */
         struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat;
+                 bool nil_result_word;
                  const struct Type *sink_fn_type; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can

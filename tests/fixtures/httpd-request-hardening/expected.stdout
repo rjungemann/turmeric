@@ -22,4 +22,15 @@ refused
 refused
 refused
 refused
+method 14: method=14 path=2 version=HTTP/1.1 keep-alive=1
+method 15: refused 400
+path 1022: method=3 path=1022 version=HTTP/1.1 keep-alive=1
+path 1023: refused 414
+version 15: refused 400
+conn closed: method=3 path=1 version=HTTP/1.1 keep-alive=1
+conn close: method=3 path=1 version=HTTP/1.1 keep-alive=0
+conn list close: method=3 path=1 version=HTTP/1.1 keep-alive=0
+1.0 keep-alive: method=3 path=1 version=HTTP/1.0 keep-alive=1
+1.0 keep-alives: method=3 path=1 version=HTTP/1.0 keep-alive=0
+GE\x09T /a\x0d\x0aGET /forged 200 -> 200 0 5ms
 5040

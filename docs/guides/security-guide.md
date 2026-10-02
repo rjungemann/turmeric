@@ -349,12 +349,14 @@ next run. `tur run`, `tur build` and `tur audit` all re-hash the trees they are
 about to use, so an edit made to `spices/` after a fetch is caught by whichever
 you reach for.
 
-What it still cannot do is **check out the commit it recorded**. A clone tracks
-the branch or tag named in `:ref`; `:resolved` is recorded but never used to
-check out, so a branch-shaped `:ref` re-fetches to wherever that branch now
-points and you are asked to approve the change rather than held to the commit
-you locked. Tracked as
-[lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/reported/lock-tracks-ref-not-resolved-commit.md).
+A fetch also **checks out the commit it recorded**, not wherever `:ref` points
+now, so a branch-shaped `:ref` that has moved upstream still yields the locked
+commit. If that commit can no longer be fetched -- history rewritten -- the
+fetch fails and keeps no clone rather than falling back to the branch, which
+would quietly turn the pin back into branch-tracking. `tur fetch --frozen`
+holds a whole fetch to the lock and never writes it: run that in CI.
+([lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lock-tracks-ref-not-resolved-commit.md),
+resolved.)
 
 So: **prefer a tag over a branch for `:ref`, and read a new spice before you add
 it.** A `:cmake-deps` entry is a trust decision equivalent to running build

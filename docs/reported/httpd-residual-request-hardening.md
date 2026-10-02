@@ -5,6 +5,30 @@ denial of service, a policy gap or a misleading surface).
 **Filed:** 2026-09-30, by security-audit-plan WP4 (M-4).
 **Tag:** security-
 
+**Narrowed 2026-10-01: items 1, 2, 5, 6, 7 and 8 are fixed; 3, 4, 9 and 10
+remain** (each needs a default chosen, or is an enhancement).
+
+- **1** -- both header read loops resume the terminator search 3 bytes (1 for
+  `\n\n`) before where the previous one stopped, instead of rescanning the
+  whole buffer after every `recv`.
+- **2** -- `httpd-async-fiber-body`'s response writes park 5 s per wait, as the
+  reads do; a write that times out or fails closes the connection.
+  (`httpd-await-writable`, the user-facing primitive, keeps its no-timeout
+  contract.)
+- **5** -- a method or version of 15+ bytes is refused 400, a path of 1023+
+  bytes 414 (`URI Too Long`, new in `httpd-status-text`), where the field used
+  to be left `""` and the request served.
+- **6** -- `Connection` is read as a comma-separated token list, each token
+  matched whole: `closed` is not `close`, `Upgrade, close` closes, and
+  `keep-alives` is not `keep-alive`.
+- **7** -- the `mw-basic-auth` example compares both fields every time and
+  combines the results with `*`.
+- **8** -- `mw-log` writes every byte of the method and path outside printable
+  ASCII (and the backslash) as `\xHH`, so a request cannot forge a log line.
+
+Pinned by new cases in `tests/fixtures/httpd-request-hardening` (5, 6, 8).
+The items below keep their original numbering.
+
 WP4 closed M-4's memory-safety and request-smuggling items in
 `stdlib/httpd.tur`. It also rewrote the static handler's containment and
 fixed the `httpd-set-cookie!` stack overrun (see the plan, section 2e). The

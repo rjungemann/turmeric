@@ -249,6 +249,7 @@
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 413: return "Payload Too Large";
+    case 414: return "URI Too Long";
     case 429: return "Too Many Requests";
     case 500: return "Internal Server Error";
     case 501: return "Not Implemented";
@@ -277,8 +278,10 @@
 ;;; (an int64_t*), and returns the header block's length in bytes.  A request
 ;;; the server must refuse returns the negated status to answer it with:
 ;;;   -400  malformed, negative or conflicting Content-Length, or both
-;;;         Content-Length and Transfer-Encoding (the request-smuggling shape)
+;;;         Content-Length and Transfer-Encoding (the request-smuggling shape),
+;;;         or a method / version too long for its field
 ;;;   -413  Content-Length above httpd-set-max-body!'s cap
+;;;   -414  a request target too long for the path field
 ;;;   -501  Transfer-Encoding (chunked bodies are not implemented, and reading
 ;;;         the chunks as the next request would desync the connection)
 ;;; Pure over its input: no socket, which is what the fuzz target relies on.
@@ -305,7 +308,10 @@
       char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
       if (sp) {
           int l = (int)(sp - p);
-          if (l > 0 && l < 15) {
+          /* An oversized field used to be left "" and the request served
+           * anyway (security-audit-plan WP4, item 5). */
+          if (l >= 15) return -400;
+          if (l > 0) {
               memcpy(conn->method, p, (size_t)l);
               conn->method[l] = '\0';
           }
@@ -316,7 +322,8 @@
       char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
       if (sp) {
           int l = (int)(sp - p);
-          if (l > 0 && l < 1023) {
+          if (l >= 1023) return -414;
+          if (l > 0) {
               memcpy(conn->path, p, (size_t)l);
               conn->path[l] = '\0';
           }
@@ -324,13 +331,15 @@
           char *vlen_end = (char *)memchr(p, '\r', (size_t)(line_end - p));
           if (!vlen_end) vlen_end = line_end;
           int vl = (int)(vlen_end - p);
-          if (vl > 0 && vl < 15) {
+          if (vl >= 15) return -400;
+          if (vl > 0) {
               memcpy(conn->version, p, (size_t)vl);
               conn->version[vl] = '\0';
           }
       } else {
           int l = (int)(line_end - p);
-          if (l > 0 && l < 1023) {
+          if (l >= 1023) return -414;
+          if (l > 0) {
               memcpy(conn->path, p, (size_t)l);
               conn->path[l] = '\0';
           }
@@ -359,8 +368,20 @@
                   while (val < eol && (*val == ' ' || *val == '\t')) val++;
                   int val_len = (int)(eol - val);
                   if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
-                      if (val_len >= 5  && strncasecmp(val, "close", 5) == 0) conn_close = 1;
-                      if (val_len >= 10 && strncasecmp(val, "keep-alive", 10) == 0) conn_keep = 1;
+                      /* A comma-separated token list, each token whole:
+                       * `closed` is not `close` (WP4, item 6). */
+                      const char *t = val;
+                      while (t < eol) {
+                          while (t < eol && (*t == ' ' || *t == '\t' || *t == ',')) t++;
+                          const char *te = t;
+                          while (te < eol && *te != ',') te++;
+                          const char *tt = te;
+                          while (tt > t && (tt[-1] == ' ' || tt[-1] == '\t')) tt--;
+                          size_t tl = (size_t)(tt - t);
+                          if (tl == 5  && strncasecmp(t, "close", 5) == 0) conn_close = 1;
+                          if (tl == 10 && strncasecmp(t, "keep-alive", 10) == 0) conn_keep = 1;
+                          t = te;
+                      }
                   } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
                       /* The whole value must be decimal digits (optional
                        * trailing blanks): no sign, no "10abc", and no silent
@@ -612,10 +633,16 @@
                        (size_t)(buf_cap - 1 - (size_t)total), 0);
           }
           if (n <= 0) break;
+          /* Resume the terminator search where the last one stopped (less
+           * the terminator's own length): rescanning the whole buffer after
+           * every recv made a peer trickling bytes up to the 256 KiB cap cost
+           * O(n^2) (WP4, item 1). */
+          int scan4 = total > 3 ? total - 3 : 0;
+          int scan2 = total > 1 ? total - 1 : 0;
           total += (int)n;
           buf[total] = '\0';
-          hdr_end = strstr(buf, "\r\n\r\n");
-          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+          hdr_end = strstr(buf + scan4, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
       if (!hdr_end) { free(buf); break; }  /* peer closed, timed out, or oversized */
       /* security-audit-plan M-4: the head is parsed by httpd-parse-head, the
@@ -2231,10 +2258,12 @@
 ;;; is reversible and traverses the wire in clear text otherwise.
 ;;;
 ;;; Example:
+;;;   ;; Compare BOTH fields every time and combine the results: returning
+;;;   ;; early on a wrong username tells a caller which usernames exist.
 ;;;   (let [verify (fn [u :cstr p :cstr] :int   ; captures nothing -- fine
-;;;                  (if (= 1 (cstr-eq-const-time u "admin"))
-;;;                    (cstr-eq-const-time p "s3cret")
-;;;                    0))
+;;;                  (let [u-ok (cstr-eq-const-time u "admin")
+;;;                        p-ok (cstr-eq-const-time p "s3cret")]
+;;;                    (* u-ok p-ok)))
 ;;;         composed (compose-middleware base (mw-basic-auth "app" verify))]
 ;;;     (httpd-new 0 composed))
 ;;;
@@ -2635,10 +2664,13 @@
               break;
           }
           if (n == 0) break;   /* peer closed */
+          /* Resume the search: see httpd-handle's read loop. */
+          int scan4 = total > 3 ? total - 3 : 0;
+          int scan2 = total > 1 ? total - 1 : 0;
           total += (int)n;
           buf[total] = '\0';
-          hdr_end = strstr(buf, "\r\n\r\n");
-          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+          hdr_end = strstr(buf + scan4, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
       if (!hdr_end) { free(buf); break; }
       /* security-audit-plan M-4: the same head parser as httpd-handle. */
@@ -2701,39 +2733,45 @@
       char *hbuf = (char *)httpd_hyresp_hyhead((void *)conn, (int64_t)is_http_11, (void *)&hlen64);
       if (!hbuf) { httpd_hyconn_hyrelease((void *)conn); break; }
       int hlen = (int)hlen64;
-      /* Non-blocking write loop -- park on EWOULDBLOCK. */
+      /* Non-blocking write loop -- park on EWOULDBLOCK, 5 s per wait like
+       * the reads.  It used to wait forever, so a client that stopped
+       * reading held its fiber and its in-flight slot (WP4, item 2).  A
+       * write that does not finish closes the connection. */
+      int write_ok = 1;
       {
           int sent = 0;
           while (sent < hlen) {
               ssize_t w = send(fd, hbuf + sent, (size_t)(hlen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);  /* WRITE */
-                      if (ev < 0) break;
+                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);  /* WRITE */
+                      if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
+                  write_ok = 0;
                   break;
               }
               sent += (int)w;
           }
       }
-      if (blen > 0) {
+      if (blen > 0 && write_ok) {
           int sent = 0;
           while (sent < blen) {
               ssize_t w = send(fd, body + sent, (size_t)(blen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);
-                      if (ev < 0) break;
+                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);
+                      if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
+                  write_ok = 0;
                   break;
               }
               sent += (int)w;
           }
       }
       free(hbuf);
-      keep_going = conn->client_keep_alive;
+      keep_going = conn->client_keep_alive && write_ok;
       /* The shared release also frees the multipart parts and attributes,
        * which this path's own cleanup used to leak. */
       httpd_hyconn_hyrelease((void *)conn);
@@ -3401,8 +3439,23 @@
   ```c
   HttpdConn *cn = (HttpdConn *)c;
   int status = cn->resp_status ? cn->resp_status : 200;
+  /* The method and path are the client's bytes: escape anything outside
+   * printable ASCII as \xHH, so a request cannot write control sequences
+   * (or a forged second log line) into the log (WP4, item 8). */
+  char m[sizeof cn->method * 4], pth[sizeof cn->path * 4];
+  const char *src[2] = { cn->method, cn->path };
+  char *dst[2] = { m, pth };
+  size_t cap[2] = { sizeof m, sizeof pth };
+  for (int k = 0; k < 2; k++) {
+      size_t o = 0;
+      for (const unsigned char *q = (const unsigned char *)src[k]; *q && o + 5 < cap[k]; q++) {
+          if (*q >= 0x20 && *q < 0x7f && *q != '\\') dst[k][o++] = (char)*q;
+          else o += (size_t)snprintf(dst[k] + o, cap[k] - o, "\\x%02x", *q);
+      }
+      dst[k][o] = '\0';
+  }
   fprintf(stdout, "%s %s -> %d %d %lldms\n",
-          cn->method, cn->path, status, cn->resp_body_len,
+          m, pth, status, cn->resp_body_len,
           (long long)elapsed_ms);
   fflush(stdout);
   ```)

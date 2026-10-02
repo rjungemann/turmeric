@@ -20,7 +20,7 @@
 > fixes turned out not to exist -- corrected in **section 2b** before the work
 > started. D-1 through D-9 are closed, pinned by `tests/run-security-driver.sh`
 > (27 assertions, ctest `tur_security_driver`). One finding of WP2's own is
-> filed: `docs/reported/buf-puts-breaks-the-incidental-nul-invariant.md`.
+> filed: `docs/archive/buf-puts-breaks-the-incidental-nul-invariant.md`.
 >
 > **WP3 landed 2026-09-30**, branched from WP1's PR (`1d5f533e`). Its research
 > pass is section 2c: S-1 reproduced from an embedder AND from `tur check`
@@ -532,7 +532,7 @@ necessarily reused before the read).
 | Survey site | Verdict |
 | --- | --- |
 | `sized-buf-set!` | **Confirmed, and it is a class, not a site.** A node stored from inside `with-region` read back the arena poison (`-2387225703656530210`; `rewinds=2 retires=0`). `sized-buf-set!` is a Turmeric-bodied wrapper over `__sized-buf-set!-raw`, and the implicit node -> `:int` erasure was noted only when the *callee* was inline C: inside the wrapper the word is already an `:int`, so the store it forwards to sees no node. Any user wrapper of that shape had the same hole. Fixed in the rule (`elab_call.c`): the erasure is now noted at any callee for a `:heap` node word, constructors excepted. |
-| `tvar/write`, `tvar/swap` | **Retired as a hook gap.** `val : ptr` -- a node reaches it only through an explicit `(:: node ptr)`, which is noted at the ascription. No runtime fixture was possible: a transaction inside any lambda does not compile ([stm-inside-closure-captured-tvar-undeclared](../reported/stm-inside-closure-captured-tvar-undeclared.md), filed). |
+| `tvar/write`, `tvar/swap` | **Retired as a hook gap.** `val : ptr` -- a node reaches it only through an explicit `(:: node ptr)`, which is noted at the ascription. A transaction inside a lambda did not compile when this was written ([stm-inside-closure-captured-tvar-undeclared](../archive/stm-inside-closure-captured-tvar-undeclared.md), since fixed); `tests/fixtures/region-escape-via-store` case 11 now runs it -- a chain written to an outer TVar inside `with-region`, read after the pop. |
 | `tur_hamt_transient_set` | **Missing in C, unreachable today.** The stdlib entry takes `ptr<void>`, noted at the erasure. The C setter now carries the note as `tur_hamt_set` does, and that function's "every public setter funnels through here" comment, which was false, is corrected. |
 | `sized-matrix-set!` | **Retired.** An inline-C callee with an untyped `v`, so the existing implicit-erasure note already covers it (the probe retires). The survey cited `sized-buf.tur:232`; it is `sized-matrix.tur:232`. |
 | `sized-bitvec-set!` | **Retired, false positive.** It sets a bit; no caller word is stored. |
@@ -928,7 +928,7 @@ policy is exactly the one worth not having. The generators changed instead.
   nothing loads; both swallow the `ReferenceError`, so Share reports "Failed to
   encode code" and a `#code=` link decodes to nothing. Not a security defect --
   it removed a vector rather than adding one -- so it is filed as
-  [try-share-links-never-encode](../reported/try-share-links-never-encode.md).
+  [try-share-links-never-encode](../archive/try-share-links-never-encode.md).
 - **The service-worker kill switch could not be built from a clean tree.**
   The Cloudflare plugin builds the Worker as its own Vite environment and that
   bundle closes first, before `dist/client/` exists, so `TUR_SW_KILL=1 npm run
@@ -1566,7 +1566,7 @@ survey did not have, so read that before this list. What landed:
 | --- | --- |
 | C-1 | **Fixed.** `/install` bootstraps `tvm` (the plan's "or, better") and installs a checksum-verified release; works on Linux, which it never did. `--HEAD` stays as the documented opt-in, so `Formula/turmeric.rb` is unchanged. Answers section 7 question 5. |
 | C-2 | **Fixed.** All three refusals plus `--insecure`; `--from` warns. A mismatch is deliberately not `--insecure`-able. |
-| C-3 | **Mostly fixed.** Drift is detected, `tur build` and `tur audit` verify, and a *third* defect turned up: `tur fetch` was a no-op on a fresh clone. Checking out `:resolved` is filed as [lock-tracks-ref-not-resolved-commit](../reported/lock-tracks-ref-not-resolved-commit.md) -- see the commit for why it was not half-landed. The guide half was already done by WP1. |
+| C-3 | **Fixed.** Drift is detected, `tur build` and `tur audit` verify, and a *third* defect turned up: `tur fetch` was a no-op on a fresh clone. Checking out `:resolved` landed 2026-10-01 ([lock-tracks-ref-not-resolved-commit](../archive/lock-tracks-ref-not-resolved-commit.md)): a fetch checks out the locked commit, fails rather than falling back to `:ref` when it is gone, and `tur fetch --frozen` holds a fetch to the lock. The guide half was already done by WP1. |
 | C-4 | **Fixed.** Sigstore keyless attestation on every asset. Tag signing deliberately not switched on, with the reason recorded in all three `cut-*-release` commands; answers section 7 question 6. |
 | C-5 | **Fixed**, except the `turmeric-spices` clone, which is a recorded deliberate non-pin (same owner, inside the trust boundary; see 2g). 56 actions SHA-pinned, emsdk and pip pinned, both top-level `permissions` blocks added -- the last as defense in depth, not the over-grant the survey described. |
 | C-6 | **Injection half was already fixed** by WP4. The `issues: write` half is a design decision, not a patch: see 2g and section 7 question 8. |

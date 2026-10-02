@@ -55,6 +55,20 @@ static bool sink_fn_result_is_hkt_erased(const Type *fn_type, uint32_t idx) {
     return dr && dr->kind == TY_APP && hh && hh->kind == TY_TYVAR;
 }
 
+/* fnsan-nil-closure-into-erased-result: does the callee's declared type for
+ * argument slot `idx` return a bare type variable (`(fn [...] A)`)?  At
+ * `A := nil` no spec clone is made, so the carrier base calls the slot as
+ * returning a word. */
+static bool sink_fn_result_is_bare_tyvar(const Type *fn_type, uint32_t idx) {
+    if (!fn_type || fn_type->kind != TY_FN || !fn_type->as.fn.arg_full_types ||
+        idx >= fn_type->as.fn.arity)
+        return false;
+    const Type *decl = fn_type->as.fn.arg_full_types[idx];
+    if (!decl || decl->kind != TY_FN) return false;
+    const Type *dr = decl->as.fn.result_full_type;
+    return dr ? dr->kind == TY_TYVAR : decl->as.fn.result_kind == TY_TYVAR;
+}
+
 /* ...and is `t` a by-value aggregate (a concrete ADT monomorph or ADT, not a
  * :heap one) -- the result shape the boxing shim bridges? */
 static bool type_is_byvalue_aggregate_result(Type t) {
@@ -5294,6 +5308,13 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                     bt->as.fn.boxed = true;
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, fa->span);
                     shim->as.fn_to_fat_.inner = fa;
+                    /* fnsan-concrete-field-sink: a concrete `(fn ...)` field is
+                     * read at exactly its declared types (TUR_APPLY<N>_T), as a
+                     * concrete `^fat` parameter is -- hand the box the same
+                     * sink type, so a small by-value aggregate result gets the
+                     * typed shim rather than the word one. */
+                    if (ft->kind == TY_FN && !call_type_has_named_tyvar(ft))
+                        shim->as.fn_to_fat_.sink_fn_type = ft;
                     call_expr->as.call_.args[fi] = shim;
                 }
 
@@ -9670,6 +9691,28 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         w->as.fn_to_fat_.inner = args[i];
                         w->as.fn_to_fat_.erased_result = true;
                         w->as.fn_to_fat_.inner_is_fat = true;
+                        args[i] = w;
+                    }
+                    /* fnsan-nil-closure-into-erased-result: a capturing
+                     * closure that returns nil, headed for a `(fn [...] A)`
+                     * slot.  Its thunk is `void`; the slot's consumers call it
+                     * as returning the word.  Wrapped the same way, with a
+                     * shim that calls it and answers 0 -- on the stack when the
+                     * sink provably neither keeps nor drops it. */
+                    else if (ak == TY_FN && args[i]->type.as.fn.boxed &&
+                             (args[i]->type.as.fn.result_full_type
+                                  ? args[i]->type.as.fn.result_full_type->kind == TY_NIL
+                                  : args[i]->type.as.fn.result_kind == TY_NIL) &&
+                             sink_fn_result_is_bare_tyvar(&fn_type, fn_arg_idx_fat)) {
+                        Expr *w = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                           args[i]->span);
+                        w->as.fn_to_fat_.inner = args[i];
+                        w->as.fn_to_fat_.inner_is_fat = true;
+                        w->as.fn_to_fat_.nil_result_word = true;
+                        /* The wrapper holds only a borrow of the handle, so
+                         * the proof that the callee neither keeps nor drops
+                         * the argument is all its frame lifetime needs. */
+                        w->as.fn_to_fat_.stack_ok = sink_is_nonretaining;
                         args[i] = w;
                     }
                     /* Pass through unchanged: a fat closure (TY_PTR_VOID), nil, a

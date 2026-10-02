@@ -3040,14 +3040,13 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
 static bool buf_put_quoted(Buf *b, const char *s) {
     char q[9000];
     if (!s || tur_shell_quote(s, q, sizeof q) != 0) return false;
-    /* buf_printf, not buf_puts.  buf_printf reserves n+1 bytes and lets
-     * vsnprintf write its NUL at data[len], so a Buf built entirely out of
-     * buf_printf is incidentally readable as a C string BEFORE anyone appends
-     * an explicit terminator -- and link_command_run does exactly that with
-     * the aux_includes/aux_sources buffers this helper fills.  buf_puts
-     * reserves only n, so switching to it read one byte past the allocation
-     * (caught by ASan in tests/spice-c-sources-tests.sh). */
-    buf_printf(b, "%s", q);
+    /* link_command_run reads the aux_includes/aux_sources buffers this
+     * helper fills as C strings with no explicit terminator.  That is safe
+     * because every Buf append keeps data[len] == '\0' (buf.h).  It used to
+     * hold only for buf_printf, by vsnprintf's arithmetic, so this line had to
+     * be a buf_printf: a buf_puts here read one byte past the allocation
+     * (docs/archive/buf-puts-breaks-the-incidental-nul-invariant.md). */
+    buf_puts(b, q);
     return true;
 }
 
@@ -10391,7 +10390,7 @@ static int usage(void) {
         "  tur add <path> --path             add a local spice\n"
         "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n"
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
-        "  tur fetch [--update|--dry-run|--refetch]  download/update spices (--refetch bypasses system pkgs)\n"
+        "  tur fetch [--update|--frozen|--dry-run|--refetch]  download/update spices (--frozen: fail if tur.lock would change; --refetch bypasses system pkgs)\n"
         "  tur audit                         list every origin the build fetches code from\n"
         "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
         "  tur install <url> [--ref <ref>]   install a spice binary globally\n"

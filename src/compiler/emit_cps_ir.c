@@ -10717,7 +10717,18 @@ void emit_cps_ir_flush_groups(Buf *file) {
         if (g_ctg[gi].declared && !g_ctg[gi].defined) ctg_emit_def(file, &g_ctg[gi]);
 }
 
+static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e);
 bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
+    /* Mark the DK body for the direct emitter it delegates to: a value it
+     * puts on the C stack (a stack fat box) may be read by a continuation
+     * that runs after this frame has returned. */
+    int prev = ctx ? ctx->in_cps_fn : 0;
+    if (ctx) ctx->in_cps_fn = prev + 1;
+    bool r = emit_cps_ir_try_fn_impl(ctx, file, e);
+    if (ctx) ctx->in_cps_fn = prev;
+    return r;
+}
+static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (g_dump_cps_mono && e && e->kind == EX_FN_DEF && e->as.fn_def_.fn
         && ctx->current_abi_specialization)
         cps_dump_mono_admissible(ctx, e->as.fn_def_.fn);

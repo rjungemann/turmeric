@@ -2808,6 +2808,41 @@ Expr *elab_with_handler(Elab *e, const Form *call) {
     e->n_handled_effects = saved_n_handled;
     if (!body) return NULL;
 
+    /* `(with-handler (handler (E [p] k) case-body) body)` IS
+     * `(handle body (E [p] k) case-body)`: the literal is deep, its cases are
+     * the handle's, and building it has no effect of its own.  Emit the
+     * `handle`, so the literal form lowers wherever `handle` does.  As an
+     * EX_WITH_HANDLER it was refused in positions a `handle` lowers in -- as
+     * a builtin's operand (`(println (with-handler ...))` left `main`
+     * uncolored) and anywhere inside a capturing lambda (the lambda's body
+     * tainted its effect through the enclosing `main`).  Only when the case
+     * body is answer-typed the way elab_handle_impl would accept it (it
+     * resumes, diverges, or has the body's type); anything else keeps the
+     * with-handler node and its existing lowering. */
+    if (hv->kind == EX_HANDLER_LIT && hv->as.handler_lit_.handle
+        && hv->as.handler_lit_.handle->n_cases > 0) {
+        const HandleExpr *lit = hv->as.handler_lit_.handle;
+        bool answer_ok = true;
+        for (uint8_t ci = 0; ci < lit->n_cases && answer_ok; ci++) {
+            const Expr *cb = lit->cases[ci].body;
+            if (!cb) { answer_ok = false; break; }
+            const Expr *last = cb;
+            if (last->kind == EX_DO && last->as.do_.n > 0)
+                last = last->as.do_.items[last->as.do_.n - 1];
+            answer_ok = last->kind == EX_RESUME
+                     || cb->type.kind == TY_NEVER
+                     || cb->type.kind == body->type.kind;
+        }
+        if (answer_ok) {
+            HandleExpr *h = arena_alloc(e->arena, sizeof(HandleExpr));
+            *h = *lit;                 /* cases, n_cases, shallow = false */
+            h->body = body;
+            Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
+            out->as.handle_.handle = h;
+            return out;
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_WITH_HANDLER, body->type, call->span);
     out->as.with_handler_.handler = hv;
     out->as.with_handler_.body = body;
