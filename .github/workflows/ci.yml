@@ -195,15 +195,19 @@ jobs:
           if [ -x /usr/bin/git ]; then GIT=/usr/bin/git; else GIT=git; fi
           # C-5 asked whether this should be SHA-pinned like the actions above.
           # Deliberately not, and the reason is recorded here rather than left
-          # to look like an oversight: turmeric-spices is the same owner under
-          # the same account, so it sits INSIDE the trust boundary `main`
-          # already draws, not outside it -- pinning it would defend this repo
-          # against itself.  A pin would also mean a SHA in this file that some
-          # human bumps, which goes stale and then gets bumped blind; see the
-          # comment block at the top of cmake/mir.cmake for that failure mode
-          # observed in this repo.  Revisit if the spices repo ever takes
-          # third-party contributions on its default branch.
-          "$GIT" clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
+          # to look like an oversight: turmeric-spices is owned by whoever owns
+          # this repo -- `github.repository_owner` below makes that true by
+          # construction rather than by convention, and follows a transfer
+          # (personal account -> org) with no edit -- so it sits INSIDE the
+          # trust boundary `main` already draws, not outside it; pinning it
+          # would defend this repo against itself.  A pin would also mean a SHA
+          # in this file that some human bumps, which goes stale and then gets
+          # bumped blind; see the comment block at the top of cmake/mir.cmake
+          # for that failure mode observed in this repo.  Revisit if the spices
+          # repo ever takes third-party contributions on its default branch.
+          "$GIT" clone --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
+            ../turmeric-spices
 
       - name: Smoke check (tur --version must not hang)
         run: |
