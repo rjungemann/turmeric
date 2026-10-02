@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.59.0] -- 2026-10-02
 
 ### Changed
 
@@ -29,7 +29,6 @@ All notable changes to Turmeric are documented here.
   works with a `TUR-D0004` deprecation warning. An unknown attribute before a
   defn's name (`(defn ^contruct f ...)`) is an error instead of becoming the
   function's name.
-
 - **An undeclared effect name in `#fx{...}` is an error (`TUR-E0026`).** It
   used to be dropped silently, so `#fx{IO}` in a file that had not loaded
   `stdlib/effects.tur` checked as `#fx{}`, and a caller's `#fx{}` then passed
@@ -64,14 +63,49 @@ All notable changes to Turmeric are documented here.
   `TUR_APPLY1_T(void *, int64_t, f, p)`, not `TUR_APPLY1_T(void *, void *, f,
   p)`.  The closure's own body still sees a `void *`.  See
   [docs/guides/value-representations-guide.md](docs/guides/value-representations-guide.md#slot-0s-signature-which-parameters-are-the-word).
+- **Stdlib comparators take a real `(fn [A A] bool)`.** `vec-eq?`,
+  `map-eq-raw?`, `set-eq-cmp?`, `result-eq?`, `pair-eq-carrier?`,
+  `mutmap-eq-storage?` and `map-eq-dynamic` call their comparator's slot 0
+  with each element as a word but declared it an untyped `^fat`, so the
+  comparator was boxed at its own signature: for `(fn [a : float b : float]
+  ...)` the elements went in integer registers and the thunk read xmm
+  registers nobody set. Compiled, `(vec-eq? [7.1] [3.25] cmp)` answered true
+  where `tur --interpret` said false. The Turmeric wrappers `map-eq?`,
+  `map-eq-k?` and `mutmap-eq?` keep an independent type variable, so an
+  erased comparator over a typed map is still accepted.
 
 ### Fixed
 
+- **A caller written above a generic callee now sees the callee's real
+  signature.** An arity-only forward declaration produced `TUR-E0709` for a
+  by-value result, "expected int, got float" for a float argument, and a
+  SIGSEGV when a lambda was handed to a later generic higher-order function.
+  Pass 2 now orders a defn after any not-yet-elaborated "lossy" defn it calls
+  (generic, or with a fn-typed parameter), breaking a cycle at its first lossy
+  member. Inside a `defmodule` the same pre-pass had kept every non-scalar
+  declared return -- `(Result Handle cstr)`, `(Option Box)`, a bare `: Box` --
+  as the int-carrier placeholder, which is what broke the `secret`, `valkey`
+  and `tourist-session-valkey` spices. Mutually recursive generics that saw
+  each other's placeholder result are primed before elaboration.
+- **An open argument ahead of the one that fixes a type variable no longer
+  types the result as `int`.** `(get-or (none) 1.5)` against
+  `[o : (Option A) d : A]` printed `1`, and `(err "e")`, `(vec-new)` and
+  `(map-new)` in first position did the same; a `cstr` default printed an
+  address. Such a binding is provisional now and grounded after the loop, so
+  emit monomorphizes it. Also fixed in the same sweep: a catch-all variable
+  arm over `(Option A)` in a generic emitted invalid C at every
+  instantiation, and a `uint8` payload (`(cx nn (:: 200 uint8))`) aborted the
+  compiler.
 - `^fat x : (fn ...)` in a `let` bound to a captureless lambda or a named
   defn stored a bare code pointer, and the first call took SIGSEGV; bound to a
   closure-returning call such as `(>>> f g)`, a float call printed garbage.
+- A CPS-emitted tail call into an inline join leaked the fresh sum box it
+  produced itself -- `(ok? (result-map (ok 1) f))` inside a colored function
+  dropped its 16-byte `Ok`.
 - The fixture corpus is clean under clang's `-fsanitize=function`, and a new
-  `fnsan` CI job keeps it that way.
+  `fnsan` CI job keeps it that way. A `known.fnsan` marker names a fixture's
+  open report, and such a fixture is run alone and required to still trap, so
+  the list cannot go stale.
 
 ### Documentation
 

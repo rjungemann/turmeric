@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.58.0` -- the representation-confusion family is swept to zero open generic-spec cells and nine trapping fixtures, the security audit's remaining work packages land with Sigstore build provenance on every release asset, and `tur fetch --frozen` holds a build to its lock.
+**Latest release:** `v0.59.0` -- `#fx{...}` is honest: `println` declares `#fx{IO}`, an undeclared effect tag is an error instead of a silently empty row, and compiler attributes move off the row onto `^construct` / `^byval`; the generic-specialization sweep closes the open-argument axis and the forward-call ordering holes, and the fixture corpus reaches zero `-fsanitize=function` traps behind a new CI gate.
 
 ## What
 
