@@ -1906,7 +1906,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                     if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
                 }
                 ctor->fields[fi].effect_row =
-                    effect_row_unresolved(e->arena, syms, n_valid);
+                    effect_row_unresolved(e->arena, syms, n_valid, row_form->span);
             }
 
             /* CONV-S5: a :copy ADT requires every variant's payload to be

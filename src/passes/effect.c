@@ -40,7 +40,8 @@ EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right) {
 }
 
 /* Create an unresolved (symbolic) effect row from an array of symbol names. */
-EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_sym_names) {
+EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names,
+                                 uint8_t n_sym_names, Span span) {
     if (n_sym_names == 0) return effect_row_empty(a);
     EffectRow *row = arena_alloc(a, sizeof(EffectRow));
     row->kind = ERK_UNRESOLVED;
@@ -49,7 +50,30 @@ EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_s
         row->as.unresolved.sym_names[i] = sym_names[i];
     }
     row->as.unresolved.n_sym_names = n_sym_names;
+    row->as.unresolved.span = span;
+    row->as.unresolved.unknown_reported = false;
     return row;
+}
+
+/* An uppercase-initial name in a row is an effect; anything else is a row
+ * variable.  effect_row_resolve and effect_row_unknown_names must agree on
+ * this, or a name could be dropped without being reported. */
+static bool row_name_is_effect(const Symbol *name) {
+    return !(name->name[0] >= 'a' && name->name[0] <= 'z');
+}
+
+uint8_t effect_row_unknown_names(const EffectRow *row, EffectEnv *env,
+                                 const Symbol **out, uint8_t cap) {
+    if (!row || row->kind != ERK_UNRESOLVED) return 0;
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+        const Symbol *name = row->as.unresolved.sym_names[i];
+        if (!name || name->len == 0 || !row_name_is_effect(name)) continue;
+        if (effect_env_lookup(env, name)) continue;
+        if (n < cap) out[n] = name;
+        n++;
+    }
+    return n;
 }
 
 /* Resolve ERK_UNRESOLVED → concrete/var using the populated effect environment. */
@@ -62,7 +86,7 @@ EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a) {
         const Symbol *name = row->as.unresolved.sym_names[i];
         if (!name || name->len == 0) continue;
         /* Lowercase first character → row variable; uppercase → concrete effect. */
-        if (name->name[0] >= 'a' && name->name[0] <= 'z') {
+        if (!row_name_is_effect(name)) {
             EffectRow *var = arena_alloc(a, sizeof(EffectRow));
             var->kind = ERK_VAR;
             var->as.var.var_name = name;
@@ -72,7 +96,9 @@ EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a) {
             if (eff) {
                 result = effect_row_merge(a, result, effect_row_single(a, eff));
             }
-            /* Unknown uppercase name: silently skip (may be a typo or future effect). */
+            /* Unknown uppercase name: left out.  The caller has already
+             * reported it (TUR-E0026, effect_check.c resolve_declared_row);
+             * there is nothing to resolve it TO. */
         }
     }
     return result;

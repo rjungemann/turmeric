@@ -429,7 +429,8 @@ session as a framing error.
 
 ## What the effect system does and does not promise
 
-Nothing, today, for security. `--strict-effects` defaults off and only warns.
+Nothing, today, for security. `--strict-effects` defaults off and warns
+(`-Werror=strict-effects` makes those warnings fail the build).
 Inline C outside an `Unsafe` effect row is a lint behind
 `--lint-inline-c-unsafe`, also default off. The deserializers discussed under
 T2 infer plain effect rows.

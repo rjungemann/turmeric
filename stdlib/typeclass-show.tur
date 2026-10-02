@@ -282,10 +282,15 @@
 ;; ---------------------------------------------------------------------------
 ;; Convenience wrappers + a compatibility alias.
 ;; ---------------------------------------------------------------------------
+;; show-string-fputs has no effect row, the same as the `println` builtin:
+;; printing to stdout is not tracked by the effect system yet
+;; (effect-row-honesty-plan W2/W4 tag both once `IO` resolves without loading
+;; stdlib/effects.tur).  It used to say #fx{FS}, which nothing in scope
+;; declared, so it resolved to #fx{} -- the tag never did anything, and stdout
+;; is not FS.  An undeclared name is now TUR-E0026.
 ;;; show-string-fputs -- internal: write a cstr to stdout with no newline.
 
 (defn show-string-fputs [s : cstr]
-  #fx{FS}
   : void
   ```c
   fputs((const char *)s, stdout);

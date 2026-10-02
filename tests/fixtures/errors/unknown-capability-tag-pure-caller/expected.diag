@@ -1,0 +1,1 @@
+TUR-E0026]: unknown effect 'IO' in effect row: no defeffect declares it ('IO' is declared in stdlib/effects.tur, which is not autoloaded; add (load "stdlib/effects.tur"))

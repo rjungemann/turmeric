@@ -328,7 +328,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# ER6 tests: --dump-effects and --lint-effects
+# ER6 tests: --dump-effects, --lint-effects (alias), -Werror=strict-effects
 # ---------------------------------------------------------------------------
 
 # dump-effects-basic: --dump-effects should print "defn effectful : #{Write}"
@@ -357,7 +357,10 @@ else
 fi
 rm -f "$_nodump_tmp"
 
-# lint-effects-warn: --lint-effects on an unannotated effectful function should emit TUR-W0030
+# lint-effects-alias: --lint-effects is a deprecated alias for --strict-effects.
+# It used to carry a byte-identical copy of the TUR-W0030 emitter (see
+# docs/archive/strict-effects-and-lint-effects-are-indistinguishable.md); it
+# now says so with TUR-W0050 and does exactly what --strict-effects does.
 LINT_INPUT=$(mktemp /tmp/tur-lint-XXXXXX.tur)
 cat > "$LINT_INPUT" << 'EOF'
 (defeffect Write [msg :cstr] :nil)
@@ -365,28 +368,65 @@ cat > "$LINT_INPUT" << 'EOF'
   (perform (Write "hello")))
 (defn main [] :int 0)
 EOF
-out=$("$TUR" --lint-effects emit-c "$LINT_INPUT" 2>&1) || true
-rm -f "$LINT_INPUT"
-if echo "$out" | grep -F "TUR-W0030" > /dev/null 2>&1; then
-    pass "lint-effects-warn"
+out=$("$TUR" --lint-effects emit-c "$LINT_INPUT" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "lint-effects-alias" "deprecated alias should still compile (exit=$rc)"
+elif ! echo "$out" | grep -F "TUR-W0050" > /dev/null 2>&1; then
+    fail "lint-effects-alias" "expected the TUR-W0050 deprecation warning"
+elif [ "$(echo "$out" | grep -cF "[TUR-W0030]")" -ne 1 ]; then
+    fail "lint-effects-alias" "expected exactly one TUR-W0030 (the alias must not double-report)"
 else
-    fail "lint-effects-warn" "expected TUR-W0030 in output under --lint-effects"
+    pass "lint-effects-alias"
 fi
 
-# lint-effects-annotated: --lint-effects should not warn on an annotated effectful function
+# strict-effects-werror: -Werror=strict-effects makes TUR-W0030 an error (and
+# implies --strict-effects); without the -Werror it stays a warning.
+out=$("$TUR" -Werror=strict-effects emit-c "$LINT_INPUT" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "strict-effects-werror" "should fail under -Werror=strict-effects"
+elif ! echo "$out" | grep -F "error [TUR-W0030]" > /dev/null 2>&1; then
+    fail "strict-effects-werror" "expected 'error [TUR-W0030]'; got: $(echo "$out" | head -3)"
+else
+    pass "strict-effects-werror"
+fi
+rm -f "$LINT_INPUT"
+
+# strict-effects-werror-clean: an annotated program compiles under -Werror.
 LINT_ANN_INPUT=$(mktemp /tmp/tur-lint-ann-XXXXXX.tur)
 cat > "$LINT_ANN_INPUT" << 'EOF'
 (defeffect Write [msg :cstr] :nil)
-(defn effectful [] #{Write} :nil
+(defn effectful [] #fx{Write} :nil
   (perform (Write "hello")))
 (defn main [] :int 0)
 EOF
-out=$("$TUR" --lint-effects emit-c "$LINT_ANN_INPUT" 2>&1) || true
+out=$("$TUR" -Werror=strict-effects emit-c "$LINT_ANN_INPUT" 2>&1); rc=$?
 rm -f "$LINT_ANN_INPUT"
-if echo "$out" | grep -F "TUR-W0030" > /dev/null 2>&1; then
-    fail "lint-effects-annotated" "should not warn TUR-W0030 for annotated function under --lint-effects"
+if [ $rc -ne 0 ]; then
+    fail "strict-effects-werror-clean" "annotated program should compile under -Werror=strict-effects (exit=$rc)"
+elif echo "$out" | grep -F "TUR-W0030" > /dev/null 2>&1; then
+    fail "strict-effects-werror-clean" "should not report TUR-W0030 for an annotated function"
 else
-    pass "lint-effects-annotated"
+    pass "strict-effects-werror-clean"
+fi
+
+# strict-effects-lambda-name: TUR-W0030 on a `fn` literal names it by its
+# enclosing defn, never by the elaborator's `__fn_N` gensym (see
+# docs/archive/strict-effects-w0030-names-synthesized-lambdas.md).
+LAMBDA_INPUT=$(mktemp /tmp/tur-lambda-XXXXXX.tur)
+cat > "$LAMBDA_INPUT" << 'EOF'
+(defeffect Bang [] :nil)
+(defn make-thunk [] : (fn [] int)
+  (fn [] : int (do (perform (Bang)) 0)))
+(defn main [] :int 0)
+EOF
+out=$("$TUR" --strict-effects emit-c "$LAMBDA_INPUT" 2>&1) || true
+rm -f "$LAMBDA_INPUT"
+if echo "$out" | grep -F "__fn_" > /dev/null 2>&1; then
+    fail "strict-effects-lambda-name" "a diagnostic printed a __fn_ gensym: $(echo "$out" | grep -F "__fn_" | head -1)"
+elif ! echo "$out" | grep -F "anonymous function in 'make-thunk' performs effects {Bang}" > /dev/null 2>&1; then
+    fail "strict-effects-lambda-name" "expected the lambda to be described by its enclosing defn; got: $(echo "$out" | grep TUR-W0030 | head -2)"
+else
+    pass "strict-effects-lambda-name"
 fi
 
 # try-with-basic: try-with behaves identically to handle

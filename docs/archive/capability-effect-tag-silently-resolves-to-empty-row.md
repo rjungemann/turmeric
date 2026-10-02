@@ -6,7 +6,11 @@ resolution with **no diagnostic**, so the annotation becomes decorative and
 `#fx{}` on its callers becomes a promise the compiler has quietly stopped
 checking. Filed 2026-10-01, found while scoping `^capability` for `println`.
 
-**Status: OPEN.** The behaviour is already *documented* as a trap in
+**Status: RESOLVED 2026-10-02** by fix direction 1 -- see
+[Resolution](#resolution) at the end. Direction 2 was not taken here; it is
+the plan's W2.
+
+**Original status: OPEN.** The behaviour is already *documented* as a trap in
 [effects-system-guide.md:375](../guides/effects-system-guide.md), which is how
 we know it has bitten before -- `#fx{Bt}` "sat decorative on the trail
 mutators for a month" before `Bt` was declared. This report is the filing the
@@ -134,3 +138,74 @@ page's description, so it needs a deprecation cycle rather than a rename.
 Tracked in
 [effect-row-honesty-plan](../upcoming/effect-row-honesty-plan.md) section 6
 Q1.
+
+## Resolution
+
+**Fixed 2026-10-02 by direction 1: an undeclared effect name is
+`TUR-E0026`.** The repro above now fails at `maybe-io`'s row:
+
+```
+repro.tur:1:25: error [TUR-E0026]: unknown effect 'IO' in effect row: no
+  defeffect declares it ('IO' is declared in stdlib/effects.tur, which is not
+  autoloaded; add (load "stdlib/effects.tur"))
+```
+
+and with `(load "stdlib/effects.tur")` added, `claims-pure` fails `TUR-E0009`
+as it always should have.
+
+**Mechanism.** An `ERK_UNRESOLVED` row now carries the span of the `#fx{...}`
+form it was read from (`effect_row_unresolved` takes it; all nine
+construction sites pass one). Every resolution in `effect_check_pass` goes
+through `resolve_declared_row` (`src/passes/effect_check.c`), which asks
+`effect_row_unknown_names` (`src/passes/effect.c`) for exactly the names
+`effect_row_resolve` would drop and reports each one before resolving --
+once per row object, since a row reached through two holders is resolved
+twice. The message adds a did-you-mean against the declared effects (edit
+distance <= 2), names `stdlib/effects.tur` for the thirteen effects it
+declares, and calls out a name that starts with neither case of letter
+(`#fx{|e}`) as neither an effect nor a row variable. All five row positions
+are covered: `defn`, `fn` literal, fn-typed parameter, record field, class
+method. The interpreter reports it identically (it shares the pass); like
+`TUR-E0009` there, it does not stop the run, because `eval.c` ignores the
+pass's return code -- a pre-existing interpreter behaviour, unchanged here.
+
+**No allowlist was needed -- and so W0 is not a prerequisite.** The table
+above (and the plan's Q1) assumed `Construct`, `ByVal` and `NonExhaustive`
+reach resolution. They do not: the `defn` row parser plucks `Construct` and
+`ByVal` out before the row is built (`elab_fns.c`, the M2a/M5 pluck in
+`elab_defn`), and `#fx{NonExhaustive}` is a `match` marker that
+`elab_match` splices out -- it never becomes an effect row. `stdlib/result.tur`
+and `stdlib/option.tur` compile unchanged. The attribute split (W0) stays
+worth doing as a syntax cleanup, on its own merits.
+
+**The sizing sweep was wrong: four rows had never resolved.** Run with the
+real compiler over `stdlib/` plus `tests/fixtures/` (3,823 files), the check
+found:
+
+| Site | What it was | Fix |
+| --- | --- | --- |
+| `stdlib/typeclass-show.tur` `show-string-fputs` | `#fx{FS}` on an `fputs(stdout)` -- reached by every program that loads `typeclass-show.tur` (116 of the sweep's hits) | Tag removed. `FS` was never in scope, so it was always `#fx{}`; and stdout is not `FS`. It now matches `println` (untagged) until W2/W4 tag both |
+| `tests/fixtures/typeclass-effect-row` | `#fx{Write}` with no `Write` declared | Declares `Write` |
+| `tests/fixtures/effect-fat-callback-capturing` | `#fx{Write}` x3, undeclared | Declares `Write` |
+| `tests/fixtures/effect-capturing-closure-thin-param` | `#fx{Write}` undeclared, and `#fx{|e}` (meant as the row variable `e`) | Declares `Write`; `|e` -> `e` |
+
+All three fixtures still print their expected output with the rows now real,
+so the shapes they were written to pin (a row-variable param, a concrete-row
+param under the fat protocol) are exercised for the first time. The earlier
+sweep missed these because `--dump-effects` prints `defn` rows only and the
+`typeclass-show.tur` site is reached through a load. **turmeric-spices:** of
+777 files, 649 check cleanly and none reports `TUR-E0026`; the 128 that fail
+do so for other reasons and report no `TUR-E0026` either.
+
+**Pinned by** `tests/fixtures/errors/unknown-effect-in-row` (every position,
+the did-you-mean, `|e`), `errors/unknown-capability-tag-pure-caller` (this
+report's repro) and `errors/loaded-capability-tag-pure-caller` (its
+`TUR-E0009` twin with `effects.tur` loaded). The guide's trap note
+(`effects-system-guide.md`, Capability effect tags) now documents the error
+instead.
+
+**Not done here:** direction 2 -- making `IO`/`FS`/`Net`/`Proc`/`Rand`
+compiler-known so they resolve without a load. That is the plan's W2, still
+the prerequisite for tagging `println` (W4). Until then a small program that
+writes `#fx{IO}` gets a precise error telling it what to load, which is the
+honest version of what used to be a silent no-op.

@@ -1049,7 +1049,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     syms[n_valid++] = item->as.sym;
                 }
             }
-            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid);
+            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid,
+                                                      maybe_row->span);
             ret_idx++;
         }
     }
@@ -1813,6 +1814,19 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             memset(def_fd, 0, sizeof(FnDef));
             Binding *def_b = binding_new(e, default_sym, fn_t, false, true,
                                           method_form->span);
+            /* `__default_<Class>_<method>` is the elaborator's name for the
+             * body the user wrote inside the defclass; keep it out of
+             * symbol listings and diagnostics alike. */
+            def_b->is_synthesized = true;
+            def_b->synth_kind = SYNTH_DEFAULT_METHOD;
+            {
+                char lbl[192];
+                int n = snprintf(lbl, sizeof(lbl),
+                                 "default body of method '%s' in class %s",
+                                 method->name->name, name->name);
+                if (n > 0 && (size_t)n < sizeof(lbl))
+                    def_b->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+            }
             def_fd->binding        = def_b;
             def_fd->params         = mp;
             def_fd->n_params       = n_mp;
@@ -4820,6 +4834,23 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * `__inst_Eq_eq_qu_int` -- keep the mangled name out of every
          * human-facing symbol listing. */
         method_binding->is_synthesized = true;
+        method_binding->synth_kind = SYNTH_INSTANCE_METHOD;
+        /* ...and out of diagnostics, in the words the user did write. */
+        {
+            char args[96] = "";
+            size_t used = 0;
+            for (uint8_t ti = 0; ti < n_type_args && used < sizeof(args); ti++) {
+                int w = snprintf(args + used, sizeof(args) - used, "%s%s",
+                                 ti ? " " : "", type_name(type_args[ti]));
+                if (w < 0) break;
+                used += (size_t)w;
+            }
+            char lbl[224];
+            int n = snprintf(lbl, sizeof(lbl), "method '%s' of instance %s [%s]",
+                             method_name_str, tc_name->name, args);
+            if (n > 0 && (size_t)n < sizeof(lbl))
+                method_binding->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+        }
 
         /* RT1 VARIANCE: an instance may accept MORE than its class signature
          * promises, never less.  The class signature is the contract callers

@@ -152,9 +152,6 @@ bool g_dump_cps = false;
 /* Phase I: --emit-abi-trace flag */
 bool g_emit_abi_trace = false;
 
-/* ER6: --lint-effects flag */
-bool g_lint_effects = false;
-
 bool g_linear_enabled = true;
 
 bool g_unique_enabled = true;
@@ -213,6 +210,9 @@ bool g_werror_deprecated = false;
 /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param-in-inline-C
  * warnings to errors. */
 bool g_werror_inline_c_narrow_params = false;
+
+/* -Werror=strict-effects promotes the --strict-effects lints to errors. */
+bool g_werror_strict_effects = false;
 
 /* forall-kinds / forall-constraints / hkt-hrt GRADUATED 2026-07-06 -- always-on;
  * their enable bits and elaboration gates are gone.  See

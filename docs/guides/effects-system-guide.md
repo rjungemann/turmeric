@@ -286,8 +286,13 @@ The row `#fx{e}` is a row variable: `run-twice` performs whatever effects `f` pe
 | Flag | Effect |
 |---|---|
 | `--dump-effects` | Print each top-level `defn`'s inferred effect row after checking |
-| `--lint-effects` | Warn on unannotated `defn`s whose inferred row is non-empty |
-| `--strict-effects` | Under `--strict-effects`, unannotated functions that perform effects get a warning; callers propagate the inferred row |
+| `--strict-effects` | Warn (`TUR-W0030`) on any function -- a `defn`, a `fn` literal, an instance method -- that performs effects but declares no row; also `TUR-W0032` on a row variable that is always concrete. Callers propagate the inferred row either way |
+| `-Werror=strict-effects` | Make the `--strict-effects` warnings errors, so a build can gate on annotations. Implies `--strict-effects` |
+| `--lint-effects` | Deprecated alias for `--strict-effects` (`TUR-W0050`); it was a duplicate of it |
+
+A `fn` literal is named in these messages by where it is -- *anonymous function
+in 'dfs-or'* -- with the span on the literal itself, and the advice spells the
+row to add (`add #fx{Bt} after its parameter vector`).
 
 ### Module-level visibility
 
@@ -371,11 +376,22 @@ autoloaded and `effects.tur` is not:
 state, not an authority over a resource outside the process. See the
 [Backtrackable State Guide](backtrackable-state-guide.md#the-bt-capability).
 
-One trap worth knowing about any tag: an uppercase name in `#fx{...}` that no
-`defeffect` in the compile declares is **silently dropped** at resolution, so
-`#fx{Typo}` checks as `#fx{}`. That is how `#fx{Bt}` sat decorative on the
-trail mutators for a month before `Bt` was declared. If a row you annotated
-seems to have no effect, `--dump-effects` shows what it resolved to.
+Every name in `#fx{...}` must be declared. An uppercase name that no
+`defeffect` in the compile declares is **`TUR-E0026`**, with a did-you-mean
+for a near miss and the module to load for the `stdlib/effects.tur` names:
+
+```
+error [TUR-E0026]: unknown effect 'IO' in effect row: no defeffect declares it
+  ('IO' is declared in stdlib/effects.tur, which is not autoloaded;
+   add (load "stdlib/effects.tur"))
+```
+
+It used to be dropped silently, so `#fx{Typo}` checked as `#fx{}` -- and a
+caller's `#fx{}` then passed the `TUR-E0009` check the tag existed to buy.
+That is how `#fx{Bt}` sat decorative on the trail mutators for a month before
+`Bt` was declared, and why `Bt` lives in the autoloaded `trail.tur`. The same
+check caught a stdlib `#fx{FS}` that had never resolved and a fixture's
+`#fx{|e}` (a row variable is just `e`).
 
 Discipline stays **opt-in**: a function with no effect-row annotation is never
 checked, so existing code that ignores effect rows keeps compiling. Only when a

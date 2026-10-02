@@ -8944,7 +8944,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     syms[n_valid++] = item->as.sym;
                 }
             }
-            declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid);
+            declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid,
+                                                             maybe_row->span);
             body_start++;  /* skip past the effect row map */
         }
     }
@@ -12082,7 +12083,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
                     syms[n_valid++] = item->as.sym;
                 }
             }
-            declared_effect_row_fn = effect_row_unresolved(e->arena, syms, n_valid);
+            declared_effect_row_fn = effect_row_unresolved(e->arena, syms, n_valid,
+                                                           maybe_row->span);
             body_start = params_idx + 2;
         }
     }
@@ -12678,6 +12680,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* `__fn_%u` above is a name the elaborator made up; nothing that lists
      * symbols for a human should offer it. */
     b->is_synthesized = true;
+    b->synth_kind = SYNTH_LAMBDA;
+    /* ...and no diagnostic should print it: say where the `fn` is instead.
+     * The span already points at the literal; the enclosing defn is what
+     * lets a reader find it without counting lambdas. */
+    if (e->current_fn_name && e->current_fn_name->name) {
+        char lbl[160];
+        int n = snprintf(lbl, sizeof(lbl), "anonymous function in '%s'",
+                         e->current_fn_name->name);
+        if (n > 0 && (size_t)n < sizeof(lbl))
+            b->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+    }
+    if (!b->diag_label) b->diag_label = "anonymous function";
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 
     /* RT1: publish this lambda's contract parameters on its lifted thunk

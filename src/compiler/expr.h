@@ -45,6 +45,18 @@ typedef enum UsageState {
     USAGE_USED_MANY,      /* Used two or more times */
 } UsageState;
 
+/* Which compiler mint site a synthesized binding came from (Binding.synth_kind).
+ * Diagnostics use it to say where the fix goes -- a lambda takes its own row,
+ * an instance or default method takes its class method's -- and to skip a
+ * lint on a binding nobody can annotate. */
+typedef enum SynthKind {
+    SYNTH_NONE = 0,          /* a person named it */
+    SYNTH_LAMBDA,            /* lifted `fn` literal, `__fn_N` */
+    SYNTH_INSTANCE_METHOD,   /* `__inst_<Class>_<method>_<type>` */
+    SYNTH_DEFAULT_METHOD,    /* `__default_<Class>_<method>`, a defclass default body */
+    SYNTH_FORWARDING_WRAPPER /* `__poly_N`, forwards to a function passed to a rank-2 param */
+} SynthKind;
+
 /* A Binding is the resolved target of a `let`/`def`/`defn` name introduction.
  * Bindings are owned by the elaborator and live in the arena. */
 struct Binding {
@@ -290,6 +302,16 @@ struct Binding {
      * a source form, are worth hovering, and belong in their own file's
      * outline.  See docs/archive/lsp-completion-internal-symbols.md. */
     bool          is_synthesized;
+    /* What a diagnostic should call a synthesized binding, as a whole noun
+     * phrase: "anonymous function in 'dfs-or'", "method 'eq?' of instance
+     * Eq [int]".  Set at the mint site, where the source facts are still to
+     * hand; NULL otherwise.  Read through binding_fn_describe, never
+     * directly -- printing `name` for a synthesized binding hands the user a
+     * gensym they cannot find in their file
+     * (docs/archive/strict-effects-w0030-names-synthesized-lambdas.md). */
+    const char   *diag_label;
+    /* Which mint site (SynthKind); SYNTH_NONE unless is_synthesized. */
+    uint8_t       synth_kind;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
     /* LT1: Linear type checking — whether this binding holds a linear value */
@@ -2121,6 +2143,14 @@ struct Expr {
 Expr *expr_new(Arena *a, ExprKind k, Type t, Span span);
 
 void  expr_print(Buf *b, const Expr *e);   /* debug only */
+
+/* Write what a diagnostic should call the function bound by `b`, as a noun
+ * phrase: "function 'boom'" for a function someone named, the binding's
+ * diag_label ("anonymous function in 'dfs-or'") for one the elaborator named,
+ * and "anonymous function" when there is no binding at all.  Returns `buf`.
+ * Every diagnostic that names a function should go through this rather than
+ * print `b->name->name`, which for a synthesized binding is a gensym. */
+const char *binding_fn_describe(const Binding *b, char *buf, size_t cap);
 
 /* Map a well-known stdlib helper name (e.g. "float->int") to the stdlib file
  * that defines it (e.g. "stdlib/math.tur"), or NULL when there is no hint.

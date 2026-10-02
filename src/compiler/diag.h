@@ -69,6 +69,8 @@ typedef enum DiagCode {
     /* duplicate-instance-silently-drops-a-user-definstance: a user definstance
      * for a (class, type) the stdlib already covers is rejected, not dropped */
     TUR_E0025_DUPLICATE_INSTANCE,                 /* instance already defined for this class and type */
+    /* effect-row honesty W1: a #fx{...} names an effect no defeffect declares */
+    TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
 
     TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */

@@ -11972,6 +11972,18 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     }
 
     Binding *wb = binding_new(e, wsym, wfn_type, false, true, span);
+    /* `__poly_N` forwards to `inner_b`; it has no source form and nobody can
+     * annotate it, so diagnostics describe it by what it wraps (and the
+     * --strict-effects lint skips it -- `inner_b` answers for its own row). */
+    wb->is_synthesized = true;
+    wb->synth_kind = SYNTH_FORWARDING_WRAPPER;
+    {
+        char lbl[160];
+        int n = snprintf(lbl, sizeof(lbl), "rank-2 wrapper for '%s'",
+                         inner_b && inner_b->name ? inner_b->name->name : "?");
+        if (n > 0 && (size_t)n < sizeof(lbl))
+            wb->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+    }
     scope_add(&e->global, wb);
 
     FnDef *wfd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));

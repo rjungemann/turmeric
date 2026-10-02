@@ -2,6 +2,35 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **An undeclared effect name in `#fx{...}` is an error (`TUR-E0026`).** It
+  used to be dropped silently, so `#fx{IO}` in a file that had not loaded
+  `stdlib/effects.tur` checked as `#fx{}`, and a caller's `#fx{}` then passed
+  the `TUR-E0009` check the tag existed to buy. The error names the tag,
+  offers a did-you-mean for a near miss, and says which module to load for
+  the `stdlib/effects.tur` names. It covers every position a row is written:
+  a `defn`, a `fn` literal, a fn-typed parameter, a record field, a class
+  method. The check found four rows in the tree that had never resolved: a
+  stdlib `#fx{FS}` on a stdout writer (removed -- it was wrong besides), and
+  three fixtures' undeclared `Write` and `#fx{|e}`.
+- **`--lint-effects` is a deprecated alias for `--strict-effects`
+  (`TUR-W0050`).** It was a byte-identical second copy of the `TUR-W0030`
+  check. `-Werror=strict-effects` is new: it makes the `--strict-effects`
+  warnings errors, and implies the flag.
+- **Effect diagnostics no longer print compiler-made names.** A `fn` literal
+  is *anonymous function in 'dfs-or'* rather than `__fn_38`, an instance
+  method is *method 'eq?' of instance Eq [int]*, and a class default body is
+  *default body of method 'greeting' in class Greet*. A rank-2 wrapper the
+  compiler generates (`__poly_N`) no longer gets its own `TUR-W0030`; the
+  function it wraps already does. `TUR-W0030` spells the row to
+  add (`add #fx{Bt} after its parameter vector`) in the current `#fx{}`
+  syntax rather than the retired `#{}`. `TUR-W0031` is no longer reported on
+  an instance method, whose row is its class method's and cannot be changed
+  from the instance.
+
 ## [0.58.0] -- 2026-10-01
 
 ### Security

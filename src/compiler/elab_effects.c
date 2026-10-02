@@ -2769,7 +2769,8 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     {
         /* FH4.1: single-element handled row (unresolved name-set). */
         const Symbol *one[1] = { cases[0].effect_name };
-        htype.as.handler_.handled_row = effect_row_unresolved(e->arena, one, 1);
+        htype.as.handler_.handled_row =
+            effect_row_unresolved(e->arena, one, 1, call->span);
     }
     htype.as.handler_.value_kind  = (eff && eff->constructor->n_params > 0)
         ? eff->constructor->param_types[0] : TY_INT;

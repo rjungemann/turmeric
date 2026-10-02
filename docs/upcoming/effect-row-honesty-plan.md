@@ -1,8 +1,10 @@
 # Effect-row honesty -- answer WP8 as Option A, and make `#fx{}` mean something
 
 > **Status: PROPOSED 2026-10-01, all three open questions resolved the same
-> day** (section 6 -- Q1 and Q2 by measurement, Q3 by the author). Nothing
-> implemented. Written in response to
+> day** (section 6 -- Q1 and Q2 by measurement, Q3 by the author).
+> **W1 DONE 2026-10-02**, ahead of W0, which turned out not to be its
+> prerequisite (see W1); **W5's two gating defects fixed the same day.** W0,
+> W2, W3, W4 and W5's default decision remain. Written in response to
 > two questions about the security guide -- whether `--no-proc-macros` should
 > default on "because Rust defaults `procMacro.enable = false`", and whether
 > `--strict-effects` should default to true -- plus the observation that
@@ -19,9 +21,9 @@
 > **Answers:** security-audit-plan open question 3 (`#fx{Unsafe}` semantics)
 > as **Option A**, and supersedes WP8's first bullet.
 > **Files alongside:**
-> [capability-effect-tag-silently-resolves-to-empty-row](../reported/capability-effect-tag-silently-resolves-to-empty-row.md),
-> [strict-effects-w0030-names-synthesized-lambdas](../reported/strict-effects-w0030-names-synthesized-lambdas.md),
-> [strict-effects-and-lint-effects-are-indistinguishable](../reported/strict-effects-and-lint-effects-are-indistinguishable.md).
+> [capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md),
+> [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md),
+> [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md).
 
 ## 1. The thesis
 
@@ -168,10 +170,26 @@ Transition, because one of them is published syntax:
 `grep -r '#fx{Construct}\|#fx{ByVal}' --include=*.tur` is empty; the
 `NonExhaustive` dual-accept has a fixture for each spelling.
 
-### W1 -- Make effect-row resolution honest
+### W1 -- Make effect-row resolution honest -- DONE 2026-10-02
+
+> **Done:** an undeclared name is `TUR-E0026`, in every row position, with a
+> did-you-mean and a load hint for the `stdlib/effects.tur` names. Two
+> corrections to what this section assumed, both measured with the real
+> compiler rather than `--dump-effects`:
+>
+> - **W0 was not a prerequisite.** `Construct` and `ByVal` never reach
+>   resolution -- the `defn` row parser plucks them before building the row --
+>   and `#fx{NonExhaustive}` is a `match` marker, never a row. So the rule
+>   below landed with no allowlist and no W0. W0 stays worth doing as the
+>   syntax cleanup it is.
+> - **The sweep was not zero.** Four rows had never resolved: a stdlib
+>   `#fx{FS}` on `show-string-fputs` (a stdout writer; tag removed, it matches
+>   `println` until W4) and three fixtures' undeclared `Write` and `#fx{|e}`.
+>   All fixed in the same change; turmeric-spices has none. Details in the
+>   archived report's Resolution.
 
 Filed as
-[capability-effect-tag-silently-resolves-to-empty-row](../reported/capability-effect-tag-silently-resolves-to-empty-row.md).
+[capability-effect-tag-silently-resolves-to-empty-row](../archive/capability-effect-tag-silently-resolves-to-empty-row.md).
 An uppercase name in `#fx{...}` that no `defeffect` in the compile declares is
 dropped silently, so `#fx{IO}` checks as `#fx{}` -- and a caller's `#fx{}`
 then passes a check it should fail.
@@ -277,12 +295,16 @@ the same function unannotated still compiles.
 
 ### W5 -- Then, and only then, revisit the `--strict-effects` default
 
-Two filed defects gate this, both found while measuring it:
+Two filed defects gated this, both found while measuring it. **Both fixed
+2026-10-02:** no effect diagnostic names a gensym (a lambda is *anonymous
+function in 'dfs-or'*), and `--strict-effects` is the one flag, promotable
+with `-Werror=strict-effects`, with `--lint-effects` a deprecated alias. What
+is left of W5 is the default itself, after W4:
 
-- [strict-effects-w0030-names-synthesized-lambdas](../reported/strict-effects-w0030-names-synthesized-lambdas.md)
+- [strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md)
   -- 47 of 358 warnings name `__fn_38`-style gensyms. A default-on lint that
   is 13% unactionable teaches people to ignore the category.
-- [strict-effects-and-lint-effects-are-indistinguishable](../reported/strict-effects-and-lint-effects-are-indistinguishable.md)
+- [strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md)
   -- the two flags emit the same warning, neither can become an error, and the
   comment claiming otherwise is wrong. Decide which flag survives before
   giving either a default.
@@ -312,6 +334,12 @@ W0030 cannot fail a build no matter what it is pointed at.
 ## 6. Open questions -- all three resolved 2026-10-01
 
 ### Q1. W1's blast radius -- RESOLVED by measurement
+
+> **Correction 2026-10-02:** not zero. Checked with the real compiler (W1's
+> `TUR-E0026`), four rows had never resolved -- see W1. The resolver itself
+> is the better detector than a `--dump-effects` diff: it sees every row
+> position and every loaded file (the `typeclass-show.tur` site is reached
+> only through a load). The paragraph below is kept as written.
 
 **Zero undeclared effect tags in the corpus.** Over `stdlib/` plus
 `tests/fixtures/`: 146 files carry a `#fx{...}` tag, 28 distinct names, and
