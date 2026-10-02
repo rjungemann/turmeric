@@ -691,6 +691,17 @@ add_test(
   COMMAND bash tests/run-shard-partition.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The same invariant one level up: the `test` job's ctest PARTS must between
+# them run every registered suite.  A suite in no part stops running and CI
+# still goes green -- `--no-tests=error` catches only a pattern that empties a
+# part outright, not one that loses a test from the middle.  That check used to
+# be a sentence in ci.yml telling a human to add up `ctest -N` totals.
+# Enumeration only (`ctest -N`), so it costs no test time and needs no tur.
+add_test(
+  NAME tur_ctest_partition
+  COMMAND python3 tests/ctest-parts.py --check "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # `cmd | grep -q` under `set -o pipefail` reports a FALSE failure when the
 # pattern IS found: grep exits at the first match, the writer takes SIGPIPE
 # (141), and pipefail promotes that to the pipeline's status.  Load- and
