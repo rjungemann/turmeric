@@ -5,9 +5,33 @@ against it. A `:ref` naming a branch means every fresh fetch takes whatever
 that branch points at, and the consumer is asked to approve the change rather
 than being held to the commit they locked.
 
-**Status:** open. The detection half shipped as C-3 of
+**Status:** **RESOLVED 2026-10-01.** The detection half shipped as C-3 of
 [security-audit-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
-this is the remaining half, split out deliberately rather than half-landed.
+the pinning half landed with the fix direction below, both of its hazards
+handled, and the `--frozen` flag it recommended pairing with it.
+
+- `pkg_git_fetch_pinned` (`src/compiler/pkg.c`) clones from `:ref` as before,
+  then moves to the lock's `:resolved`: a depth-1 fetch of the bare SHA first,
+  and when the server refuses that (no `uploadpack.allowReachableSHA1InWant`
+  -- a plain `git daemon`, or the file:// remote the test uses), the cloned
+  branch's full history, looked up there.  **Neither step falls back to the
+  branch tip.**  A commit that cannot be had is an error that names
+  `tur fetch --update`, and the clone is removed so a later run cannot read
+  the tip as the pinned tree.  The pin is applied only when the lock row's
+  `:url` and `:ref` still match the manifest's (an edited `:ref` is a request
+  for something else) and `--update` was not passed; a `:resolved` that is not
+  a 40/64-hex commit id is refused before it reaches a git command line.
+- `tur fetch --frozen` fetches exactly what the lock pins and never writes it:
+  a dependency with no row, or a `:url` / `:ref` / commit / tree that differs,
+  fails with "tur.lock would change".  `--frozen --update` is a usage error.
+- `tests/run-spice-fetch.sh`: case 11 now asserts that a fresh fetch after the
+  branch moved checks out the PINNED tree (the upstream `backdoor` module is
+  absent) and leaves `:resolved` / `:sha256` alone -- it used to assert the
+  fetch failed the integrity check; 11b rewrites and garbage-collects the
+  upstream history and asserts the fetch fails and keeps no clone; 16-18 cover
+  `--frozen`.  21 passed, 0 failed.
+- The consuming-spices and security guides no longer say `:resolved` is
+  recorded but unused.
 
 ## Repro
 

@@ -158,8 +158,9 @@ defpackage my-app
 ## Fetching and Updating
 
 ```sh
-tur fetch               # download everything in tur.lock
+tur fetch               # download everything in tur.lock, at the pinned commits
 tur fetch --update      # upgrade spices to the latest allowed versions
+tur fetch --frozen      # what CI should run: fail if tur.lock would change
 ```
 
 `tur run` and `tur build` invoke `tur fetch` automatically when any spice
@@ -409,15 +410,19 @@ Turmeric library so CMake projects can consume it), see the
   evaporate on the next run. `tur run`, `tur build` and `tur audit` all re-hash
   the trees they are about to use, so an edit made to `spices/` after a fetch
   is caught by whichever you reach for.
-- **It still cannot check out the commit it recorded.** A clone tracks the
-  branch or tag named in `:ref`; `:resolved` is recorded but never used to
-  check out. So a branch-shaped `:ref` re-fetches to wherever that branch now
-  points, and you are asked to approve the change rather than held to the
-  commit you locked. **Prefer a tag over a branch for `:ref`**, and read a new
-  spice before you add it. Tracked as
-  [lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/reported/lock-tracks-ref-not-resolved-commit.md);
-  see the [Security Guide](https://github.com/rjungemann/turmeric/blob/main/docs/guides/security-guide.md)
+- **A fetch checks out the commit the lock recorded**, not wherever `:ref`
+  points now. A branch-shaped `:ref` that has moved upstream still gives you
+  the locked commit; `tur fetch --update` is how you take the new one. If the
+  locked commit can no longer be fetched (the history was rewritten), the
+  fetch fails and keeps no clone -- it does not fall back to the branch, which
+  would quietly undo the pin. A tag is still the clearer `:ref`, and read a
+  new spice before you add it. See the
+  [Security Guide](https://github.com/rjungemann/turmeric/blob/main/docs/guides/security-guide.md)
   for the promise this is measured against.
+- **`tur fetch --frozen`** fetches exactly what `tur.lock` pins and never
+  writes it: a dependency with no row, or a `:url` / `:ref` / commit / tree
+  that differs from its row, is an error. That is the `npm ci` /
+  `cargo --locked` shape, and the one CI should run.
 - Any `:cmake-deps` entry is a trust decision equivalent to executing build
   scripts from that repository. Audit before adding.
 - `tur audit` lists every origin the build fetches code from -- Turmeric

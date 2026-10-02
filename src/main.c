@@ -10390,7 +10390,7 @@ static int usage(void) {
         "  tur add <path> --path             add a local spice\n"
         "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n"
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
-        "  tur fetch [--update|--dry-run|--refetch]  download/update spices (--refetch bypasses system pkgs)\n"
+        "  tur fetch [--update|--frozen|--dry-run|--refetch]  download/update spices (--frozen: fail if tur.lock would change; --refetch bypasses system pkgs)\n"
         "  tur audit                         list every origin the build fetches code from\n"
         "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
         "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
