@@ -4,9 +4,12 @@
 > `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
 > `expires_at` 0.61.0, prototype). RF0, RF1, RF2, RF3 and RF5 landed in the
 > first cut (2026-09-29), RF4 and RF6.1 the next day; RF6.2 is deliberately
-> untouched (see "Landed" below). Nothing in the plan is outstanding. Taken off hold by
+> untouched (see "Landed" below). Taken off hold by
 > direct request ("execute the plan"), not by one of the triggers below.
-> **Last Updated:** 2026-09-29
+> **One item is outstanding:** RF3's two-seed fuzz acceptance passes but its
+> population never reaches the RF3/RF4 encoder -- see "What graduation waits
+> on".
+> **Last Updated:** 2026-10-02
 >
 > **RF0 decision (recorded 2026-09-29):** a `^reflect`ed function -- and only
 > such a function -- must be shown total (pure, structurally recursive in one
@@ -506,38 +509,83 @@ justifies the plan alone, each is cheap once RF3 exists:
 
 ---
 
-## Why not now (updated)
+## Why it was held before the first cut (historical)
 
-1. **Still no measured demand.** The 2026-08-02 finding stands: 85+
-   `#refine{}` fixtures, zero whose predicate calls a recursive user
-   function; `stdlib/refine.tur` is nine scalar aliases with no container
-   measure. Unlike the sibling loop-invariants plan (whose trigger the ECS
-   v1 work has partially fired), nothing on the v1 track asks for
-   reflection. The gap was found by reasoning about the design, not by
-   hitting it.
-2. **The decision in RF0 has not been taken.** Elaboration frames it; it
-   still must be made deliberately, in writing, before code is cut.
+These were the three reasons this plan sat unstarted until 2026-09-29. They
+are kept because reason 3 records a correction worth not re-deriving, and
+because reason 1 is still the open question -- see "What graduation waits on"
+below, which supersedes this section for anything forward-looking.
+
+1. **No measured demand.** The 2026-08-02 finding: 85+ `#refine{}` fixtures,
+   zero whose predicate called a recursive user function; `stdlib/refine.tur`
+   nine scalar aliases with no container measure. Unlike the sibling
+   loop-invariants plan (whose trigger the ECS v1 work had partially fired),
+   nothing on the v1 track asked for reflection. The gap was found by
+   reasoning about the design, not by hitting it. **Still true as of
+   2026-10-02** -- re-measured at the v0.59.0 cut: `stdlib/refine.tur` is the
+   same nine scalar `deftype` aliases, and `^reflect` appears in no stdlib
+   file. What changed is that the feature now exists behind the gate, so the
+   question is no longer whether to build it.
+2. ~~The decision in RF0 has not been taken.~~ **Taken 2026-09-29**, and
+   recorded in this file's header: a REFLECTED function must be shown total;
+   program termination in general stays out of scope. `TUR-E0384` is the
+   checker.
 3. ~~The cost is concentrated in a checker the language has never had, and
    the coverage half may be larger than the termination half.~~ **Corrected
    by elaboration:** coverage is the smaller half (already enforced for
    ADT/union scrutinees; RF2 is three rejections), and the checker reuses
    the WF2 deferred-pass shape wholesale. The concentrated cost is RF3's
    encoder work -- the one place both historical soundness bugs lived, hence
-   the fuzz/sabotage weight there.
+   the fuzz/sabotage weight there. **Borne out:** RF3 was the phase that
+   needed `rf_unfold`/`rf_reduce`/`rf_match_pat`, and it is the phase whose
+   fuzz coverage is still open (see below).
 
-## The trigger
+## What graduation waits on
 
-Start this when a real program wants it. Concretely, any one of:
+The row is `prototype`, `introduced 0.57.0`, `expires_at 0.61.0` -- advisory,
+and it never blocks a release. Reviewed at the v0.59.0 cut (2026-10-02); not
+due, nothing changed. Three things stand between here and graduating, in
+order of how much they should weigh:
+
+1. **RF3's fuzz acceptance, as this plan wrote it.** "Both prior soundness
+   bugs lived in the encoder, so `--n 400` at two seeds is non-optional." The
+   run passes -- measured 2026-10-02 against a v0.59.0 Debug build, seeds 11
+   and 23, 400 cases each, **0 soundness bugs and 0 other BUG classes** (384
+   proven / 734 refuted and 389 / 783 respectively) -- but the only admitted
+   measure the fuzzer generates is `reflect_if`, which is scalar and
+   non-recursive *by design*, so no recursive unfolding, no fuel boundary, no
+   arm selection and no RF4 tag-fact selection is ever generated. The whole
+   RF3/RF4 encoder addition is unfuzzed. Filed as
+   [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../reported/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md),
+   which proposes a `shape_reflect` mirroring `shape_loop`. This is the one
+   item the plan itself already committed to, so it should land whichever way
+   the expiry review goes.
+2. **Still no consumer.** Nothing in `stdlib/` or on the v1 track writes
+   `^reflect`. Graduating makes always-on a feature with no caller, which
+   freezes a surface against zero usage evidence. The three triggers below
+   are unchanged and none has fired.
+3. **Two known completeness limits, each a decision about what to freeze.**
+   `(= r true)` stays unknown where bare `r` proves, and an RF4 fact that
+   proves at a return obligation is unknown at a call-site crossing -- both
+   filed, with mechanisms and fix directions, as
+   [reflect-two-provable-facts-report-as-not-holding](../reported/reflect-two-provable-facts-report-as-not-holding.md).
+   RF6.1 landing may have removed the reason the crossing extension was
+   deferred; that is worth re-deciding before the surface freezes rather than
+   after. RF6.2 (`ENC_MAX_PROPAGATE` as a well-founded budget) remains
+   deliberately not done -- no real program has hit the depth-4 cutoff.
+
+## The trigger for a consumer
+
+The feature is built; what it still lacks is a program that wants it. Any one
+of these would supply one, and would settle item 2 above:
 
 - A structure-indexed type lands in `stdlib/refine.tur` -- a bounded index, a
-  non-empty container, a sortedness predicate -- and someone tries to prove
-  something about it and cannot.
+  non-empty container, a sortedness predicate -- and someone proves something
+  about it.
 - The ECS refinement work wants a measure over a component set or an entity
-  generation and hits the opacity wall.
-- A report is filed with a concrete measure the author wanted unfolded,
-  showing the `TUR-W0372` it produced.
-
-Until then this file is the record, and "no measured demand" is the answer.
+  generation. Before the first cut this was where it "hits the opacity wall";
+  now it would be the first caller.
+- A report is filed with a concrete measure an author wanted unfolded.
 
 ---
 
