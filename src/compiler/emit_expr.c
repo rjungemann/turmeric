@@ -3138,6 +3138,18 @@ static bool emit_call_drop_after_stamped(EmitCtx *ctx, const Expr *e) {
     return ctx->sum_drop_admit != NULL && ctx->sum_drop_admit == e;
 }
 
+/* The CPS emitter's view of RM1: does a statically dispatched call, emitted by
+ * the CPS backend itself, owe the free-after-reader drop its result would get
+ * on the direct path?  The caller still gates it on the result being the
+ * carrier word, exactly as the direct hoist does. */
+bool emit_call_owes_sum_drop(EmitCtx *ctx, const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_CALL) return false;
+    if (e->as.call_.dict_arg && !call_dispatch_is_static(e)) return false;
+    return emit_call_drop_after_stamped(ctx, e) &&
+           emit_call_returns_fresh_sum_box(ctx, e);
+}
+
 /* value-struct-payload-sum-monomorph-box-has-no-owner (the let-bound reader
  * shape): does this let INIT hand the binding a sum value nothing else holds?
  * A fresh producer does (emit_call_returns_fresh_sum_box).  So does a COPYING
