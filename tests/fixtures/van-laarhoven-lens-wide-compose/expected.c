@@ -10274,7 +10274,7 @@ static int64_t set__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64_
 static tur_adt_Identity__Line __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Line_int64_t_int64_t(tur_adt_Identity__Point i, tur_poly_fn_t g) {
         int64_t __ps_251 = (run_id__spec__int64_t_tur_adt_Identity__Point(i));
         if (tur_panicking) return (tur_adt_Identity__Line){0};
-        int64_t __ps_252 = (((int64_t (*)(void*, int64_t))g.fn)(g.env, __ps_251));
+        int64_t __ps_252 = (((int64_t (*)(void*, tur_adt_Point *))g.fn)(g.env, (tur_adt_Point *)(intptr_t)(__ps_251)));
         if (tur_panicking) return (tur_adt_Identity__Line){0};
         tur_adt_Identity__Line __ps_253 = (mk_id__spec__tur_adt_Identity__Line_int64_t(__ps_252));
         if (tur_panicking) return (tur_adt_Identity__Line){0};

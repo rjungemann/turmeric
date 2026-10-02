@@ -1914,8 +1914,17 @@ struct Expr {
          * so the wrapper's shim calls the closure and answers the zero word
          * (ensure_nilres_fatshim).  Calling the `void` thunk through that cast
          * was a -fsanitize=function trap and reads rax garbage. */
+        /* word_params (fnsan-fat-closure-at-tyvar-sink): with inner_is_fat,
+         * the sink's declared fn type has a type variable in a parameter
+         * position.  A callee that reads it erased -- an inline-C body such as
+         * `vec-eq?`, or a carrier base -- calls slot 0 with WORDS there, while
+         * the closure's thunk takes its own types (`double` for `(fn [a :
+         * float ...])`).  When the call's selected callee does read words and
+         * the spellings differ, the emitter wraps the closure in a { adapter,
+         * handle } box whose adapter converts each word (a float by its bits);
+         * otherwise the handle passes through unchanged. */
         struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat;
-                 bool nil_result_word;
+                 bool nil_result_word; bool word_params;
                  const struct Type *sink_fn_type; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can

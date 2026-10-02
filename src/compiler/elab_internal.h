@@ -888,6 +888,10 @@ typedef struct Elab {
     const Symbol   **forward_type_syms;
     uint32_t         n_forward_type_syms;
     uint32_t         cap_forward_type_syms;
+    /* forward-call-to-aggregate-result-types-as-carrier: defmodule forward
+     * decls whose named return waits on a type the module has not registered
+     * yet (arena-allocated FwdPendingResult list, elab_toplevel.c). */
+    void            *fwd_pending_results;
     /* CT0: Contract keyword symbols */
     const Symbol    *kw_pre;                /* :pre */
     const Symbol    *kw_post;               /* :post */
@@ -1507,10 +1511,18 @@ void elab_pre_declare_any_mut_def(Elab *e, const Form *f);
 Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
                                  uint32_t name_idx, uint32_t params_idx,
                                  uint32_t param_arity, TypeKind *arg_kinds);
-/* r7rs-lang-plan R3: the full TY_APP type of a compound return annotation in a
- * dynamic file (NULL otherwise), for the defmodule pre-pass. */
+/* The full type of a named return annotation -- a bare registered ADT or a
+ * closed application -- for the defmodule pre-pass (NULL when a leaf cannot
+ * be named yet).  See elab_toplevel.c. */
 Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
                                     uint32_t params_idx, const Form *ret_f);
+/* forward-call-to-aggregate-result-types-as-carrier: record a defmodule
+ * forward decl whose named return names a type not registered yet, and retry
+ * every recorded one (called at the start of each defn). */
+void elab_fwd_note_pending_result(Elab *e, Binding *b, const Form *f,
+                                  uint32_t name_idx, uint32_t params_idx,
+                                  const Form *ret_f);
+void elab_fwd_refresh_pending(Elab *e);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_mark_lent(Binding *b, Span use_span);

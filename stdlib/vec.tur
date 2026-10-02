@@ -524,7 +524,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-eq? [v1 : int v2 : int ^borrow ^fat cmp-fn]
+(defn vec-eq? [A] [v1 : int v2 : int ^borrow ^fat cmp-fn : (fn [A A] bool)]
   #fx{}
   : bool
   ```c

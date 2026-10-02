@@ -1485,6 +1485,25 @@ static bool fwd_type_is_closed(const Type *t, const Symbol **tps, uint8_t n_tp) 
     }
 }
 
+/* Does a shallow-resolved type name one of the defn's own type parameters? */
+static bool fwd_type_mentions_tp(const Type *t, const Symbol **tps, uint8_t n_tp) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            const char *nm = t->as.tyvar_.name;
+            if (!nm) return false;
+            for (uint8_t i = 0; i < n_tp; i++)
+                if (tps[i] && strcmp(tps[i]->name, nm) == 0) return true;
+            return false;
+        }
+        case TY_APP:
+            return fwd_type_mentions_tp(t->as.app.fn, tps, n_tp) ||
+                   fwd_type_mentions_tp(t->as.app.arg, tps, n_tp);
+        default:
+            return false;
+    }
+}
+
 static Type fwd_shallow_type_arg(Elab *e, const Form *af,
                                  const Symbol **tps, uint8_t n_tp) {
     if (af && af->tag == F_LIST) {
@@ -1606,21 +1625,32 @@ Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
     return full_types;
 }
 
-/* r7rs-lang-plan R3: the full TY_APP result type of a defn's COMPOUND return
- * annotation for a pass-1 forward declaration in a DYNAMIC file, or NULL.
- * The defmodule pre-pass kept "other compound types" as the TY_INT
- * placeholder, which was fine while a compound PARAMETER was the same
- * placeholder: once `(defn f [v : (Vec int)] ...)` is forward-declared in
- * full, a forward-declared `(defn g [] : (Vec int) ...)` feeding it has to
- * say `(Vec int)` too, or the call is "expected (Vec int), got int".  Same
- * closedness rule as the parameters. */
+/* The full result type of a defn's NAMED return annotation for the defmodule
+ * pass-1 forward declaration, or NULL.  `ret_f` is the annotation as the
+ * pre-pass left it: a bare symbol / keyword (`: Box`, already unwrapped from
+ * its F_TYPE_ANN) or an F_TYPE_ANN around an application (`: (Result T E)`).
+ *
+ * r7rs-lang-plan R3 introduced this for DYNAMIC files only: a forward-declared
+ * `(defn g [] : (Vec int) ...)` feeding a forward-declared `(Vec int)`
+ * parameter has to say `(Vec int)` too, or the call is "expected (Vec int),
+ * got int".
+ *
+ * forward-call-to-aggregate-result-types-as-carrier: a static file needs it
+ * just as much.  The defmodule pre-pass kept every non-scalar return as the
+ * TY_INT placeholder, so a caller written ABOVE `(defn good [] : (Result
+ * Handle cstr) ...)` typed `(good)` as the int64 carrier and the enclosing
+ * defn tripped TUR-E0709 ("declares return type '(Result Handle cstr)' but its
+ * body returns int").  A bare `: Box` failed the same way.  The top-level
+ * pre-pass has resolved both shapes all along (it runs after RF0 has stubbed
+ * every type); a module body has no RF0, so here only what the shallow
+ * resolver can name completely -- a registered ADT, a scalar, one of the
+ * defn's own type parameters -- is committed.  A leaf naming a type the
+ * module defines further down returns NULL, and the caller records the decl
+ * as pending (elab_fwd_note_pending_result) so it is resolved once that type
+ * is registered. */
 Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
                                     uint32_t params_idx, const Form *ret_f) {
-    if (!ret_f || ret_f->tag != F_TYPE_ANN || ret_f->as.list.len < 1 ||
-        !lang_span_is_dynamic(f->span))
-        return NULL;
-    const Form *app = ret_f->as.list.items[0];
-    if (app->tag != F_LIST) return NULL;
+    if (!ret_f) return NULL;
     const Symbol *tp_syms[MAX_FN_ARITY];
     uint8_t n_tp = 0;
     if (params_idx > name_idx + 1 && f->as.list.items[name_idx + 1]->tag == F_VEC) {
@@ -1630,10 +1660,92 @@ Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
                 tp_syms[n_tp++] = tpv->as.list.items[ti]->as.sym;
         }
     }
+    if (ret_f->tag == F_SYM || ret_f->tag == F_KEYWORD) {
+        /* A bare name: a registered, non-generic ADT names its type
+         * completely.  The defn's own type parameter is not a commitment
+         * (the call instantiates it), and a scalar never reaches here. */
+        const char *nm = ret_f->as.sym->name;
+        for (uint8_t ti = 0; ti < n_tp; ti++)
+            if (tp_syms[ti] && strcmp(tp_syms[ti]->name, nm) == 0) return NULL;
+        for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+            AdtDef *d = e->adt_defs[ai];
+            if (d->n_type_params != 0 || strcmp(d->name, nm) != 0) continue;
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = type_adt(d);
+            return t;
+        }
+        return NULL;
+    }
+    if (ret_f->tag != F_TYPE_ANN || ret_f->as.list.len < 1) return NULL;
+    const Form *app = ret_f->as.list.items[0];
+    if (app->tag != F_LIST) return NULL;
     Type *full = fwd_shallow_result_app(e, app, tp_syms, n_tp);
     if (!full || full->kind != TY_APP || !fwd_type_is_closed(full, tp_syms, n_tp))
         return NULL;
+    /* A GENERIC callee's result in a typed file stays the placeholder: the
+     * forward decl carries no parameter types for the call to instantiate
+     * `A` from, so `(some (wrap x))` above `(defn wrap [A] [x : A] : (Option
+     * A) ...)` read an `(Option A)` carrier box as the by-value `(Option
+     * (Option int))` the caller declared -- a wrong answer where the
+     * placeholder is a compile error.  A dynamic file's forward decl carries
+     * its closed parameter types (elab_fwd_param_full_types), so it keeps the
+     * R3 behaviour. */
+    if (!lang_span_is_dynamic(f->span) && fwd_type_mentions_tp(full, tp_syms, n_tp))
+        return NULL;
     return full;
+}
+
+/* forward-call-to-aggregate-result-types-as-carrier: a defmodule forward decl
+ * whose named return could not be resolved at pass 1 because a leaf is a type
+ * the module defines in its own body (a module has no RF0 type pre-pass, so
+ * `Box` is unregistered until its `defstruct` elaborates in pass 2).  Kept on
+ * a list and retried at the start of every defn (elab_fwd_refresh_pending):
+ * a type written above its first user is registered by then, which is the
+ * order the language already asks of a module's types. */
+typedef struct FwdPendingResult {
+    Binding       *b;
+    const Form    *f;
+    const Form    *ret_f;
+    uint32_t       name_idx;
+    uint32_t       params_idx;
+    struct FwdPendingResult *next;
+} FwdPendingResult;
+
+void elab_fwd_note_pending_result(Elab *e, Binding *b, const Form *f,
+                                  uint32_t name_idx, uint32_t params_idx,
+                                  const Form *ret_f) {
+    FwdPendingResult *p =
+        (FwdPendingResult *)arena_alloc(e->arena, sizeof(FwdPendingResult));
+    p->b = b;
+    p->f = f;
+    p->ret_f = ret_f;
+    p->name_idx = name_idx;
+    p->params_idx = params_idx;
+    p->next = (FwdPendingResult *)e->fwd_pending_results;
+    e->fwd_pending_results = p;
+}
+
+void elab_fwd_refresh_pending(Elab *e) {
+    FwdPendingResult **pp = (FwdPendingResult **)&e->fwd_pending_results;
+    while (*pp) {
+        FwdPendingResult *p = *pp;
+        Binding *b = p->b;
+        /* Done with once the defn itself has started: elab_defn's RR1 early
+         * update gives the binding the real declared result from then on. */
+        bool still_fwd = b && b->type.kind == TY_FN && !b->source_fn_def &&
+                         b->type.as.fn.result_kind == TY_INT &&
+                         !b->type.as.fn.result_full_type;
+        if (!still_fwd) { *pp = p->next; continue; }
+        Type *full = elab_fwd_compound_result_type(e, p->f, p->name_idx,
+                                                   p->params_idx, p->ret_f);
+        if (full) {
+            b->type.as.fn.result_kind = full->kind;
+            b->type.as.fn.result_full_type = full;
+            *pp = p->next;
+            continue;
+        }
+        pp = &p->next;
+    }
 }
 
 /* A top-level statement USED to be fold-unsafe when its handle subtree carried a
@@ -2080,7 +2192,24 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                             (void)tp_kinds;
                                             Type *ann = fwd_shallow_result_app(
                                                 ep, head_f, tp_syms, n_tp);
-                                            if (ann && ann->kind == TY_APP) {
+                                            /* forward-call-to-aggregate-result-
+                                             * types-as-carrier: not a result
+                                             * over the defn's OWN type
+                                             * parameters in a typed file.  The
+                                             * forward decl has no parameter
+                                             * types to instantiate them from,
+                                             * so a caller above `(defn wrap [A]
+                                             * [x : A] : (Option A) ...)` typed
+                                             * `(some (wrap x))` with `A` unbound,
+                                             * no spec was minted, and the
+                                             * `(Option A)` carrier box was read
+                                             * as the caller's by-value `(Option
+                                             * (Option int))`: a silent wrong
+                                             * answer.  The placeholder makes it
+                                             * a compile error instead. */
+                                            if (ann && ann->kind == TY_APP &&
+                                                (lang_span_is_dynamic(f->span) ||
+                                                 !fwd_type_mentions_tp(ann, tp_syms, n_tp))) {
                                                 return_kind = TY_APP;
                                                 fwd_result_full = ann;
                                             }
@@ -2258,6 +2387,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         e.has_defmodule       = false;
         e.current_module_name = NULL;
         e.current_module      = NULL;
+        /* Arena-allocated in an earlier call's arena; a module's pending
+         * forward results never outlive the module anyway. */
+        e.fwd_pending_results = NULL;
         /* PS4: everything defined so far belongs to earlier turns. */
         e.turn_continues_session = true;
         e.turn_start_n_globals   = e.global.n;

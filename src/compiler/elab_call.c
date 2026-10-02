@@ -69,6 +69,38 @@ static bool sink_fn_result_is_bare_tyvar(const Type *fn_type, uint32_t idx) {
     return dr ? dr->kind == TY_TYVAR : decl->as.fn.result_kind == TY_TYVAR;
 }
 
+/* fnsan-fat-closure-at-tyvar-sink: does the callee's declared type for
+ * argument slot `idx` take a bare type variable in some PARAMETER position
+ * (`(fn [A A] bool)`)?  A callee that reads the slot erased calls it with
+ * words there. */
+static bool sink_fn_has_tyvar_param(const Type *fn_type, uint32_t idx) {
+    if (!fn_type || fn_type->kind != TY_FN || !fn_type->as.fn.arg_full_types ||
+        idx >= fn_type->as.fn.arity)
+        return false;
+    const Type *decl = fn_type->as.fn.arg_full_types[idx];
+    if (!decl || decl->kind != TY_FN) return false;
+    for (uint32_t k = 0; k < decl->as.fn.arity; k++) {
+        const Type *pt = decl->as.fn.arg_full_types ? decl->as.fn.arg_full_types[k] : NULL;
+        if (pt ? pt->kind == TY_TYVAR
+               : (decl->as.fn.arg_kinds && decl->as.fn.arg_kinds[k] == TY_TYVAR))
+            return true;
+    }
+    return false;
+}
+
+/* ...and is `a` a `^fat` parameter declared with a fn type, being forwarded?
+ * Its reference reads as the opaque `ptr<void>` handle; the binding keeps the
+ * declared `(fn [W W] bool)`, which a spec clone resolves to its own types --
+ * `map-eq?` forwarding its comparator to the inline-C `map-eq-raw?`.  Only
+ * an inline-C callee is asked about it: a Turmeric-bodied one reads the
+ * handle through its own spec or carrier base, which the producer that boxed
+ * it already answered for. */
+static bool arg_is_typed_fat_param(const Expr *a) {
+    return a && a->kind == EX_VAR && a->as.var.binding &&
+           a->as.var.binding->is_fat && a->as.var.binding->is_param &&
+           a->as.var.binding->type.kind == TY_FN;
+}
+
 /* ...and is `t` a by-value aggregate (a concrete ADT monomorph or ADT, not a
  * :heap one) -- the result shape the boxing shim bridges? */
 static bool type_is_byvalue_aggregate_result(Type t) {
@@ -9713,6 +9745,29 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                          * the proof that the callee neither keeps nor drops
                          * the argument is all its frame lifetime needs. */
                         w->as.fn_to_fat_.stack_ok = sink_is_nonretaining;
+                        args[i] = w;
+                    }
+                    /* fnsan-fat-closure-at-tyvar-sink: a capturing closure
+                     * headed for a slot typed `(fn [A A] bool)` -- `vec-eq?`'s
+                     * comparator.  An inline-C body or carrier base calls it
+                     * with words at the `A`s; a `(fn [a : float b : float]
+                     * ...)` thunk read them from xmm registers that held
+                     * nothing (`vec-eq?` answered true for 7.1 vs 3.25).
+                     * Marked here; the emitter wraps it in a word adapter only
+                     * when the selected callee reads words and the closure's
+                     * thunk does not take them.  Only at a sink proven not to
+                     * keep it: the wrapper borrows the handle. */
+                    else if (((ak == TY_FN && args[i]->type.as.fn.boxed) ||
+                              (arg_is_typed_fat_param(args[i]) &&
+                               fn_binding && fn_binding->body_is_inline_c)) &&
+                             sink_is_nonretaining &&
+                             sink_fn_has_tyvar_param(&fn_type, fn_arg_idx_fat)) {
+                        Expr *w = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                           args[i]->span);
+                        w->as.fn_to_fat_.inner = args[i];
+                        w->as.fn_to_fat_.inner_is_fat = true;
+                        w->as.fn_to_fat_.word_params = true;
+                        w->as.fn_to_fat_.stack_ok = true;
                         args[i] = w;
                     }
                     /* Pass through unchanged: a fat closure (TY_PTR_VOID), nil, a

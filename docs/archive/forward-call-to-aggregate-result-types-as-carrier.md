@@ -4,7 +4,9 @@
 `tur check`, and the shape (a wrapper written above its helpers) is ordinary
 style. Three spices in `turmeric-spices` went red on it the day it landed.
 
-**Status:** open, filed 2026-10-01. Reproduces on `main` at `8bb60d016`.
+**Status: RESOLVED 2026-10-02.** Filed 2026-10-01; reproduced on `main` at
+`8bb60d016`. Pinned by `tests/fixtures/forward-call-aggregate-result-in-module`.
+The resolution, and a correction to the trigger below, are at the end.
 
 ## One line
 
@@ -156,3 +158,71 @@ Reorder the helpers above their caller -- no semantic change, and it is what
 the three spices need until this is fixed. It should not be landed as the
 answer: it bakes in a definition-order requirement the language does not
 otherwise have.
+
+## Resolution (2026-10-02)
+
+### The trigger was wider than filed
+
+The table above says a same-file `Handle`, a same-file `defstruct` and a
+`(Result int cstr)` all pass with the caller first.  They pass at the TOP
+LEVEL; inside a `(defmodule ...)` every one of them fails the same way.  The
+variable was never "imported from another module" -- it was "the caller is in
+a `defmodule` body":
+
+| Caller above callee, return type | top level | `defmodule` body (before) |
+| --- | --- | --- |
+| `(Result <imported opaque> cstr)` | -- (no imports at top level) | E0709 |
+| `(Result <same-module opaque> cstr)` | passes | E0709 |
+| `(Result <same-module struct> cstr)` | passes | E0709 |
+| `(Result int cstr)` | passes | E0709 |
+| bare `: Box` | passes | E0709 |
+| `(Option Box)` under an `if` | passes | `then=(Option Box) else=int` |
+
+All three spices put their wrapper in a `defmodule`, which is why they all
+broke.
+
+### Root cause
+
+Two pass-1 forward-declaration pre-passes exist, and they disagreed.  The
+top-level one (`elab_pre_declare_toplevel_defn`, `elab_toplevel.c`) resolves
+a bare ADT return and an application headed by a registered ADT -- it runs
+after the RF0 type pre-pass has stubbed every type.  The `defmodule` one
+(`elab_forward_declare_defns`, `elab_module.c`) recognised only the scalar
+keywords and `Session`; every other return, bare or compound, kept the
+`TY_INT` placeholder, except a closed application in a DYNAMIC file (r7rs R3).
+A caller elaborated before the callee then typed the call as the int64 carrier.
+
+PR #1007 did not introduce that placeholder; read from the code (not
+bisected), it introduced the check that reads it.  `9e0d12f0` ("applied types
+checked against return, argument and let") added
+`return_type_applied_scalar_conflict` to the committed-defn return check, so a
+declared `(Result ...)` against an `int` body became `TUR-E0709`; the
+dispatcher before it compared a declared application by kind only.  The bare
+`: Box` row goes through the older carrier-aggregate predicate, which already
+saw a declared ADT, so that one was likely an error before #1007 too.
+
+### Fix
+
+- The `defmodule` pre-pass commits what the shallow resolver can name
+  completely: a registered non-generic ADT for a bare `: T`, and a closed
+  application (every leaf a scalar, a registered ADT or one of the defn's own
+  type parameters) for `: (F A ...)` -- in every file, not only dynamic ones
+  (`elab_fwd_compound_result_type`).
+- A module body has no RF0 pass, so a type the module itself defines is not
+  registered when its forward decls are made.  Such a decl is recorded
+  (`elab_fwd_note_pending_result`) and retried at the start of every defn
+  (`elab_fwd_refresh_pending`): a type written above its first user is
+  registered by then, which is the order a module's types already need.
+- A result over the defn's OWN type parameters stays the placeholder, in both
+  pre-passes, in a typed file.  At the top level it used to be committed, and
+  that was a silent wrong answer, not just a rejection: the forward decl
+  carries no parameter types, so `A` was never instantiated, no spec was
+  minted, and the caller read the `(Option A)` carrier box as its by-value
+  `(Option (Option int))` (out of bounds; the program printed nothing).  It is
+  now `TUR-E0709` -- the open half, filed as
+  [forward-call-to-generic-callee-typed-as-placeholder](../reported/forward-call-to-generic-callee-typed-as-placeholder.md).
+
+The workaround (reorder the helpers) is no longer needed: against
+`turmeric-spices` at `86188f2`, `tur check` passes on `secret/src/secret/hex.tur`,
+`secret/src/secret/kdf.tur`, `valkey/src/valkey/cmd.tur` and
+`tourist-session-valkey`'s `store.tur`, the four files that failed.

@@ -1811,12 +1811,16 @@ Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
  * EMIT_ADAPT_BARE_SLOT1: slot 1 holds a BARE function (an EX_FN_TO_FAT box),
  * called with no env. */
 const char EMIT_ADAPT_BARE_SLOT1[] = "<bare-slot1>";
+const char EMIT_ADAPT_FAT_SLOT1[] = "<fat-slot1>";
 char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
                              const char *crc, const char **cpc,
                              const char *arc, const char **apc, uint8_t n) {
     if (!ctx || !out || !crc || !arc) return NULL;
     bool bare1 = callee == EMIT_ADAPT_BARE_SLOT1;
-    if (bare1) callee = NULL;
+    /* fnsan-fat-closure-at-tyvar-sink: the env is a { adapter, handle }
+     * wrapper whose slot 1 is a FAT closure handle; call its slot 0 with it. */
+    bool fat1 = callee == EMIT_ADAPT_FAT_SLOT1;
+    if (bare1 || fat1) callee = NULL;
     /* A `void` callee read through a word-returning slot: a nil-result
      * function instantiating an erased `(fn [...] A)` (`bt-scope` over a body
      * run for effect).  The adapter calls it and answers the zero word the
@@ -1843,7 +1847,7 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
     } else {
         /* Keyed on BOTH signatures: two thunks with one consumer signature
          * and different own signatures need different adapters. */
-        buf_puts(&nb, bare1 ? "__tur_adapt1_" : "__tur_adapt0_");
+        buf_puts(&nb, bare1 ? "__tur_adapt1_" : fat1 ? "__tur_adapt2_" : "__tur_adapt0_");
         append_sanitized_c_token(&nb, crc);
         for (uint8_t i = 0; i < n; i++) {
             buf_putc(&nb, '_');
@@ -1882,6 +1886,11 @@ char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
         if (n == 0) buf_puts(out, "void");
         for (uint8_t i = 0; i < n; i++) buf_printf(out, i ? ", %s" : "%s", cpc[i]);
         buf_puts(out, "))(intptr_t)((int64_t *)__e)[1])(");
+    } else if (fat1) {
+        buf_printf(out, ") {\n    void *__h = (void *)(intptr_t)((int64_t *)__e)[1];\n"
+                        "    %s%s ((%s (*)(void *", void_callee ? "" : crc, bind, crc);
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__h)[0])(__h");
     } else {
         buf_printf(out, ") {\n    %s%s ((%s (*)(void *", void_callee ? "" : crc, bind, crc);
         for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);

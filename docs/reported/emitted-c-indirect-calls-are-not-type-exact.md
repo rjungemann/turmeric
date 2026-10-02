@@ -9,7 +9,7 @@ silent-wrong-answer family, when the type that differs is a `double` or a
 16-byte tagged `any`. Filed 2026-09-30 with the P0 representation-confusion
 work.
 
-**Status: OPEN, being swept (9 trapping fixtures as of 2026-10-01, seventh sweep; every fixture counted).** The detector is armed in the four source
+**Status: OPEN, being swept (4 trapping fixtures as of 2026-10-02, eighth sweep; every fixture counted).** The detector is armed in the four source
 fuzzers (`tests/fuzz_arm.py`, report-only `FNPTR_TRAP` until this reaches
 zero). It is **not** yet a gate on the fixture suite.
 
@@ -48,6 +48,7 @@ harmful one, so the corpus has to reach zero before it can gate.
 | fourth (2026-10-01) | 66 | a variadic's fat-box shim casts the rest slot to the definition's typed chain pointer (`ensure_variadic_rest_fatshim`); a fat closure packed into the `tur_poly_fn_t` carrier gets a word adapter when its thunk is not all-word (`ensure_fat_word_adapter`); a dictionary slot whose class-variable parameter is a non-word scalar holds a converting wrapper (`dict_slot_param_is_word_scalar`); a bare function boxed behind the generic word shim gets a bare-call word adapter keyed on its recorded signature.  **Two of these were silent wrong answers when the type was a `double`** -- see `docs/archive/dict-classvar-float-param-value-converted.md` |
 | sixth (2026-10-01) | 57 -> 16 | **First sweep that counts every fixture**: `-L` points at an UNSANITIZED `libturi.a` (`cmake -S . -B build-nosan -DTUR_DEBUG_SANITIZE=OFF && cmake --build build-nosan --target libturi`), so the ~56 fixtures that failed to link under clang before are in -- 57 trapping at the start.  Fixed: a rank-2 `__poly_N` wrapper / capturing closure packed into a FORALL or erased carrier-base sink gets an adapter at the call site's convention (narrow "phase F" or word, per position; `ensure_named_call_adapter` / `ensure_call_adapter_ex`); a bare fn boxed for a `^fat` sink is spelled as the callee THE CALL SELECTS reads it -- a concrete parameter type, a spec clone's instantiated type, or words at the type-variable positions of a carrier base / inline-C body (`fn_to_fat_.sink_fn_type`, `ctx->fat_box_sink_type`) -- whenever the box's default choice would spell it differently; runtime callbacks (timer wheel `tur_scheduler_unpark_cb`, serial-registry ser/deser adapters, capability FileSystem vtable, image registry, `future-then`, a `nil` `(async ...)` body); a cloneable continuation's named receiver is called at its recorded result type; fixtures' own inline C calls each closure at its emitted type |
 | seventh (2026-10-01) | 16 -> 9 | A `nil`-returning function passed where the slot is `(fn [...] A)`: no spec is made at `A := nil`, so the carrier base calls slot 0 as returning the word -- a bare fn's box gets a `void`-callee adapter (`ensure_call_adapter_ex` learned `void`), a capturing closure a `{shim, handle}` wrapper whose shim answers 0 (`EX_FN_TO_FAT.nil_result_word`, `ensure_nilres_fatshim`; on the stack when the sink provably keeps nothing, reaped with the DK entry inside a CPS body) -- `region-scope-void-body`, `nil-closure-into-erased-result`.  A thin call through a fn value spells a TY_FN parameter `int64_t`, as every definition does, not from an already-fat argument's `void *` (`annotated-fat-lambda-param`, `sf-let-bind-with-inner-call`).  A narrow-result closure packed into a CONCRETE (phase F) `tur_poly_fn_t` sink gets the narrow adapter at any arity, a by-value aggregate parameter passing through unchanged, and the hoisted `__borrowc` thunk is found through the carrier retype (`fn-value-carrier-fat-seams`, `hkt-cata-fmap-byvalue-carrier`).  A <= 16-byte by-value result boxed for a CONCRETE sink -- a `^fat` parameter or, new, a concrete `(fn ...)` struct field (`sink_fn_type`) -- takes the typed shim on every host, not only Win64 (`fat-dispatch-parametric-monomorph-return`, `fn-field-carrier-shim-read-typed`).  No snapshot moved |
+| eighth (2026-10-02) | 9 -> 4 | The untyped-`^fat` inline-C cluster is gone, and it was hiding a **silent wrong answer**: `vec-eq?`, `map-eq?`, `result-eq?`, `mutmap-eq?` with a comparator typed `(fn [a : float b : float] ...)` compared xmm registers nobody set (`vec-eq?` and `map-eq?` answered true for 7.1 against 3.25; the interpreter said false).  The stdlib comparators take `(fn [A A] bool)` now (fix direction 4); a bare fn is boxed at words where the inline C reads them, a capturing closure or a forwarded typed `^fat` parameter is wrapped in a { adapter, handle } box (`EX_FN_TO_FAT.word_params`, `fat_closure_tyvar_sink_adapter`), a type variable a spec leaves unbound is a word, and a bare fn whose recorded signature differs from its type's (a niche parameter that arrives as the carrier box) gets an adapter instead of a typed shim that called it at the wrong type (`option-niche-vec-closure-cmp`, `niche-elem-comparator-conventions`, new `comparator-float-elements-word-adapter`).  A fat call through a fn value whose declared result resolves to a POINTER under the spec takes that result in the cast -- its parameters already followed the declared type -- and hands the word back (`stdlib-lens-record-field`, `lens-compose-wide-byvalue-get-put`).  And a typed `tur_poly_fn_t` carrier's phase-F call (F5: its thunk is natively typed) spells a parameter the declared `(fn [a] b)` resolves to a pointer as that pointer, bridging an argument that is only the carrier word -- `run-id`'s spec answers `int64_t` at a := Point (`van-laarhoven-lens-wide-compose`, the one snapshot that moved, by that one cast) |
 
 Clusters at `-O0` as of the second sweep (165 fixtures; counts are
 fixtures). The session, `seq-call-bool-fn1` and comparator rows are fixed in
@@ -72,16 +73,14 @@ are environmental and not counted.
 A fifth pass (56): an E2a registry entry declared with a pointer or narrow
 parameter registers an adapter in the call site's word convention (`<fn>__e2w`).
 
-Remaining after the seventh sweep (9 traps, measured with the full suite under
-the command above at `-O2`; each confirmed at `-O0 -g` under gdb).  Three
-clusters, each ONE slot whose producer and consumer decided the spelling from
-different information:
+Remaining after the eighth sweep (4 traps, measured with the full suite under
+the command above at `-O2` -- 3482 passed, 4 failed -- and each confirmed at
+`-O0 -g`).  One cluster, ONE slot whose producer and consumer decided the
+spelling from different information:
 
 | Cluster | Fixtures | Producer in the slot | Consumer's cast | What a fix has to decide |
 | --- | --- | --- | --- | --- |
 | `ptr<void>` used as a function type | `fat-captureless-closure-ptr-void`, `vec-captureless-fat-closure-readback`, `vec-typed-fat-closure-readback`, `fat-shim-void-ptr-arrow-compose` | the closure's own thunk, or the word shim, at its real signature: a function-typed parameter is `int64_t` (`void *__fn_25(void *, int64_t)`) | the sink's declared `(fn [ptr<void>] ptr<void>)`, so `void *(*)(void *, void *)` | the program erases a closure to `ptr<void>` and calls it at a `ptr<void>` signature.  Both are words, so the type-exact answer is ONE spelling for the two: either a `ptr<void>` thunk slot is the word (as a b4box slot is), or a function-typed one is `void *`.  Either is an ABI-wide change to every thunk typedef and closure definition, not a local fix |
-| a fn value in a PARAMETRIC field, read by a spec | `stdlib-lens-record-field`, `lens-compose-wide-byvalue-get-put`, `van-laarhoven-lens-wide-compose` | boxed for the generic constructor's carrier base (`lens`: words at the type-variable positions) and stored in a `(fn [A S] S)` field | a spec clone (`set__spec__...Point...`, `__inst_Functor_fmap_Identity__spec__...`) reads the monomorph's field at the spec's types (`int64_t (*)(void *, int64_t, tur_adt_Point *)`) | which spelling a value parked in a parametric field has.  "Words at the declaration's type-variable positions" makes the producer right and moves the conversion into every spec reader (a wide by-value aggregate there needs the b4box); specializing the constructor makes the reader right but not a value that arrives erased |
-| an UNTYPED `^fat` parameter of inline C | `option-niche-vec-closure-cmp`, `niche-elem-comparator-conventions` | the typed fatshim (`int64_t (void *, void *, void *)`: Option niche elements are pointers) | stdlib inline C (`vec-eq?`, `map-eq-raw?` behind `map-eq?`), all-word | unchanged from the sixth sweep: nothing says how the C calls it, and one inline-C body calls an untyped `^fat` at `TUR_APPLY1_T(double, ...)` (treating untyped as all-word broke `tur-apply-t-fatshim-float` and was reverted).  Fix direction 4 -- give the stdlib comparators a real fn type -- is the way out |
 
 One clang-only wrong answer turned up and was a FIXTURE bug, not a compiler
 one: `rc-of-byvalue-aggregate-payload`'s own `tag-of` read an 8-byte word where
@@ -126,7 +125,8 @@ concrete moves, largest cluster first:
 3. A variadic's rest slot has one C spelling, at the definition and in the
    shim.
 4. The stdlib inline-C comparators and callbacks take a real function type
-   (the `stdlib-int-stand-in-audit` S1 subset is the same list).
+   (the `stdlib-int-stand-in-audit` S1 subset is the same list).  **Done for
+   the comparators 2026-10-02** (eighth sweep); the callbacks remain.
 
 When the sweep is at zero: add the flags above as a Linux CI leg, flip
 `TUR_FUZZ_FNSAN_STRICT` on by default, and ratchet it like the

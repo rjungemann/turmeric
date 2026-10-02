@@ -81,8 +81,17 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         if (ret_idx < (uint32_t)f->as.list.len && f->as.list.items[ret_idx]->tag == F_MAP) {
             ret_idx++;
         }
+        /* forward-call-to-aggregate-result-types-as-carrier: a named return
+         * the shallow resolver cannot settle yet (it names a type this module
+         * body defines further down), retried once that type registers. */
+        const Form *pending_ret_f = NULL;
         if (ret_idx < (uint32_t)f->as.list.len) {
             Form *ret_f = f->as.list.items[ret_idx];
+            /* Is this slot an annotation at all?  A `: T` is; so is a keyword
+             * with a body after it.  A bare symbol or list is the BODY of an
+             * unannotated defn, and must not be looked up as a type name. */
+            bool ret_is_annotation = ret_f->tag == F_TYPE_ANN ||
+                (ret_f->tag == F_KEYWORD && (uint32_t)f->as.list.len > ret_idx + 1);
             /* Accept spaced `: T` (an F_TYPE_ANN wrapping a single
              * symbol/keyword) by unwrapping to the inner form -- mirrors the
              * top-level pre-pass in elab_toplevel.c.  Without this, a
@@ -123,6 +132,18 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
                 /* r7rs-lang-plan R7: an annotated `: any` result, like the
                  * unannotated dynamic default below it. */
                 else if (strcmp(kn, "any") == 0) fwd_result_kind = TY_ANY;
+                /* forward-call-to-aggregate-result-types-as-carrier: a bare
+                 * type name -- `: Box` for a registered defstruct / defdata /
+                 * defopaque -- rides the forward decl as that ADT, as the
+                 * top-level pre-pass's bare-adt-forward-decl-inference arm
+                 * does.  It used to keep the TY_INT placeholder, so a caller
+                 * written above the callee typed the call as the carrier. */
+                else if (ret_is_annotation) {
+                    fwd_result_full = elab_fwd_compound_result_type(
+                        e, f, name_idx, params_idx, ret_f);
+                    if (fwd_result_full) fwd_result_kind = fwd_result_full->kind;
+                    else pending_ret_f = ret_f;
+                }
             } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
                 /* Compound return type: peek at the head symbol */
                 Form *head_f = ret_f->as.list.items[0];
@@ -130,12 +151,17 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
                         strcmp(head_f->as.sym->name, "Session") == 0) {
                     fwd_result_kind = TY_SESSION;
                 } else {
-                    /* r7rs-lang-plan R3: in a dynamic file a closed
-                     * application rides the forward decl in full; other
-                     * compound types keep the TY_INT placeholder. */
+                    /* r7rs-lang-plan R3 made a closed application ride the
+                     * forward decl in full in a dynamic file;
+                     * forward-call-to-aggregate-result-types-as-carrier does
+                     * it in every file.  The TY_INT placeholder it replaces
+                     * typed a forward call to `(defn good [] : (Result Handle
+                     * cstr) ...)` as the int64 carrier, and the caller tripped
+                     * TUR-E0709 against its own declared aggregate return. */
                     fwd_result_full = elab_fwd_compound_result_type(
                         e, f, name_idx, params_idx, ret_f);
                     if (fwd_result_full) fwd_result_kind = TY_APP;
+                    else if (head_f->tag == F_LIST) pending_ret_f = ret_f;
                 }
             }
         }
@@ -189,6 +215,9 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         if (fwd_result_full) fn_type.as.fn.result_full_type = fwd_result_full;
         Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
         scope_add(&e->global, b);
+        if (pending_ret_f && fwd_result_kind == TY_INT && !fwd_result_full)
+            elab_fwd_note_pending_result(e, b, f, name_idx, params_idx,
+                                         pending_ret_f);
     }
 }
 
