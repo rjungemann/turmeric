@@ -41,6 +41,8 @@ from genguides import (SIDEBAR_DRAWER_JS_SRC, GUIDE_RUNTIME_JS_SRC,
 from gendocs import render_tree, collect_doc_entries
 import packlib
 
+# Single source of truth for this generator's repo links -- a transfer
+# (personal account -> org) is a one-line change here.
 GITHUB_BASE = 'https://github.com/rjungemann/turmeric-spices'
 SPICES_REPO = Path('../turmeric-spices')
 
