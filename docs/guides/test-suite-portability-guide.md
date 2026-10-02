@@ -263,6 +263,58 @@ with a `head` in the pipeline. `tests/run-fmt.sh` carries both guards
 
 ---
 
+## 6a. The browser suites do not gate -- a green check is not evidence they passed
+
+Every CI check can be green while the Try Turmeric browser suites are red, and
+this surprises people reliably enough to be worth stating plainly.
+
+The browser tests are not their own checks. They are **steps inside one job**,
+`Try Turmeric smoke test (browser)`, and only the first of them gates:
+
+| Step | Gates? |
+| --- | --- |
+| `Run deploy-gate smoke test` (`deploy-gate.spec.js`) | **yes** |
+| `Run broader smoke suite (desktop, non-blocking)` | no -- `continue-on-error: true` |
+| `Run mobile smoke suite (non-blocking)` | no -- `continue-on-error: true` |
+
+So a desktop or mobile step can exit 1, the job still reports success, and
+`gh run view` renders the step itself with a green check. Nothing in
+`gh pr checks` distinguishes "ran clean" from "ran red, ignored".
+
+That is deliberate -- browser suites are flaky enough that gating on them would
+block unrelated work -- but it means **"all checks green" answers a narrower
+question than it looks like.** Three places carry the real answer, cheapest
+first:
+
+1. **The run page's annotations.** The `Report browser suite outcomes` step
+   writes a pass/fail line per suite to the job summary and raises a
+   `::warning::` for a failed non-blocking suite.
+2. **The `playwright-report` artifact**, uploaded `if: ${{ !cancelled() }}`
+   precisely so it exists when a suite failed -- a `failure()` condition could
+   never see past `continue-on-error`. It carries the per-test
+   `error-context.md` files.
+3. **`web_desktop` / `web_mobile` on [/ci](https://turmeric-lang.com/ci)**, which
+   is the trend rather than the single run.
+   `tools/ci/collect-playwright-timings.py` publishes `status: "fail"` when any
+   test failed even though the job stayed green, and `status: "skip"` when a
+   suite produced no JUnit at all (the Playwright-install failure mode), so a
+   suite that never ran reaches the skip ledger instead of vanishing.
+
+The failure mode to recognise: **a suite with a standing failure teaches
+readers to ignore its annotation.** When the desktop suite sat at
+`1 failed / 141 passed` on every run, a real new regression would have read as
+`2 failed` -- indistinguishable at a glance from the usual. Known-broken
+browser tests therefore get marked `test.fixme` with a pointer to their report
+(see `web/tests/docs-offline.spec.js`), so the count stays meaningful. Note
+`test.fixme` does not self-close the way a fixture's `expected.xfail` does: a
+marked test that starts passing stays silently skipped, so deleting the marker
+is a manual obligation carried by the report.
+
+For the equivalent trap on the `ctest` side -- suites that `bash tests/run.sh`
+does not run at all -- see section 7d and the See-also list.
+
+---
+
 ## 7. Heap probes and sanitizers do not mix
 
 A malloc-probe assertion means nothing under ASan, and it means nothing
