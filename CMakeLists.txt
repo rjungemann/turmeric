@@ -680,12 +680,20 @@ add_test(
 # any one CI job does.
 set_tests_properties(tur_generic_spec_matrix PROPERTIES
   RUN_SERIAL TRUE TIMEOUT 4500 DEPENDS tur)
-# TUR_TEST_SHARD must partition the corpus: disjoint slices whose union is the
-# whole thing.  Neither half is observable from a sharded run itself -- a shard
-# that silently skipped fixtures, or ran some twice, still prints a clean
-# summary -- so nothing else in the suite would notice.  Enumeration only (it
-# drives run-jit.sh's TUR_TEST_LIST and runs no fixture), so it needs no JIT
-# engine and costs about a minute.
+# TUR_TEST_SHARD (run-jit.sh) and TUR_TURI_SHARD (run-turi.sh) must each
+# partition the corpus: disjoint slices whose union is the whole thing.  Neither
+# half is observable from a sharded run itself -- a shard that silently skipped
+# fixtures, or ran some twice, still prints a clean summary -- so nothing else in
+# the suite would notice.  Two harnesses, two variables, two proofs: their slices
+# are computed over different corpora, so one partition holding says nothing
+# about the other.
+#
+# Enumeration only (it drives each harness's own LIST mode and runs no fixture),
+# so it needs no JIT engine and no interpreter.  NOT "about a minute", as this
+# said until 2026-10-02: measured 114s median on Linux and 261s on macOS (max
+# 416s) before the turi assertions were added.  It is Linux-only now -- its
+# verdict is a function of the fixture tree alone, so the macOS copy re-derived
+# the same answer; see LEG_INVARIANT in tests/ctest-parts.py.
 add_test(
   NAME tur_shard_partition
   COMMAND bash tests/run-shard-partition.sh

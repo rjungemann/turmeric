@@ -114,6 +114,15 @@ jobs:
       # producer x sink x type, and this family's regressions hit whole rows or
       # columns rather than isolated cells, so a quarter catches them on the PR.
       TUR_GSM_SHARD: ${{ matrix.gsm_shard || (startsWith(matrix.os, 'macos') && matrix.part == 'aux' && '1/4') || '' }}
+      # Same shape, same reason, for the interpreter pass over the fixture
+      # corpus: 283s on macOS and -- with the matrix sharded -- the last
+      # RUN_SERIAL barrier left in `aux`.  The compiled path already runs the
+      # same corpus in full on both legs, so a second macOS engine pass over all
+      # of it is the lowest-value serial time in the job.  A quarter per PR, all
+      # of it on the nightly arm64 leg.  run-turi.sh reads THIS variable and
+      # deliberately ignores TUR_TEST_SHARD (tests/run-shard-partition.sh
+      # asserts that), so sampling it cannot touch the 160 other aux suites.
+      TUR_TURI_SHARD: ${{ (startsWith(matrix.os, 'macos') && matrix.part == 'aux') && '1/4' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -503,6 +512,9 @@ jobs:
           suite_shard=
           if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_GSM_SHARD:-}" ]; then
             suite_shard="--suite-shard tur_generic_spec_matrix=$TUR_GSM_SHARD"
+          fi
+          if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_TURI_SHARD:-}" ]; then
+            suite_shard="$suite_shard --suite-shard turi_fixture_tests=$TUR_TURI_SHARD"
           fi
           python3 tools/ci/collect-suite-timings.py --build-dir build \
             $suite_shard build/results-*.xml > timings.jsonl || true
