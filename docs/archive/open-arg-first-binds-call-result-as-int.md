@@ -63,5 +63,35 @@ the by-value Option to a by-value spec, instead of the carrier `none()`, a
 NULL-checked unbox and a region free (`option-consumers-byvalue-arg`,
 `option-map-literal-none-unannotated-lambda`).
 
-Pinned by `tests/fixtures/open-arg-first-binds-call-result`.  Suite 3489/0,
-turi 2521/0, float-conversion corpus 2551 programs / 0 findings.
+## The same axis, probed
+
+A throwaway probe crossed open producer (`(none)`, `(err 0)`, `(ok 1)` with
+the variable on the error side, `(vec-new)`, `(map-new)`, a let-bound `(none)`
+/ `(vec-new)`, a three-argument call with the open one in the middle) x
+position (before / after the concrete argument) x every type the
+generic-spec matrix uses, each cell compiled, interpreted and float-linted
+(304 cells).  Beyond the shape above it found three, all fixed here:
+
+- **A let-bound open argument after the concrete one was refused**: `(let [nn
+  (none)] (cx 7.1 nn))` against `[d : A o : (Option A)]` was "expected (Option
+  float), got (Option A)" at every type -- and in the other order it printed
+  `7` for 7.1 before this fix.  A variable that is not the enclosing
+  signature's own now agrees with a concrete binding, as an open constructor
+  slot already did.
+- **`(map-new)` before the argument that fixes `A` was refused** -- `[m : (Map
+  int A) d : A]`: the map's `K` met the concrete `int` before anything bound
+  `A`.  A return-only generic call that cannot be checked yet only because its
+  grounding siblings come later is accepted provisionally and checked by the
+  grounding pass, which reports the same mismatch if it still does not fit
+  (`(cx (vec-new) 7.1)` there now says "expected (Map int float), got (Vec
+  A)").
+- **A compiler abort at unsigned payloads**: `(let [nn (none)] (cx nn (:: 200
+  uint8)))` died with "a representation decision disagrees with repr_of at
+  binding" -- `repr_form_from_cty` classified C types by SUBSTRING, so the
+  aggregate `tur_adt_Option__uint8` (it contains "uint") read as a scalar.
+  uint8/uint16/uint32 only; the signed names carry no `_t`.  Exact spellings
+  now.  Pre-existing.
+
+Pinned by `tests/fixtures/open-arg-first-binds-call-result` (every shape
+above, both engines).  Suite 3489/0, turi 2521/0, float-conversion corpus 2551
+programs / 0 findings, generic-spec matrix 4066 cells / 0 failing.

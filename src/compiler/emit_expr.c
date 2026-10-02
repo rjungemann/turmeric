@@ -874,11 +874,17 @@ ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
             return REPR_SCALAR_BITS;
         return REPR_HEAP_PTR;
     }
-    if (strcmp(cty, "bool") == 0 || strcmp(cty, "double") == 0 ||
-        strcmp(cty, "float") == 0 || strcmp(cty, "void") == 0 ||
-        strstr(cty, "int8_t") || strstr(cty, "int16_t") ||
-        strstr(cty, "int32_t") || strstr(cty, "uint"))
-        return REPR_SCALAR_BITS;
+    /* Exact spellings: a substring test read the AGGREGATE
+     * `tur_adt_Option__uint8` as a scalar (it contains "uint"), and the shadow
+     * then ICEd on `(let [nn (none)] (cx nn (:: 200 uint8)))` -- uint8, uint16
+     * and uint32 payloads, never a signed one, whose names carry no `_t`. */
+    static const char *const scalar_ctys[] = {
+        "bool", "double", "float", "void",
+        "int8_t", "int16_t", "int32_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    };
+    for (size_t si = 0; si < sizeof scalar_ctys / sizeof scalar_ctys[0]; si++)
+        if (strcmp(cty, scalar_ctys[si]) == 0) return REPR_SCALAR_BITS;
     return REPR_BYVAL_AGG;             /* a bare aggregate type name */
 }
 

@@ -1609,6 +1609,16 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                  * to be was accepted for any application (KB-022 below). */
                 if (actual.kind == TY_TYVAR && actual.as.tyvar_.open_slot)
                     return true;
+                /* open-arg-first-binds-call-result-as-int: so does a variable
+                 * that is not the enclosing signature's own -- a let-bound
+                 * `(none)`'s `A` that nothing grounded: `(let [nn (none)] (cx
+                 * 7.1 nn))` against `[d : A o : (Option A)]` was "expected
+                 * (Option float), got (Option A)" while the argument-first
+                 * order was accepted. */
+                if (actual.kind == TY_TYVAR && actual.as.tyvar_.name &&
+                    bindings[idx].type.kind != TY_TYVAR && g_call_cb_elab &&
+                    !ng_tyvar_in_sig(g_call_cb_elab, actual.as.tyvar_.name))
+                    return true;
                 return type_eq(bindings[idx].type, actual);
             }
             if (*n_bindings >= 16) return false;
@@ -7637,7 +7647,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
     /* open-arg-first-binds-call-result-as-int: arguments to ground after the
      * loop (allocated on first use). */
     bool *open_first = NULL;
-    bool open_first_init = false;
+    bool *open_first_strict = NULL;   /* accepted before it could be checked */
     /* generic-return-type-not-inferred-from-context: capture the enclosing
      * expected-type channel (pushed by (:: e T), typed-let, or the defn
      * return slot) before clearing it for sub-arg elaboration -- so the
@@ -8204,12 +8214,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     Type inst_now = call_instantiate_type(e, expected_full,
                                                           type_bindings, n_type_bindings);
                     if (call_type_has_named_tyvar(&inst_now)) {
-                        if (!open_first)
+                        if (!open_first) {
                             open_first = (bool *)arena_alloc(
                                 e->arena, (n_args ? n_args : 1) * sizeof(bool));
-                        if (!open_first_init) {
-                            for (uint32_t oi = 0; oi < n_args; oi++) open_first[oi] = false;
-                            open_first_init = true;
+                            open_first_strict = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                            for (uint32_t oi = 0; oi < n_args; oi++)
+                                open_first[oi] = open_first_strict[oi] = false;
                         }
                         open_first[i] = true;
                     }
@@ -8264,6 +8275,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                             args[i]->type = inst;
                             arg_ok = true;
                         }
+                    } else if (inst.kind == TY_APP && i + 1 < n_args &&
+                               !ng_type_names_sig_tyvar(e, &args[i]->type)) {
+                        /* open-arg-first-binds-call-result-as-int: the
+                         * siblings that would ground this parameter come
+                         * LATER -- `(cx (map-new) 7.1)` against `[m : (Map int
+                         * A) d : A]`, whose `K` met the concrete `int` before
+                         * anything bound `A`.  Accept it for now; the pass
+                         * below the loop grounds it, and reports this same
+                         * mismatch if it still does not fit. */
+                        if (!open_first) {
+                            open_first = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                            open_first_strict = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                            for (uint32_t oi = 0; oi < n_args; oi++)
+                                open_first[oi] = open_first_strict[oi] = false;
+                        }
+                        open_first[i] = true;
+                        open_first_strict[i] = true;
+                        arg_ok = true;
                     }
                 }
             } else if (arg_ok && expected_arg_kind == TY_APP &&
@@ -9999,11 +10030,27 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             const Type *pf = fn_type.as.fn.arg_full_types[pidx];
             if (!pf || pf->kind != TY_APP) continue;
             Type inst = call_instantiate_type(e, pf, type_bindings, n_type_bindings);
-            if (inst.kind != TY_APP || call_type_has_named_tyvar(&inst)) continue;
             CallTypeBinding ogscratch[16];
             uint8_t ogn = 0;
-            if (!call_collect_type_bindings(&args[i]->type, inst, ogscratch, &ogn))
-                continue;
+            bool grounded = inst.kind == TY_APP && !call_type_has_named_tyvar(&inst);
+            if (!grounded ||
+                !call_collect_type_bindings(&args[i]->type, inst, ogscratch, &ogn)) {
+                if (!open_first_strict[i]) continue;
+                /* Accepted before its siblings were in, and still does not
+                 * fit: the mismatch the loop would have reported. */
+                Buf eb; buf_init(&eb);
+                type_print(&eb, inst);
+                buf_putc(&eb, '\0');
+                Buf ab; buf_init(&ab);
+                type_print(&ab, args[i]->type);
+                buf_putc(&ab, '\0');
+                diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+                                    "function '%s' arg %u: expected %s, got %s",
+                                    fn_binding->name->name, i + 1, eb.data, ab.data);
+                buf_free(&eb);
+                buf_free(&ab);
+                return NULL;
+            }
             if (ogn > 0 && !args[i]->as.call_.abi_bindings) {
                 AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
                     e->arena, ogn * sizeof(AbiTypeBinding));
