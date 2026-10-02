@@ -9721,12 +9721,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (i < MAX_FN_ARITY && phase_f_concrete && typed_carrier &&
                         fn_binding->poly_type->as.fn.arg_full_types &&
                         i < fn_binding->poly_type->as.fn.arity &&
-                        fn_binding->poly_type->as.fn.arg_full_types[i] &&
-                        !emit_type_is_wide_byval_adt(ctx, e->as.call_.args[i]->type)) {
+                        fn_binding->poly_type->as.fn.arg_full_types[i]) {
                         Type dt = emit_resolve_type(ctx,
                             *fn_binding->poly_type->as.fn.arg_full_types[i]);
                         const char *dc = emit_type_c_name(ctx, dt);
                         const char *ac = emit_type_c_name(ctx, e->as.call_.args[i]->type);
+                        /* A pointer spelling on the declared side, the bare
+                         * word on the argument's: a by-value aggregate (the B4
+                         * box path above) is neither, so it never gets here. */
                         size_t dl = dc ? strlen(dc) : 0;
                         if (dl > 0 && dc[dl - 1] == '*' && ac &&
                             strcmp(ac, "int64_t") == 0 &&
