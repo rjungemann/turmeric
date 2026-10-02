@@ -459,15 +459,18 @@ handler interprets it. (Before `println` carried `#fx{IO}` it was closer to
 
 ;; ERROR (TUR-E0009): prints, so it is not pure.
 (defn add-noisily [a : int b : int] #fx{} : int
-  (do (println "adding") (+ a b)))
+  (println "adding")
+  (+ a b))
 
 ;; OK: says it prints.
 (defn add-loudly [a : int b : int] #fx{IO} : int
-  (do (println "adding") (+ a b)))
+  (println "adding")
+  (+ a b))
 
 ;; OK: a handler decides where the line goes.
 (defn add-logged [a : int b : int] #fx{Write} : int
-  (do (perform (Write "adding")) (+ a b)))
+  (perform (Write "adding"))
+  (+ a b))
 ```
 ```sweet-exp
 load "stdlib/effects.tur"   ; for Write; IO needs no load
