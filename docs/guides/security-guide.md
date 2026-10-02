@@ -100,8 +100,12 @@ closed too, a genuinely capability-denied macro environment will be a *better*
 story than Rust's, and this guide will promise it.
 
 Until then there is an opt-out. The global flag `--no-proc-macros` refuses
-every `defmacro*` with a diagnostic, so no macro-time code runs -- what
-rust-analyzer ships as `procMacro.enable = false`:
+every `defmacro*` with a diagnostic, so no macro-time code runs -- the
+equivalent of turning rust-analyzer's `procMacro.enable` *off*. (rust-analyzer
+ships it **on**, and has since 2021; it also runs `build.rs` on a tree you
+merely open, under `cargo.buildScripts.enable`, also on by default.) The flag is
+global, so it refuses `defmacro*` in `tur build` too, where rust-analyzer's
+setting is scoped to the editor and `cargo build` always runs proc macros:
 
 ```
 tur --no-proc-macros check src/
@@ -435,9 +439,27 @@ Inline C outside an `Unsafe` effect row is a lint behind
 `--lint-inline-c-unsafe`, also default off. The deserializers discussed under
 T2 infer plain effect rows.
 
-So `#fx{Unsafe}` is documentation and a lint, not a boundary. Whether it should
-come to mean "may corrupt memory on bad input" is an open question in the audit
-plan; until it is answered, do not read its absence as a safety claim.
+`#fx{Unsafe}` itself is **enforced**, the way Rust's `unsafe fn` is:
+
+- Calling an `#fx{Unsafe}` function is a hard error unless the call sits inside
+  `(unsafe ...)` -- `unsafe function 'poke' requires an enclosing (unsafe ...)`
+  -- or the caller declares `#fx{Unsafe}` itself, in which case the row
+  propagates to *its* callers.
+- `(unsafe ...)` discharges the obligation **and erases the row**: a function
+  that wraps its unsafe calls in a block infers `#fx{}`. That is the feature --
+  it is how a safe abstraction is built over an unsafe primitive, exactly as in
+  Rust.
+
+What the marker means is decided (the audit plan's open question 3, answered as
+Option A): it describes a **body** -- pointer arithmetic, inline C, a raw
+dereference -- not an input contract. It does not mean "may corrupt memory on
+bad input". So it is a *discipline*, not a queryable boundary: you cannot ask
+"which functions here can corrupt memory on bad input?", because every
+competently written wrapper has deliberately erased the answer with
+`(unsafe ...)`. Do not read the absence of `#fx{Unsafe}` from a function's row
+as a safety claim about its inputs. (A propagating marker that *would* answer
+that question is a possible future feature under its own name; it is not
+`Unsafe`.)
 
 ---
 
