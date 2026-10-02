@@ -539,8 +539,18 @@ jobs:
       # Save after everything (incl. the fixture suite, which also feeds ccache
       # via run.sh) regardless of whether the suite passed. The exact key never
       # pre-exists (it embeds the commit SHA), so this always writes a fresh entry.
+      #
+      # Only the three ORIGINAL parts save. Every part builds the same `tur` with
+      # the same flags, and -- per the note above -- no part's exact key ever
+      # pre-exists, so each one's restore is always a `restore-keys` prefix hit on
+      # some OTHER part or run. A part's own saved cache is therefore only ever
+      # read through that prefix, which means three near-identical copies per OS
+      # per sha already serve every part; `fconv` and the two `gsm` jobs saving
+      # three MORE would add 50% to this job's cache entries (6 -> 9 per run) and
+      # buy nothing but eviction pressure against the repo's 10 GB budget, at up
+      # to 500 MB each. They still RESTORE, so their builds stay warm.
       - name: Save ccache
-        if: always()
+        if: always() && (matrix.part == 'fixtures' || matrix.part == 'aux' || matrix.part == 'r7rs')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
