@@ -1518,6 +1518,7 @@ void elab_pre_declare_any_mut_def(Elab *e, const Form *f);
 typedef struct FwdGenOrder {
     const Symbol **name;     /* per slot: the tracked defn's name, or NULL */
     uint8_t       *state;    /* per slot: FGO_* */
+    bool          *primed;   /* per slot: tried speculatively in a cycle */
     const Symbol **keys;     /* open-addressed: every defn name in the list */
     uint32_t      *counts;   /* per key: slots under the name still waiting */
     uint32_t      *slot_of;  /* per key: the tracked slot, or UINT32_MAX */
@@ -1537,9 +1538,13 @@ void fwd_gen_order_done(FwdGenOrder *o, uint32_t i);
 /* The second chance: calls `retry(ctx, i)` once for every slot deferred by
  * the order or flagged in `extra` (the symptom-A instance deferral), clearing
  * `extra[i]`.  With nothing deferred by the order this is the old single
- * source-order pass over `extra`. */
+ * source-order pass over `extra`.  `probe(ctx, i)` elaborates a slot
+ * speculatively -- true when it succeeded and was kept, false when it was
+ * rolled back -- and is how a cycle of lossy defns is primed (see the
+ * definition). */
 void fwd_gen_order_drain(FwdGenOrder *o, Form *const *forms, bool *extra,
-                         void (*retry)(void *ctx, uint32_t i), void *ctx);
+                         void (*retry)(void *ctx, uint32_t i),
+                         bool (*probe)(void *ctx, uint32_t i), void *ctx);
 void fwd_gen_order_free(FwdGenOrder *o);
 /* r7rs-lang-plan R3: full types for a forward decl's compound parameters in a
  * dynamic file (NULL when none); marks the matching arg_kinds slots TY_APP. */

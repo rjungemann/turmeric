@@ -127,10 +127,10 @@ checked against the compiler before the fix.
 
 **Not covered** (each is what every defn got before):
 
-- A cycle member sees its partners' forward decls.  `ping`/`pong` with a bare
-  `: A` result work at int, float and a struct; with an `(Option A)` result
-  they do not -- filed as
-  [mutually-recursive-generics-see-placeholder-result](../reported/mutually-recursive-generics-see-placeholder-result.md).
+- ~~A cycle member sees its partners' forward decls.~~  Filed as, and since
+  resolved by,
+  [mutually-recursive-generics-see-placeholder-result](mutually-recursive-generics-see-placeholder-result.md):
+  a stuck cycle's lossy members are primed speculatively first.
 - A `def` or `definstance` ABOVE a lossy defn that a defn it names calls: the
   flushed defn is elaborated before the callee is reached.
 - A call a macro introduces: the scan is over the unexpanded form.

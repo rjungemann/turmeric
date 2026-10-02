@@ -372,6 +372,25 @@ static void md_flush(MdRetryCtx *c, const Form *f, uint32_t pos) {
     }
 }
 
+/* A speculative attempt at one deferred body form, under a capture frame:
+ * kept when it elaborates cleanly and is a definition, rolled back otherwise. */
+static bool md_probe_slot(void *vctx, uint32_t s) {
+    MdRetryCtx *c = (MdRetryCtx *)vctx;
+    Form *f = c->forms[s];
+    uint32_t mark = c->e->n_file_scope_defs;
+    diag_push_capture();
+    c->e->toplevel_stmt = f;
+    Expr *be = elab_form(c->e, f);
+    c->e->toplevel_stmt = c->saved_tl_stmt;
+    uint32_t cerr = diag_pop_capture();
+    if (cerr == 0 && be && module_body_form_is_definition(be)) {
+        c->slot[s] = be;
+        return true;
+    }
+    c->e->n_file_scope_defs = mark;
+    return false;
+}
+
 /* The second chance for one deferred body form: no capture frame, so a
  * still-failing body reports for real. */
 static void md_retry_slot(void *vctx, uint32_t s) {
@@ -1666,7 +1685,8 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
      * No capture frame -- a still-failing body reports for real.  A defn that
      * waited for a generic callee comes after it (fwd_gen_order_drain). */
     if (md_any_deferred)
-        fwd_gen_order_drain(&fgo, md_forms, md_deferred, md_retry_slot, &md_ctx);
+        fwd_gen_order_drain(&fgo, md_forms, md_deferred, md_retry_slot,
+                            md_probe_slot, &md_ctx);
     fwd_gen_order_free(&fgo);
     free(md_deferred);
     md_deferred = NULL;

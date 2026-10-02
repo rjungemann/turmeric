@@ -34,6 +34,9 @@
   (show-bumped)
   (println (apply-k (fn [y : int] : int (* y 3)) 4))
   (println (k 3.25))
+  (match (count-opt 3 2.75)
+    (Some v) (println v)
+    (None) (println "none"))
   0)
 
 ;; A by-value (Option float) result over a float argument.
@@ -93,3 +96,15 @@
     (None) d))
 (defn ping [A] [n : int x : A] : A (if (= n 0) x (pong (- n 1) x)))
 (defn pong [A] [n : int x : A] : A (if (= n 0) x (ping (- n 1) x)))
+
+;; A cycle whose result is an APPLICATION of the variable: the member
+;; elaborated first called its partner through the pass-1 forward decl,
+;; whose `(Option A)` result is the int placeholder -- "then=(Option A)
+;; else=int".  Each member is now tried speculatively first, which leaves its
+;; declared signature on its binding.
+(defn count-opt [n : int x : float] : (Option float)
+  (ping-opt n x))
+(defn ping-opt [A] [n : int x : A] : (Option A)
+  (if (= n 0) (some x) (pong-opt (- n 1) x)))
+(defn pong-opt [A] [n : int x : A] : (Option A)
+  (if (= n 0) (some x) (ping-opt (- n 1) x)))

@@ -1994,6 +1994,23 @@ static void tl_retry_slot(void *vctx, uint32_t i) {
     if (!c->items[i]) *c->rc = -1;
 }
 
+/* A speculative attempt at one deferred top-level form, under a capture
+ * frame: kept when it elaborates cleanly, rolled back otherwise (the same
+ * rollback as the symptom-A attempt). */
+static bool tl_probe_slot(void *vctx, uint32_t i) {
+    TlRetryCtx *c = (TlRetryCtx *)vctx;
+    uint32_t mark = c->e->n_file_scope_defs;
+    diag_push_capture();
+    Expr *x = tl_elab_form(c, i);
+    uint32_t cerr = diag_pop_capture();
+    if (cerr == 0 && x) {
+        c->items[i] = x;
+        return true;
+    }
+    c->e->n_file_scope_defs = mark;
+    return false;
+}
+
 /* forward-call-to-generic-callee-typed-as-placeholder.
  *
  * A caller elaborated before a GENERIC callee sees only the callee's pass-1
@@ -2130,8 +2147,9 @@ void fwd_gen_order_init(FwdGenOrder *o, const Elab *e, Form *const *forms,
             n_lossy++;
     }
     if (n_lossy == 0) return;
-    o->name  = (const Symbol **)calloc(n, sizeof *o->name);
-    o->state = (uint8_t *)calloc(n, sizeof *o->state);
+    o->name   = (const Symbol **)calloc(n, sizeof *o->name);
+    o->state  = (uint8_t *)calloc(n, sizeof *o->state);
+    o->primed = (bool *)calloc(n, sizeof *o->primed);
     o->cap = 16;
     while (o->cap < 2 * n_defn + 2) o->cap <<= 1;
     o->keys    = (const Symbol **)calloc(o->cap, sizeof *o->keys);
@@ -2244,7 +2262,8 @@ void fwd_gen_order_done(FwdGenOrder *o, uint32_t i) {
 }
 
 void fwd_gen_order_drain(FwdGenOrder *o, Form *const *forms, bool *extra,
-                         void (*retry)(void *ctx, uint32_t i), void *ctx) {
+                         void (*retry)(void *ctx, uint32_t i),
+                         bool (*probe)(void *ctx, uint32_t i), void *ctx) {
     uint32_t n = o->n;
     if (!o->any_deferred) {
         for (uint32_t i = 0; i < n; i++) {
@@ -2268,9 +2287,32 @@ void fwd_gen_order_drain(FwdGenOrder *o, Form *const *forms, bool *extra,
             progress = true;
         }
         if (progress) continue;
-        /* Stuck: what is left waits on a cycle.  Break it at its first
-         * lossy member, so the defns that only call into the cycle still
-         * come after it; with no lossy defn left, take the first form. */
+        /* Stuck: what is left waits on a cycle.  First PRIME its lossy
+         * members: elaborate each one speculatively.  elab_defn forwards a
+         * defn's declared signature onto its binding before the body (what
+         * lets a generic call itself), and that survives a rolled-back body,
+         * so once every member has been tried, each sees the others' full
+         * signatures instead of the pass-1 placeholder -- `ping`/`pong` with
+         * an `(Option A)` result was "then=(Option A) else=int".  A member
+         * whose attempt succeeds is simply done.  Each slot is primed once. */
+        if (probe) {
+            bool kept = false;
+            for (uint32_t i = 0; i < n; i++) {
+                bool lossy = o->state[i] == FGO_LOSSY_DEFERRED ||
+                             (o->state[i] == FGO_LOSSY && extra && extra[i]);
+                if (!lossy || o->primed[i]) continue;
+                o->primed[i] = true;
+                if (probe(ctx, i)) {
+                    if (extra) extra[i] = false;
+                    fwd_gen_order_done(o, i);
+                    kept = true;
+                }
+            }
+            if (kept) continue;
+        }
+        /* Break the cycle at its first lossy member, so the defns that only
+         * call into the cycle still come after it; with no lossy defn left,
+         * take the first form. */
         uint32_t pick = n;
         for (uint32_t i = 0; i < n && pick == n; i++)
             if (o->state[i] == FGO_LOSSY_DEFERRED ||
@@ -2288,6 +2330,7 @@ void fwd_gen_order_drain(FwdGenOrder *o, Form *const *forms, bool *extra,
 void fwd_gen_order_free(FwdGenOrder *o) {
     free(o->name);
     free(o->state);
+    free(o->primed);
     free(o->keys);
     free(o->counts);
     free(o->slot_of);
@@ -3365,7 +3408,8 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     /* forward-call-to-generic-callee-typed-as-placeholder: the defns that
      * waited for a lossy callee join them, in dependency order
      * (fwd_gen_order_drain). */
-    fwd_gen_order_drain(&fgo, forms, tl_deferred, tl_retry_slot, &tl_ctx);
+    fwd_gen_order_drain(&fgo, forms, tl_deferred, tl_retry_slot, tl_probe_slot,
+                        &tl_ctx);
     free(tl_deferred);
     tl_deferred = NULL;
     fwd_gen_order_free(&fgo);

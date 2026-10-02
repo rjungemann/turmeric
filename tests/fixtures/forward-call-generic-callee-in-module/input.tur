@@ -17,6 +17,9 @@
       (println (.a p))
       (println (.b p)))
     (println (count-down 4 7.1))
+    (match (count-opt 3 2.75)
+      (Some v) (println v)
+      (None) (println "none"))
     0)
 
   (defn wrap-once [x : float] : (Option float)
@@ -37,4 +40,12 @@
   (defn twice [A] [f : (fn [A] A) x : A] : A (f (f x)))
   (defn ident [A] [x : A] : A x)
   (defn ping [A] [n : int x : A] : A (if (= n 0) x (pong (- n 1) x)))
-  (defn pong [A] [n : int x : A] : A (if (= n 0) x (ping (- n 1) x))))
+  (defn pong [A] [n : int x : A] : A (if (= n 0) x (ping (- n 1) x)))
+
+  ;; The same cycle with an (Option A) result: primed speculatively first.
+  (defn count-opt [n : int x : float] : (Option float)
+    (ping-opt n x))
+  (defn ping-opt [A] [n : int x : A] : (Option A)
+    (if (= n 0) (some x) (pong-opt (- n 1) x)))
+  (defn pong-opt [A] [n : int x : A] : (Option A)
+    (if (= n 0) (some x) (ping-opt (- n 1) x))))
