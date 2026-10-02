@@ -434,11 +434,70 @@ defn load-config-unchecked [path : cstr] : cstr
   fs/read-text(path)
 ```
 
+### Printing: `println` or `(perform (Write s))`?
+
+There are two ways to write a line, and they are not redundant.
+
+- **`println`** is a builtin that declares **`#fx{IO}`**. Printing is tracked:
+  an annotated function that prints must say so, and `#fx{}` means *does not
+  even print*. It is not handleable -- a capability tag is declared, never
+  performed -- so nothing can intercept, redirect or capture what it writes.
+- **`(perform (Write s))`** is an algebraic effect from `stdlib/effects.tur`
+  (`Write ^extends IO`). A handler decides what happens to the line:
+  `with-write` prints it, a test handler can collect it into a buffer, another
+  can drop it.
+
+Reach for `println` for output you are not trying to control, and for
+`perform (Write s)` when a caller should be able to intervene. In Haskell
+terms, `println` is `putStrLn` -- visible in the type as `IO`, concrete --
+and `Write` is an output effect in an effect library, abstract until a
+handler interprets it. (Before `println` carried `#fx{IO}` it was closer to
+`Debug.Trace.trace`: output the types could not see.)
+
+```turmeric
+(load "stdlib/effects.tur")   ; for Write; IO needs no load
+
+;; ERROR (TUR-E0009): prints, so it is not pure.
+(defn add-noisily [a : int b : int] #fx{} : int
+  (do (println "adding") (+ a b)))
+
+;; OK: says it prints.
+(defn add-loudly [a : int b : int] #fx{IO} : int
+  (do (println "adding") (+ a b)))
+
+;; OK: a handler decides where the line goes.
+(defn add-logged [a : int b : int] #fx{Write} : int
+  (do (perform (Write "adding")) (+ a b)))
+```
+```sweet-exp
+load "stdlib/effects.tur"   ; for Write; IO needs no load
+
+;; ERROR (TUR-E0009): prints, so it is not pure.
+defn add-noisily [a : int b : int] #fx{} : int
+  println("adding")
+  {a + b}
+
+;; OK: says it prints.
+defn add-loudly [a : int b : int] #fx{IO} : int
+  println("adding")
+  {a + b}
+
+;; OK: a handler decides where the line goes.
+defn add-logged [a : int b : int] #fx{Write} : int
+  perform(Write("adding"))
+  {a + b}
+```
+
+`IO` is the parent of `Write`, `FS`, `Net`, `Proc` and `Rand`, so `#fx{IO}`
+covers a function that prints and also performs `Write` or reads a file;
+`#fx{Write}` alone does not cover `println`. Unannotated code is unaffected,
+as everywhere else: only a function that declares a row is checked against it.
+
 ### Benefits
 
 - **Polymorphism** -- row variables let higher-order functions propagate caller effects. This holds through `^fat` callback parameters as well: a parameter typed `(fn [T] #fx{E} R)` with a non-empty row is callable, and a named effectful `defn` can be passed as its value (see [Fat Closure Annotation Guide](fat-closure-annotation-guide.md#interaction-with-other-annotations)).
 - **Compile-time checking** -- the compiler verifies that annotated functions do not perform unlisted effects (`TUR-E0009`).
-- **Capability discipline** -- `^capability` tags put inline-C side effects (FS, Net, Proc, Rand) under the same row checking, opt-in per caller.
+- **Capability discipline** -- `^capability` tags put inline-C side effects (FS, Net, Proc, Rand) and printing (`IO`, on `println`) under the same row checking, opt-in per caller.
 - **Auditing** -- `--dump-effects` shows the full effect signature of every function.
 
 ## Integration with Ownership and Defer

@@ -310,9 +310,10 @@ fi
 CLEAN_INPUT=$(mktemp /tmp/tur-clean-XXXXXX.tur)
 cat > "$CLEAN_INPUT" << 'EOF'
 (defeffect Write [msg :cstr] :nil)
-(defn effectful [] #{Write} :nil
+(defn effectful [] #fx{Write} :nil
   (perform (Write "hello")))
-(defn main [] :int
+;; main prints, so "fully annotated" means #fx{IO} (W4: println is #fx{IO}).
+(defn main [] #fx{IO} :int
   (handle
     (do (effectful) 0)
     (Write [msg] k) (do (println msg) (resume k 0))))
@@ -427,6 +428,28 @@ elif ! echo "$out" | grep -F "anonymous function in 'make-thunk' performs effect
     fail "strict-effects-lambda-name" "expected the lambda to be described by its enclosing defn; got: $(echo "$out" | grep TUR-W0030 | head -2)"
 else
     pass "strict-effects-lambda-name"
+fi
+
+# strict-effects-rowvar-prints: a row-polymorphic HOF that also prints keeps
+# #fx{e}.  `println` is #fx{IO} (effect-row-honesty-plan W4), but a capability
+# tag is not what flows through the row variable, so TUR-W0032 ("row variable
+# is always concrete") must not fire -- under -Werror=strict-effects it would
+# fail the build.
+ROWVAR_INPUT=$(mktemp /tmp/tur-rowvar-XXXXXX.tur)
+cat > "$ROWVAR_INPUT" << 'EOF2'
+(defn each-twice [f : (fn [int] #fx{e} int)] #fx{e} : int
+  (do (println "twice")
+      (+ (f 10) (f 20))))
+(defn main [] #fx{IO} :int (do (println (each-twice (fn [x : int] : int x))) 0))
+EOF2
+out=$("$TUR" -Werror=strict-effects emit-c "$ROWVAR_INPUT" 2>&1); rc=$?
+rm -f "$ROWVAR_INPUT"
+if [ $rc -ne 0 ]; then
+    fail "strict-effects-rowvar-prints" "should compile under -Werror=strict-effects (exit=$rc): $(echo "$out" | grep TUR- | head -2)"
+elif echo "$out" | grep -F "TUR-W0032" > /dev/null 2>&1; then
+    fail "strict-effects-rowvar-prints" "a capability tag made the row variable look always-concrete"
+else
+    pass "strict-effects-rowvar-prints"
 fi
 
 # try-with-basic: try-with behaves identically to handle

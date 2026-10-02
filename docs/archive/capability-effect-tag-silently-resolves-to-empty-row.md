@@ -209,3 +209,14 @@ compiler-known so they resolve without a load. That is the plan's W2, still
 the prerequisite for tagging `println` (W4). Until then a small program that
 writes `#fx{IO}` gets a precise error telling it what to load, which is the
 honest version of what used to be a silent no-op.
+
+## Update 2026-10-02 -- direction 2 landed too
+
+effect-row-honesty-plan W2 made `IO` / `FS` / `Net` / `Proc` / `Rand`
+compiler-known, so the repro above no longer needs a load and no longer hits
+TUR-E0026: it fails with TUR-E0009 on `claims-pure`, the check the tag exists
+to buy (`tests/fixtures/errors/builtin-capability-tag-pure-caller`, renamed
+from `unknown-capability-tag-pure-caller`). W4 then tagged `println` itself
+`#fx{IO}`, and `show-string-fputs` -- the stdout writer whose decorative
+`#fx{FS}` the W1 sweep found -- now says `#fx{IO}` as well. Both directions of
+this report are done.

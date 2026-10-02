@@ -514,11 +514,13 @@ static bool callee_colored(CpsB *b, const Binding *fn) {
 static bool fn_effect_may_escape(CpsB *b, const Binding *fn) {
     const FnDef *fd = callee_fndef(b, fn);
     if (!fd) return true;
+    /* Runtime-pure, not merely empty: a capability tag (IO from a `println`)
+     * is never performed, so it cannot escape (effect-row-honesty W4). */
     if (fd->binding && fd->binding->type.kind == TY_FN
-        && !effect_row_is_empty(fd->binding->type.as.fn.effect_row))
+        && !effect_row_is_runtime_pure(fd->binding->type.as.fn.effect_row))
         return true;
     if (!fd->inferred_effect_row) return true;   /* never inferred: be safe */
-    return !effect_row_is_empty(fd->inferred_effect_row);
+    return !effect_row_is_runtime_pure(fd->inferred_effect_row);
 }
 
 /* ---- pending bindings (drives atomization order) ---------------------- */
@@ -3479,7 +3481,7 @@ static CTerm *make_continue(CpsB *b) {
  * flag-off (no `consumed` field) keeps the historical direct-emit/unsupported
  * behaviour byte-identical. */
 static const BuiltinSpec s_cont_pred_spec = {
-    "cont?", NULL, 1, 1, {0}, {0}, BS_PREFIX_UNARY, "TUR_DK_CONT_PRED"
+    "cont?", NULL, 1, 1, {0}, {0}, BS_PREFIX_UNARY, "TUR_DK_CONT_PRED", NULL
 };
 static CTerm *build_cont_pred(CpsB *b, Expr *e, CVar x, CTerm *body) {
     Pending p = {0};

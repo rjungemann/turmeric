@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "buf.h"
+#include "builtins.h"
 #include "diag.h"
 #include "effect.h"
 #include "expr.h"
@@ -30,6 +31,27 @@ typedef struct {
     FnEntry  entries[FN_INDEX_CAP];
     uint32_t n;
 } FnIndex;
+
+/* The env's effect named `name` (a C string), or NULL. */
+static Effect *find_effect_named(EffectEnv *env, const char *name) {
+    if (!env || !name) return NULL;
+    for (uint32_t i = 0; i < env->n_effects; i++) {
+        Effect *eff = env->effects[i];
+        if (eff && eff->name && eff->name->name && strcmp(eff->name->name, name) == 0)
+            return eff;
+    }
+    return NULL;
+}
+
+/* effect-row-honesty-plan W4: a builtin's declared capability (IO on
+ * `println`) enters the caller's inferred row, exactly as a callee's declared
+ * capability does for an ordinary call. */
+static EffectRow *merge_builtin_effect(Arena *a, EffectRow *row, EffectEnv *env,
+                                       const char *effect_name) {
+    Effect *eff = find_effect_named(env, effect_name);
+    if (!eff) return row;
+    return effect_row_merge(a, row, effect_row_single(a, eff));
+}
 
 static Effect *find_unsafe_effect(EffectEnv *env) {
     if (!env) return NULL;
@@ -461,6 +483,8 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         for (uint32_t i = 0; i < e->as.builtin.n; i++) {
             row = collect_effects_in_expr(a, e->as.builtin.args[i], row, idx, env, subst);
         }
+        if (e->as.builtin.spec && e->as.builtin.spec->effect)
+            row = merge_builtin_effect(a, row, env, e->as.builtin.spec->effect);
         return row;
 
     case EX_RETURN:
@@ -671,6 +695,12 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
          * dispatch. */
         for (uint32_t i = 0; i < saffron_dyn_child_count(e); i++)
             row = collect_effects_in_expr(a, saffron_dyn_child(e, i), row, idx, env, subst);
+        /* A dynamic `println` (Saffron, an `any` argument) is the same builtin,
+         * dispatched at run time: it carries the same declared effect. */
+        if (e->kind == EX_DYN_OP && e->as.dyn_op_.op && e->as.dyn_op_.op->name) {
+            const char *bfx = builtin_effect_for_name(e->as.dyn_op_.op->name);
+            if (bfx) row = merge_builtin_effect(a, row, env, bfx);
+        }
         return row;
 
     case EX_ASCRIBE:
@@ -830,7 +860,10 @@ static int effect_row_check_var_always_concrete(FnDef *fd, Arena *a) {
     if (!fd) return 0;
     EffectRow *declared = fd->binding ? fd->binding->type.as.fn.effect_row : NULL;
     if (!declared || declared->kind != ERK_VAR) return 0;
-    EffectRow *inferred = fd->inferred_effect_row;
+    /* Capability tags (IO from a `println`, FS, Bt) do not count: they say
+     * what the body may touch, not what flows through the row variable, so a
+     * row-polymorphic function that also prints is not "always concrete". */
+    EffectRow *inferred = effect_row_without_capabilities(a, fd->inferred_effect_row);
     if (!inferred || inferred->kind != ERK_CONCRETE) return 0;
     if (inferred->as.concrete.n_effects == 0) return 0;
 
@@ -1239,8 +1272,12 @@ static void check_unreachable_handlers_in_expr(
             return;
         }
         EffectRowSubst *subst = effect_row_subst_new(a);
-        EffectRow *body_row = collect_effects_in_expr(
-            a, h->body, effect_row_empty(a), idx, env, subst);
+        /* What the body PERFORMS: a capability tag in its row (IO from a
+         * `println`) is never performed, and since IO is the parent of
+         * Write/Read, leaving it in would make every Write clause over a body
+         * that merely prints look reachable. */
+        EffectRow *body_row = effect_row_without_capabilities(a,
+            collect_effects_in_expr(a, h->body, effect_row_empty(a), idx, env, subst));
         for (uint8_t i = 0; i < h->n_cases; i++) {
             const Symbol *eff_name = h->cases[i].effect_name;
             if (!eff_name) continue;

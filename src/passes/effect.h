@@ -146,6 +146,21 @@ void effect_row_format_names(Buf *b, EffectRow *row);
 /* Check if an effect row is empty */
 bool effect_row_is_empty(EffectRow *row);
 
+/* True when `row` names nothing a handler could ever see: it is empty, or
+ * every effect in it is a `^capability` tag (an authority annotation that is
+ * never performed and never handled -- IO on `println`, FS, Bt).  The CPS and
+ * emitter gates that ask "can this function perform an effect at runtime?"
+ * use this rather than effect_row_is_empty: a function whose row is {IO}
+ * because it prints is as pure, to a handler, as one whose row is {}.  A row
+ * variable or an unresolved row is not runtime-pure (unknown). */
+bool effect_row_is_runtime_pure(const EffectRow *row);
+
+/* `row` with its `^capability` effects removed (ERK_CONCRETE and ERK_UNION
+ * are filtered; other kinds are returned unchanged).  For the lints that ask
+ * what a body PERFORMS -- an unreachable handler (W0033), an always-concrete
+ * row variable (W0032) -- where a capability tag says nothing. */
+EffectRow *effect_row_without_capabilities(Arena *a, EffectRow *row);
+
 /* Check if an effect row contains a specific effect */
 bool effect_row_contains(EffectRow *row, Effect *effect);
 

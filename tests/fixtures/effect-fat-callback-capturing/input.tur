@@ -12,7 +12,8 @@
 
 (defn run-cb [^fat body : (fn [] #fx{Write} int)] #fx{Write} : int (body))
 
-(defn main [] #fx{Write} : int
+;; main prints, so its row names IO as well as Write (W4: `println` is #fx{IO}).
+(defn main [] #fx{Write IO} : int
   (let [k 7]
     (println (run-cb (fn [] : int (+ k 1)))))
   0)

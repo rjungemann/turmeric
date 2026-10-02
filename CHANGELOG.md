@@ -6,6 +6,30 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **`println` declares `#fx{IO}`, so `#fx{}` means "does not even print".**
+  Printing was invisible to the effect system: `println` was a builtin with an
+  empty row. Now a function annotated `#fx{}` that prints is `TUR-E0009`, and
+  an annotated function that prints must name `IO` (which also covers `Write`,
+  `FS`, `Net`, `Proc` and `Rand`, its children). Unannotated code is
+  unaffected. `IO` is a `^capability` -- tracked, never handled -- so for
+  output a handler should be able to intercept, `(perform (Write s))` is still
+  the path; the effects guide now says which to reach for. Under
+  `--strict-effects`, an unannotated function that prints now gets
+  `TUR-W0030`. Saffron's dynamic `println` carries the row too, and hover
+  shows it: `(println : (fn [int] #fx{IO} : nil))`.
+- **`IO`, `FS`, `Net`, `Proc` and `Rand` are compiler-known**, like `Unsafe`:
+  `#fx{IO}` resolves with nothing loaded. `stdlib/effects.tur` keeps its
+  declarations; a `defeffect` of one of these names must match the built-in
+  exactly (`(defeffect FS [] :nil ^extends IO ^capability)`), and anything else
+  is an error.
+- **Compiler attributes moved out of the effect row.** `#fx{...}` now holds
+  effects and row variables only. `(defn ^construct some ...)` replaces
+  `#fx{Construct}`, `(defn ^byval name ...)` replaces `#fx{ByVal}`, and
+  `(match ^non-exhaustive x ...)` replaces `#fx{NonExhaustive}`, which still
+  works with a `TUR-D0004` deprecation warning. An unknown attribute before a
+  defn's name (`(defn ^contruct f ...)`) is an error instead of becoming the
+  function's name.
+
 - **An undeclared effect name in `#fx{...}` is an error (`TUR-E0026`).** It
   used to be dropped silently, so `#fx{IO}` in a file that had not loaded
   `stdlib/effects.tur` checked as `#fx{}`, and a caller's `#fx{}` then passed
@@ -14,7 +38,7 @@ All notable changes to Turmeric are documented here.
   the `stdlib/effects.tur` names. It covers every position a row is written:
   a `defn`, a `fn` literal, a fn-typed parameter, a record field, a class
   method. The check found four rows in the tree that had never resolved: a
-  stdlib `#fx{FS}` on a stdout writer (removed -- it was wrong besides), and
+  stdlib `#fx{FS}` on a stdout writer (now `#fx{IO}` -- stdout is not FS), and
   three fixtures' undeclared `Write` and `#fx{|e}`.
 - **`--lint-effects` is a deprecated alias for `--strict-effects`
   (`TUR-W0050`).** It was a byte-identical second copy of the `TUR-W0030`
@@ -30,6 +54,15 @@ All notable changes to Turmeric are documented here.
   syntax rather than the retired `#{}`. `TUR-W0031` is no longer reported on
   an instance method, whose row is its class method's and cannot be changed
   from the instance.
+
+### Documentation
+
+- **The security guide is accurate about `#fx{Unsafe}` and proc macros.**
+  `#fx{Unsafe}` is enforced at every call site (only `(unsafe ...)` or an
+  `Unsafe` caller discharges it), and it means "this body does pointer
+  arithmetic", not "this function may corrupt memory on bad input" -- the
+  audit plan's open question 3, answered. `--no-proc-macros` is
+  rust-analyzer's `procMacro.enable` turned off; rust-analyzer ships it on.
 
 ## [0.58.0] -- 2026-10-01
 

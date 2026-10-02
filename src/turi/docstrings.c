@@ -212,7 +212,7 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"and",      "(and a b ...) -- short-circuit logical and"},
         {"or",       "(or a b ...) -- short-circuit logical or"},
         /* I/O */
-        {"println",  "(println x) -- print value with trailing newline"},
+        {"println",  "(println x) -- print value with trailing newline; #fx{IO}"},
         {"print",    "(print x) -- print value without trailing newline"},
         /* Core special forms */
         {"let",      "(let [x v ...] body) -- bind local variables in scope of body"},

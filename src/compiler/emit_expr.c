@@ -17044,7 +17044,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     er = ib->source_fn_def->inferred_effect_row;
                 else if (ib && ib->type.kind == TY_FN)
                     er = ib->type.as.fn.effect_row;
-                bool effectful = er && er->kind != ERK_EMPTY;
+                /* Runtime-pure rows (only capability tags, e.g. IO from a
+                 * `println`) are not CPS-colored and have no `__cps` entry. */
+                bool effectful = er && !effect_row_is_runtime_pure(er);
                 /* The twin force-declares the wrapped fn as `int64_t <fn>(int64_t)`
                  * (emit_module.c) and dispatches its int64 `__cps` entry, so the
                  * wrapped fn's arg AND result must both be a plain `int`/`int64`

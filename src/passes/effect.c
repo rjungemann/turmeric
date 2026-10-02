@@ -121,6 +121,55 @@ bool effect_row_is_empty(EffectRow *row) {
     return row->kind == ERK_EMPTY;
 }
 
+bool effect_row_is_runtime_pure(const EffectRow *row) {
+    if (!row) return true;
+    switch (row->kind) {
+    case ERK_EMPTY:
+        return true;
+    case ERK_CONCRETE:
+        for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+            const Effect *eff = row->as.concrete.effects[i];
+            if (!eff || !eff->is_capability) return false;
+        }
+        return true;
+    case ERK_UNION:
+        return effect_row_is_runtime_pure(row->as.union_.left) &&
+               effect_row_is_runtime_pure(row->as.union_.right);
+    case ERK_VAR:
+    case ERK_UNRESOLVED:
+        return false;
+    }
+    return false;
+}
+
+EffectRow *effect_row_without_capabilities(Arena *a, EffectRow *row) {
+    if (!row) return row;
+    switch (row->kind) {
+    case ERK_CONCRETE: {
+        uint8_t n = row->as.concrete.n_effects, kept = 0;
+        for (uint8_t i = 0; i < n; i++)
+            if (row->as.concrete.effects[i] && !row->as.concrete.effects[i]->is_capability)
+                kept++;
+        if (kept == n) return row;
+        if (kept == 0) return effect_row_empty(a);
+        Effect **keep = arena_alloc(a, kept * sizeof(Effect *));
+        uint8_t k = 0;
+        for (uint8_t i = 0; i < n; i++)
+            if (row->as.concrete.effects[i] && !row->as.concrete.effects[i]->is_capability)
+                keep[k++] = row->as.concrete.effects[i];
+        return effect_row_concrete(a, keep, kept);
+    }
+    case ERK_UNION: {
+        EffectRow *l = effect_row_without_capabilities(a, row->as.union_.left);
+        EffectRow *r = effect_row_without_capabilities(a, row->as.union_.right);
+        if (l == row->as.union_.left && r == row->as.union_.right) return row;
+        return effect_row_merge(a, l, r);
+    }
+    default:
+        return row;
+    }
+}
+
 /* Helper to compare two effects by pointer (they're arena-allocated) */
 static bool effect_ptr_eq(Effect *a, Effect *b) {
     return a == b;

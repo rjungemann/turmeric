@@ -26,7 +26,8 @@
 (defn apply-cb [f : (fn [] #fx{Ask} int) base : int] #fx{Ask} : int
   (+ (* (f) 2) base))
 
-(defn main [] #fx{Write} : int
+;; main prints, so its row names IO as well as Write (W4: `println` is #fx{IO}).
+(defn main [] #fx{Write IO} : int
   (let [k 7]
     (println (run-thunk (fn [] #fx{Write} : int (+ k 1))))
     (println (apply1 (fn [x : int] : int (+ x k)) 10)))
