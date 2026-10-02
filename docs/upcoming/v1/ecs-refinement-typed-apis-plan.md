@@ -767,6 +767,24 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 > and an exported spice accessor has callers that do not exist yet. So adding
 > the refinement *costs* one check per access and the proof buys nothing back.
 >
+> **This is documented design, not a defect**, which is worth stating plainly
+> since it sets the ceiling on RE2 rather than being something to fix on the
+> way. [refinement-types-guide.md](../../guides/refinement-types-guide.md)
+> divides a function's refinements into two roles, and only one of them elides:
+>
+> - a **goal** -- a return refinement or `:post` -- "when proved, **no runtime
+>   check is emitted for it**";
+> - a **hypothesis** -- a parameter's refinement or `:pre` -- which the body may
+>   assume, and which "is still checked at runtime, since it constrains the
+>   caller rather than the body".
+>
+> A parameter refinement is in the second role, so a crossing proof buys
+> *safety* (a provably out-of-range call is `TUR-E0371`, a compile failure
+> rather than a runtime panic) and never *speed*. RE2's payoff is entirely in
+> the first of those. The third mode -- caller owes the proof AND the callee
+> emits no check -- is the one that does not exist, and is exactly what the
+> unchecked-variant sketch below is about.
+>
 > **What this changes.** The 2026-08-20 profile concluded RE2's performance
 > justification does not survive because the cost is the auto-grow guard and
 > the `present[]` write rather than a bounds check. Finding 3 is stronger and
