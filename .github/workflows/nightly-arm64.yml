@@ -1,0 +1,157 @@
+name: Nightly arm64
+
+# The two expensive representation suites, in FULL, on arm64.
+#
+# ci.yml runs less than all of them on its macOS leg, on purpose, and this is
+# where the rest happens.  The reason is the macOS runner pool, not macOS CPU:
+# measured over two runs on 2026-10-01, every ubuntu and Windows job in a run
+# starts at t+0 while the five macOS jobs start at t+40..t+80 min and never more
+# than 2-3 at once.  So per-PR macOS runs one quarter of the generic-spec matrix
+# (TUR_GSM_SHARD=1/4, inside its `aux` part) and skips the float-conversion lint
+# entirely.  Both of those gaps close here, nightly, off the critical path.
+#
+# What each leg is actually for:
+#
+#   tur_generic_spec_matrix compiles and RUNS 4066 generated programs, and the
+#   bug class is ABI-sensitive -- arm64 and x86-64 differ in how aggregates are
+#   passed, and the finding that started this (rc-of-byvalue-aggregate-payload)
+#   was a struct-padding read a member-wise copy does not preserve.  Dropping
+#   arm64 coverage of it was the one option that would lose signal it could not
+#   get back, so the PR keeps a quarter and the nightly runs all of it.
+#
+#   tur_emitted_float_conversions is a pure clang-AST lint over emitted C, and
+#   clang runs on both CI legs, so the macOS copy is close to redundant -- which
+#   is why it is the suite the PR drops.  It stays HERE rather than being
+#   dropped outright because "near-redundant" is not "redundant": AppleClang and
+#   Linux clang are different front ends, the two legs emit for different ABIs,
+#   and a nightly costs nobody any latency.  Nightly is the cheap way to find
+#   out whether the legs ever disagree.
+#
+# Deliberately NOT on push/pull_request -- adding a macOS job to a PR run is the
+# exact thing this split exists to avoid.  Nor does a red run block anything:
+# this repo's standing position is that a red suite never blocks landing.
+#
+# Ref docs/upcoming/ci-aux-suite-latency-plan.md S6.
+
+on:
+  schedule:
+    # 05:40 UTC daily -- off the hour and clear of both existing crons
+    # (fuzz.yml at 04:30, tsan.yml at 05:10), which is also why it is not 05:00.
+    - cron: "40 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-arm64
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  suites:
+    name: Full representation suites (arm64)
+    runs-on: macos-latest
+    # The two suites measured 2050s and 688s on this runner, unsharded and
+    # serial against each other, plus a cold build.  60 is roughly 1.5x that,
+    # and a number here at all is the point: ci.yml's `test` job has none, which
+    # is how a 67-minute job passed quietly rather than saying so.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        # coreutils for `gtimeout`: stock macOS ships no timeout(1), and the
+        # harnesses that look for it run every fixture UNTIMED when they find
+        # neither form -- see the same step in ci.yml for what that cost.
+        run: brew install libedit ccache coreutils || true
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-nightly-arm64-${{ github.sha }}
+          restore-keys: |
+            ccache-nightly-arm64-
+            ccache-test-macOS-
+
+      # Debug, matching ci.yml's `test` job: a Release tur elides contract
+      # checks (NDEBUG), so a Release build would be measuring the build type
+      # rather than the suites.
+      - name: Configure (Debug + ASAN)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets, not `--target tur`: `tur` never links libturi.a, and the
+      # fixtures that need it then die with `ld: library 'turi' not found`.
+      - name: Build
+        run: cmake --build build -j
+
+      # A hung `tur --version` here is the outdated-ASan-runtime deadlock, not a
+      # bug in tur -- it spins in InitializeShadowMemory before main(). Catching
+      # it as a 60s failure beats spending the job's whole budget on it.
+      - name: Smoke check (tur --version must not hang)
+        run: timeout 60 ./build/tur --version || gtimeout 60 ./build/tur --version
+
+      # No TUR_GSM_SHARD / TUR_FCONV_SHARD anywhere in this job: unset means
+      # "run everything", which is the entire point of this workflow.  If either
+      # ever appears here, this leg silently stops being the full run and the
+      # quarter the PR skips is covered by nobody.
+      - name: Run both suites in full
+        id: run
+        run: |
+          set +e
+          # CLAUDE.md: every suite run carries the 12-minute timeout.  These two
+          # are ~46 min together, so the budget is the job's timeout-minutes
+          # above and ctest's own per-test TIMEOUT properties, not a wrapper
+          # here -- a `timeout 720` would kill the matrix at 40% done.
+          # DERIVED from tests/ctest-parts.py, not listed here: the pattern is
+          # exactly the suites the macOS PR leg skips (NIGHTLY_ONLY) plus the
+          # ones it only samples (SAMPLED).  So moving a suite back onto the PR
+          # leg, or adding a new under-covered one, moves this leg's coverage
+          # with it -- a hand-written list here would be the second copy that
+          # drifts, and the gap it left would be invisible.
+          pattern="$(python3 tests/ctest-parts.py nightly-pattern --for macos)"
+          echo "nightly -R pattern: $pattern"
+          ctest --output-on-failure --progress --test-dir build \
+            -R "$pattern" --no-tests=error \
+            --output-junit results-nightly.xml \
+            --test-output-size-passed 262144 --test-output-truncation head \
+            2>&1 | tee nightly.log
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # The trend rows for the FULL arm64 runs.  Uploaded rather than published
+      # to the ci-metrics branch: that publisher aggregates one run of ci.yml,
+      # and teaching it a second workflow is a separate change.  No --shard and
+      # no --suite-shard, so these rows are null/null -- the unsharded series,
+      # directly comparable to every row written before sharding existed.
+      - name: Collect suite timings
+        if: always()
+        run: |
+          python3 tools/ci/collect-suite-timings.py --build-dir build \
+            build/results-nightly.xml > timings.jsonl || true
+          if [ ! -s timings.jsonl ]; then
+            echo "::warning::no suite timings collected -- check the ctest --output-junit path above"
+          else
+            echo "collected $(wc -l < timings.jsonl) suite rows"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-arm64-${{ github.run_id }}
+          path: |
+            nightly.log
+            timings.jsonl
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Fail the job on a red suite, LAST, so the artifact above is uploaded
+      # first.  Nothing gates on this workflow; a red X here is a finding to
+      # triage, and the suite names plus the uploaded log say which cells.
+      - name: Report the suite result
+        if: steps.run.outputs.rc != '0'
+        run: |
+          echo "::error::the full arm64 representation suites failed (ctest exit ${{ steps.run.outputs.rc }}). A cell failing only here, and not on the PR legs, is an arm64-specific representation bug -- which is what this leg exists to find. The per-cell output is in the uploaded nightly.log."
+          exit 1

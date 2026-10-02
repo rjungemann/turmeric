@@ -24,8 +24,9 @@ forever while drifting from what CI actually runs.
 
 Usage
 -----
-    python3 tests/ctest-parts.py pattern aux --leg linux     # for ci.yml
-    python3 tests/ctest-parts.py --check [build-dir]         # the assertion
+    python3 tests/ctest-parts.py pattern aux --leg linux        # for ci.yml
+    python3 tests/ctest-parts.py nightly-pattern --for macos    # for the nightly
+    python3 tests/ctest-parts.py --check [build-dir]            # the assertion
     python3 tests/ctest-parts.py --list
 
 Exit 0 if the table covers the registered set on every leg, 1 if not, and 0
@@ -91,6 +92,29 @@ NIGHTLY_ONLY = {
     "linux": {},
 }
 
+# Suites a leg runs PARTIALLY: in a part, but over a slice of their own work.
+# Unlike NIGHTLY_ONLY these still run per-PR, so completeness is satisfied -- but
+# the nightly has to make up the rest, and nothing else in the tree records that.
+# `shard` is the slice, and it must match what ci.yml actually sets; --check
+# compares the two, so changing one without the other fails rather than quietly
+# leaving three quarters of the matrix to nobody.
+SAMPLED = {
+    "macos": {
+        "tur_generic_spec_matrix": (
+            "1/4",
+            "4066 cells that each compile and RUN a program, and the bug class "
+            "is ABI-sensitive, so arm64 coverage is load-bearing -- but a "
+            "fourth macOS job would queue 40+ min behind the first three.  A "
+            "quarter per PR, all of it nightly.",
+        ),
+    },
+    "linux": {},
+}
+
+# Where --check reads the macOS sample size from, to compare against SAMPLED.
+CI_WORKFLOW = os.path.join(".github", "workflows", "ci.yml")
+GSM_SHARD_RE = re.compile(r"TUR_GSM_SHARD:.*?'(\d+/\d+)'\s*\)?\s*\|\|")
+
 
 def part_pattern(leg, part):
     try:
@@ -104,6 +128,33 @@ def part_pattern(leg, part):
 def part_shards(leg, part):
     entry = PARTS[leg][part]
     return entry[2] if len(entry) > 2 else 1
+
+
+def nightly_pattern(leg):
+    """A ctest -R pattern for everything `leg` does NOT cover in full per PR.
+
+    Derived, not written down twice: it is exactly the suites this leg skips
+    (NIGHTLY_ONLY) plus the ones it only samples (SAMPLED).  So moving a suite
+    back onto the PR leg, or adding a new one to either table, moves the
+    nightly's coverage with it and cannot leave a gap behind.
+    """
+    names = sorted(set(NIGHTLY_ONLY.get(leg, {})) | set(SAMPLED.get(leg, {})))
+    if not names:
+        sys.stderr.write("ctest-parts: leg %r covers everything per PR; the "
+                         "nightly has nothing to run\n" % leg)
+        raise SystemExit(2)
+    return "|".join("^%s$" % n for n in names)
+
+
+def ci_gsm_shard():
+    """The macOS matrix sample size as ci.yml actually sets it, or None."""
+    path = os.path.join(REPO, CI_WORKFLOW)
+    try:
+        with open(path) as f:
+            m = GSM_SHARD_RE.search(f.read())
+    except OSError:
+        return None
+    return m.group(1) if m else None
 
 
 def registered(build):
@@ -202,12 +253,47 @@ def check(build):
                       % (leg, name, ", ".join(members[name])))
                 fail = 1
 
+        # A SAMPLED row must name a test that IS in a part (it runs, partially)
+        # and must agree with the slice ci.yml sets.  The two drifting apart is
+        # the quiet failure: the table would promise the nightly covers three
+        # quarters while ci.yml ran a half, or a third.
+        for name, (shard, _why) in sorted(SAMPLED.get(leg, {}).items()):
+            if name not in all_tests:
+                print("FAIL check-ctest-partition -- %s: SAMPLED names '%s', "
+                      "which is not a registered test; delete the row."
+                      % (leg, name))
+                fail = 1
+            elif name not in members:
+                print("FAIL check-ctest-partition -- %s: SAMPLED names '%s', "
+                      "but no part runs it -- a sampled suite still runs "
+                      "per-PR.  Move the row to NIGHTLY_ONLY instead."
+                      % (leg, name))
+                fail = 1
+            if leg == "macos" and name == "tur_generic_spec_matrix":
+                actual = ci_gsm_shard()
+                if actual is None:
+                    print("FAIL check-ctest-partition -- %s: could not find "
+                          "TUR_GSM_SHARD in %s to compare against SAMPLED['%s']"
+                          "['%s'] = %s" % (leg, CI_WORKFLOW, leg, name, shard))
+                    fail = 1
+                elif actual != shard:
+                    print("FAIL check-ctest-partition -- %s: SAMPLED says '%s' "
+                          "runs %s per PR but %s sets TUR_GSM_SHARD=%s.  The "
+                          "nightly's coverage is computed from this table, so "
+                          "the two must agree."
+                          % (leg, name, shard, CI_WORKFLOW, actual))
+                    fail = 1
+
         if not fail:
             n_jobs = sum(part_shards(leg, p) for p in PARTS[leg])
-            extra = (" (%d nightly-only)" % len(omitted)) if omitted else ""
+            notes = []
+            if omitted:
+                notes.append("%d nightly-only" % len(omitted))
+            if SAMPLED.get(leg):
+                notes.append("%d sampled" % len(SAMPLED[leg]))
             print("  ok  %s -- %d registered test(s) across %d part(s) / %d "
                   "job(s)%s" % (leg, len(all_tests), len(PARTS[leg]), n_jobs,
-                                extra))
+                                " (%s)" % ", ".join(notes) if notes else ""))
 
     if fail:
         return 1
@@ -230,6 +316,12 @@ def main(argv):
     if argv[0] == "--check":
         return check(argv[1] if len(argv) > 1
                      else os.environ.get("TUR_BUILD_DIR", "build"))
+    if argv[0] == "nightly-pattern":
+        if "--for" not in argv:
+            sys.stderr.write("ctest-parts: nightly-pattern needs --for <leg>\n")
+            return 2
+        print(nightly_pattern(argv[argv.index("--for") + 1]))
+        return 0
     if argv[0] == "pattern":
         if len(argv) < 2:
             sys.stderr.write("ctest-parts: pattern needs a part name\n")
