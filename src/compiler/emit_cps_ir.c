@@ -1333,6 +1333,23 @@ static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty,
     cs->owning[cs->n] = false; cs->n++;
 }
 
+/* cps-evicts-handle-in-operand-positions item 4: the E2c FIELD-LOAD callee of a
+ * `via_registry` tailcall (`(.run obj)`, atomized into a CVar) captured by a
+ * lifted continuation -- the join a `handle` body's non-atomic argument
+ * builds before the call.  It is the same int64 direct-entry fn-ptr word
+ * cap_add_fn_scalar carries for a fn-value PARAM callee (cap_ctype spells a
+ * TY_FN slot `int64_t`), so it rides the env the same way; the generic CVar
+ * gate refuses a TY_FN and evicted the whole function (BODY-STRUCT-JOIN). */
+static void cap_add_cvar_fn_scalar(CapSet *cs, uint32_t id, const char *name,
+                                   const Type *type) {
+    if (!name) { cs->ok = false; return; }
+    for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
+    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
+    cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
+    cs->ty[cs->n] = TY_FN; cs->type[cs->n] = type; cs->polyfn[cs->n] = false;
+    cs->owning[cs->n] = false; cs->n++;
+}
+
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                              uint32_t *bound, int nb, CapSet *cs) {
     if (!cs->ok) return;
@@ -1375,8 +1392,16 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
-            if (t->as.tailcall.via_registry && !t->as.tailcall.fn)
-                COL_ATOM(&t->as.tailcall.fn_atom);   /* E2c field-load callee */
+            if (t->as.tailcall.via_registry && !t->as.tailcall.fn) {
+                const CAtom *_fa = &t->as.tailcall.fn_atom;   /* E2c field-load callee */
+                if (_fa->kind == CA_CVAR && _fa->ty == TY_FN) {
+                    bool _f = _fa->cvar_id != exclude;
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _fa->cvar_id) { _f = false; break; }
+                    if (_f) cap_add_cvar_fn_scalar(cs, _fa->cvar_id, _fa->cvar_name, _fa->type);
+                } else {
+                    COL_ATOM(_fa);
+                }
+            }
             /* E2c: a `via_registry` tailcall threads its fn-value CALLEE through
              * `__tur_cps_lookup(f)`; when that callee is an enclosing param (not a
              * local of this lifted body), carry it on the frame env as an int64
@@ -11341,19 +11366,28 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_putc(&body_buf, '\0');
     buf_putc(&helpers, '\0');
 
-    if (helpers.len > 1) buf_puts(file, helpers.data);
-
     /* A CT_LETRAW delegation to the direct emitter (e.g. a cloneable-reset)
      * emits its file-scope helper fns into ctx->pending_handler_fns, which the
      * direct-function path flushes ahead of the using function.  A CPS function
      * has its own emission path, so flush those helpers here too -- before the
      * __cps body that references them -- otherwise the helper is defined after
-     * its use ('<helper>' undeclared). */
+     * its use ('<helper>' undeclared).
+     *
+     * And before this function's own lifted HELPERS (its handler clauses, join
+     * and continuation frames): a frame's body is emitted through the same
+     * direct emitter, so a closure literal inside one -- the second of two
+     * sequential `handle`s, whose body lands in the first's continuation --
+     * puts its slot-0 widen wrapper here too, and the frame used it before its
+     * definition ('__tur_widen___fn_N' undeclared).  The pending fns name only
+     * file-scope functions the forward declarations already cover, never a
+     * lifted CPS helper, so they can always go first. */
     if (ctx->pending_handler_fns && ctx->pending_handler_fns->len > 0) {
         buf_write(file, ctx->pending_handler_fns->data, ctx->pending_handler_fns->len);
         buf_free(ctx->pending_handler_fns);
         buf_init(ctx->pending_handler_fns);
     }
+
+    if (helpers.len > 1) buf_puts(file, helpers.data);
 
     if (grp) {
         /* cps-self-tail-call-relies-on-sibling-call: the body is this
