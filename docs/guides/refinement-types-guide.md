@@ -10,7 +10,7 @@ description: `#refine{ x : T | p }` predicates the compiler tries to prove stati
 > experiment gate is gone). No flag is needed.
 > See [contract-types-guide.md](contract-types-guide.md) for the runtime half,
 > and
-> [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md)
+> [../archive/refinement-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refinement-types-plan.md)
 > for the design.
 
 Contract types (`#refine{ x : T | p }`) check their predicate at **runtime**.
@@ -704,7 +704,7 @@ its own equation. `(> (len (Cons 1 (Cons 2 (Cons 3 (Nil))))) 3)` is
 is ignored and the measure stays opaque. The plan, with what the first cut
 settled and what is still open (non-ground unfolding, counterexamples
 through a reflected measure), is
-[reflected-measures-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
+[reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
 (the docs pack carries guides, not plans, so the link is by URL).
 
 ---
@@ -857,7 +857,7 @@ Two shapes look like they should decline and do not:
 
 Termination is not part of any of this: a loop that never ends with a true
 invariant is perfectly well-typed. See
-[docs/upcoming/loop-invariants-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md).
+[docs/upcoming/loop-invariants-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md).
 
 ## The solver
 
@@ -1098,7 +1098,7 @@ anyway.
   witness it reports is one the program would reject; it is the proving side
   that is optimistic. Fix directions, and the one consistent with the
   soundness invariant, are in
-  [`docs/reported/float-proofs-assume-exact-reals.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/float-proofs-assume-exact-reals.md).
+  [`docs/reported/float-proofs-assume-exact-reals.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/float-proofs-assume-exact-reals.md).
   Until it is resolved, read a proved float refinement as a claim over reals.
 - **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
@@ -1132,7 +1132,7 @@ anyway.
   is the implementation that will actually run. `TUR-W0377` marks a call that
   depends on that leniency; it is a warning rather than an error because the
   call is correct for the instance it resolved to. See
-  [docs/archive/class-param-refinement-not-demanded-of-callers.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/class-param-refinement-not-demanded-of-callers.md)
+  [docs/archive/class-param-refinement-not-demanded-of-callers.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/class-param-refinement-not-demanded-of-callers.md)
   for why that reading was chosen over making the class signature binding on
   callers.
 - **[by design] An argument that cannot be PROVED is not an error; one that is DEFINITELY
@@ -1292,4 +1292,4 @@ states.
 - [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half
 - [experimental-flags-guide.md](experimental-flags-guide.md) -- the `--enable=` mechanism
 - [syntax-guide.md](syntax-guide.md) -- `#lang` layers
-- [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design, staging, and what is left
+- [../archive/refinement-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design, staging, and what is left

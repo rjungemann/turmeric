@@ -189,6 +189,6 @@ specialization is best-effort and otherwise silent on fallback.
 
 ## See Also
 
-- [drop-x-flags-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/drop-x-flags-plan.md) -- the
+- [drop-x-flags-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/drop-x-flags-plan.md) -- the
   plan that retired the `-X` flag surface.
 - Per-feature guides linked in the **Removed Feature Flags** table above.

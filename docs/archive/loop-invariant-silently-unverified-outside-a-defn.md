@@ -157,10 +157,12 @@ invariant is runtime-only and why.
 
 ## Related
 
-The effect system has a sibling blind spot -- `defmodule` members are never
+The effect system had a sibling blind spot -- `defmodule` members were never
 effect-row checked
-([module-members-skip-effect-row-checking](module-members-skip-effect-row-checking.md)),
-because `effect_check_pass` iterates top-level `EX_FN_DEF` items only.
+([module-members-skip-effect-row-checking](../archive/module-members-skip-effect-row-checking.md)),
+because `effect_check_pass` iterated top-level `EX_FN_DEF` items only.  Fixed
+2026-10-02 by walking one flattened item list (module bodies and top-level
+`do` forms spread in place), which may be the shape to copy here.
 
 **The two are not the same gap**, which is worth recording so nobody assumes
 one fix covers both. Measured here: a `defn` inside a `(defmodule ...)` body

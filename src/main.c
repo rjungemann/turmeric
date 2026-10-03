@@ -836,6 +836,9 @@ static bool g_no_abi_cache;
  *                 recompiling the bare runtime sources.  Never links the
  *                 (possibly ASan) full libturi.a on its own, so a default build
  *                 is always behaviorally identical to the old source path.
+ *                 Also takes the preamble split below when
+ *                 preamble_split_auto_applies() says so, and quietly keeps the
+ *                 whole preamble when it does not.
  *   TUR_RT_LIB    (1) -- force the archive link (lean preferred, else libturi.a,
  *                 else a -lturi fallback with a warning); explicit opt-in.
  *   TUR_RT_SOURCE (2) -- force recompiling the bare runtime sources.
@@ -844,7 +847,9 @@ static bool g_no_abi_cache;
  *                 libturt_preamble.a, so the preamble is compiled ONCE rather
  *                 than once per program.  4360 of 8310 emitted lines for a
  *                 one-line program are that preamble, byte-identical every
- *                 time; dropping it measures at 29% off the cc call. */
+ *                 time; dropping it measures at 29% off the cc call.  This
+ *                 mode INSISTS -- it says so when the swap declines -- where
+ *                 AUTO only takes the split when every precondition holds. */
 enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2, TUR_RT_SPLIT = 3 };
 static int g_runtime_mode = TUR_RT_AUTO;
 
@@ -937,6 +942,56 @@ static void resolve_rcgc_from_archive(void) {
     char libdir[4096], libname[128];
     int found = locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname));
     emit_set_rcgc_from_archive(found && strcmp(libname, "turt_runtime") == 0);
+}
+
+/* cc-path-preamble-split-plan step 5: does a DEFAULT build (--runtime=auto)
+ * swap the fixed runtime preamble for the decls region and link
+ * libturt_preamble.a?  Measured at 81-86s -> 73s on a tenth of the suite
+ * (Linux, no ccache) and ~10% on the Windows CI shards: the cc call for a
+ * one-line program halves, and nothing else moves.
+ *
+ * Every precondition here is a case where the split would build something
+ * other than what was asked for, so each one keeps the whole preamble instead:
+ *
+ *   - both archives side by side.  The decls region declares the rc<T>/GC
+ *     runtime in its archive posture, so the lean libturt_runtime.a has to be
+ *     on the line as well as libturt_preamble.a -- and a `--target tur` build
+ *     produces neither.  emit_rcgc_from_archive() is the same decision for
+ *     this program's own preamble; if that kept the replica, so does this.
+ *   - no sanitizer in TUR_CC_FLAGS.  The archive is compiled without one, so
+ *     ASan would stop seeing the preamble's heap traffic and TSan its
+ *     atomics -- a silent loss of exactly the coverage that build asked for.
+ *   - not --debug, whose `-g -Og` build should step through the preamble the
+ *     user can see, not an -O2 archive.  Same reason prelude_split_applies
+ *     stays out of it.
+ *   - Linux and Windows only, where CI ran the whole suite under the split for
+ *     weeks before it became the default (the retired `split` and
+ *     `windows-split` jobs; `test` and `windows` run it now).  macOS never
+ *     has; TUR_PREAMBLE_SPLIT=1 opts in there, as TUR_RUNTIME=split always
+ *     could.
+ *
+ * TUR_PREAMBLE_SPLIT=0 turns it off.  The swap itself can still decline (the
+ * hash guard in jit_try_split_preamble, or a `#lang r7rs` program, whose
+ * preamble differs); under AUTO that is quiet, because the whole preamble is
+ * the correct answer then, not a degraded one. */
+static bool preamble_split_auto_applies(void) {
+    const char *e = getenv("TUR_PREAMBLE_SPLIT");
+    if (e && strcmp(e, "0") == 0) return false;
+#if !defined(__linux__) && !defined(_WIN32)
+    if (!e || strcmp(e, "1") != 0) return false;
+#endif
+    if (g_emit_debug_lines) return false;
+    const char *f = getenv("TUR_CC_FLAGS");
+    if (f && strstr(f, "-fsanitize")) return false;
+    if (!emit_rcgc_from_archive()) return false;
+    char libdir[4096], libname[128];
+    if (!locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname)) ||
+        strcmp(libname, "turt_runtime") != 0)
+        return false;
+    char probe[4200];
+    struct stat st;
+    snprintf(probe, sizeof(probe), "%s/libturt_preamble.a", libdir);
+    return stat(probe, &st) == 0 && S_ISREG(st.st_mode);
 }
 
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
@@ -3469,27 +3524,42 @@ static int cmd_build_once(const char *input, const char *out_path,
         tf = fdopen(fd, "wb");
         memcpy(tmpl, fallback, sizeof(fallback));
     }
-    /* cc-path-preamble-split-plan: under --runtime=split, swap the fixed
-     * runtime preamble for the decls region and link libturt_preamble.a
-     * instead, so the preamble is compiled once rather than once per program.
+    bool wasm_target = target && strcmp(target, "wasm") == 0;
+
+    /* cc-path-preamble-split-plan: swap the fixed runtime preamble for the
+     * decls region and link libturt_preamble.a instead, so the preamble is
+     * compiled once rather than once per program.  The default whenever
+     * preamble_split_auto_applies() holds; --runtime=split forces it.
      *
      * Same swap the JIT does (jit_try_split_preamble), including its hash
      * guard: if the emitted preamble no longer matches the committed
      * artifact the swap DECLINES and we fall back to the full preamble, which
      * is slower but always correct.  A silent disengage is the documented
-     * failure mode on the JIT side, so say so here rather than quietly
-     * producing a build that is not what was asked for. */
+     * failure mode on the JIT side, so an explicit --runtime=split says so
+     * rather than quietly producing a build that is not what was asked for.
+     * (CI's engage probe runs with TUR_JIT_TIMING=1, which reports the
+     * default's declines too.)
+     *
+     * Never for wasm (emcc has no libturt_preamble.a), and not on top of an
+     * r7rs prelude split, whose program unit is already the small half. */
     Buf split_c;
     buf_init(&split_c);
     bool used_split = false;
     if (g_runtime_mode == TUR_RT_SPLIT) {
-        used_split = jit_try_split_preamble(&csrc, &split_c);
-        if (!used_split)
+        if (wasm_target)
+            fprintf(stderr,
+                    "tur build: --runtime=split declined for --target wasm "
+                    "(there is no wasm libturt_preamble.a); using the full "
+                    "preamble\n");
+        else if (!(used_split = jit_try_split_preamble(&csrc, &split_c)))
             fprintf(stderr,
                     "tur build: --runtime=split declined (the emitted preamble "
                     "does not match the committed split artifact -- regenerate "
                     "with tools/gen-runtime-split.py); using the full "
                     "preamble\n");
+    } else if (g_runtime_mode == TUR_RT_AUTO && !wasm_target && !prelude_split &&
+               preamble_split_auto_applies()) {
+        used_split = jit_try_split_preamble(&csrc, &split_c);
     }
     Buf *emit_c = used_split ? &split_c : &csrc;
 
@@ -3535,8 +3605,6 @@ static int cmd_build_once(const char *input, const char *out_path,
         }
     }
     buf_free(&csrc);
-
-    bool wasm_target = target && strcmp(target, "wasm") == 0;
 
     char chosen_out[1024];
     if (!out_path) {
@@ -3613,7 +3681,22 @@ static int cmd_build_once(const char *input, const char *out_path,
      * host link rather than the JIT: it takes `extern int
      * tur_closure_headers_enabled;` instead of the definition (the runtime
      * archive has the definition), and skips the project-header includes whose
-     * strict prototypes conflict with the loose externs the program emits. */
+     * strict prototypes conflict with the loose externs the program emits.
+     *
+     * --gc-sections, because "all-or-nothing" is literal: the archive is ONE
+     * object, so any reference pulled in the whole preamble, where the inline
+     * preamble had let -O2 drop every static function the program never
+     * called.  A one-line program went from 23 KB to 93 KB stripped.  The
+     * archive is built with -ffunction-sections/-fdata-sections, so the linker
+     * can drop the same functions the compiler used to (19 KB stripped -- a
+     * little under the inline build).
+     *
+     * -dead_strip is the Mach-O spelling, and it is needed there for the same
+     * reason: a one-line program measured 58,800 -> 171,896 bytes without it,
+     * and 53,312 with (macOS 27 / Apple clang 21, arm64).  Mach-O strips at
+     * atom granularity, so the archive's section flags are already enough.
+     * Windows is the one arm still linking without it: MinGW's ld has
+     * --gc-sections, but no Windows run has checked a PE link with it. */
     Buf split_flags;
     buf_init(&split_flags);
     if (used_split) {
@@ -3622,6 +3705,11 @@ static int cmd_build_once(const char *input, const char *out_path,
             Buf inj;
             buf_init(&inj);
             buf_printf(&inj, "-lturt_preamble -L%s", libdir);
+#if defined(__APPLE__)
+            buf_puts(&inj, " -Wl,-dead_strip");
+#elif !defined(_WIN32)
+            buf_puts(&inj, " -Wl,--gc-sections");
+#endif
             if (autolink.len > 1) {
                 buf_putc(&inj, ' ');
                 buf_puts(&inj, autolink.data);
@@ -10649,7 +10737,11 @@ static int usage_build(void) {
         "  --runtime=lib     force the archive link (lean preferred, else libturi.a).\n"
         "                    Set TUR_RUNTIME_LIB to point at the archive if not found.\n"
         "  --runtime=source  force recompiling the runtime sources.\n"
-        "                    TUR_RUNTIME=auto|lib|source seeds the default for a build.\n"
+        "  --runtime=split   insist on the preamble split that auto takes on Linux\n"
+        "                    and Windows when libturt_preamble.a is present: the\n"
+        "                    fixed runtime preamble is linked, not recompiled per\n"
+        "                    program.  TUR_PREAMBLE_SPLIT=0 keeps it inline.\n"
+        "                    TUR_RUNTIME=auto|lib|source|split seeds the default.\n"
         "  --link-flags <f>  (tur link) extra linker flags, e.g. \"-L<dir> -lfoo\"\n"
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
         "                    (defaults to `<out>.manifest`). Lists each export\n"

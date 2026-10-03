@@ -330,6 +330,28 @@ jobs:
             *) echo "::error::unexpected tur --version output"; exit 1 ;;
           esac
 
+      # cc-path-preamble-split-plan: the preamble split is the DEFAULT on Linux
+      # and Windows, and it FAILS CLOSED.  A hash mismatch, a missing
+      # libturt_preamble.a, or any other declined precondition makes a build
+      # quietly keep the whole preamble, and every fixture still passes, slower.
+      # Without this probe, a tree that lost the split would report green here
+      # having run the old path.  Linux only: macOS does not default to the split
+      # yet (cc-path-preamble-split-plan, "Left").
+      - name: Verify the preamble split engages by default
+        if: runner.os == 'Linux' && matrix.part == 'fixtures'
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_SHOW_CC=1 TUR_JIT_TIMING=1 \
+                  ./build/tur build /tmp/splitprobe.tur -o /tmp/splitprobe 2>&1) || true
+          printf '%s\n' "$out"
+          case "$out" in
+            *-lturt_preamble*) ;;
+            *) echo "::error::a default build did not take the preamble split -- see any 'disengaged' reason above (regenerate src/runtime/generated/ with tools/gen-runtime-split.py after a preamble change)"
+               exit 1 ;;
+          esac
+          /tmp/splitprobe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "the default build takes the split and the artifact runs."
+
       - name: Run fixture suite
         if: matrix.part == 'fixtures'
         # The whole corpus in one shard -- see the matrix note above for what
@@ -922,22 +944,21 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
 
-  # cc-path-preamble-split-plan: run the corpus with the split runtime ON.
+  # cc-path-preamble-split-plan: run the corpus with the WHOLE preamble.
   #
-  # Nothing in CI exercised `--runtime=split` at all, so the split PR could go
-  # fully green -- twelve jobs, all passing -- while the feature it adds was
-  # never once executed.  That green attested "the opt-in path does not break
-  # the default path", which is worth knowing and is not what it looked like.
-  # It is the same shape as
-  # docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md: a
-  # suite reporting PASS for a path it never took.
+  # This job used to be `split`, running the suite under TUR_RUNTIME=split when
+  # the split was opt-in.  The split is now the default on Linux and Windows, so
+  # `test` and `windows` run it, and this job covers the path the default left
+  # behind: every program compiling the runtime preamble inline.  That path is
+  # not dead.  A `--target tur` build has no libturt_preamble.a, sanitizer and
+  # --debug builds keep the preamble inline on purpose, and an install without
+  # the archive falls back to it -- all silently, because the fallback is the
+  # correct answer, not a degraded one.  Nothing else on Linux/gcc compiles it.
   #
-  # Linux only, deliberately.  The split's failure modes so far are compiler
-  # diagnostics from the emitted C (gcc rejecting what c2mir accepts), not
-  # platform behaviour, so a second OS would mostly buy runtime.  Widen it when
-  # a platform-specific split bug actually shows up.
-  split:
-    name: Split runtime (cc path)
+  # Linux only: macOS still defaults to the whole preamble, so its `test` legs
+  # cover it there.
+  whole-preamble:
+    name: Whole runtime preamble (cc path)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -945,6 +966,7 @@ jobs:
       CCACHE_MAXSIZE: 500M
       CCACHE_NOHASHDIR: "1"
       CCACHE_BASEDIR: ${{ github.workspace }}
+      TUR_PREAMBLE_SPLIT: "0"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -961,69 +983,49 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+          key: ccache-whole-preamble-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            ccache-split-${{ runner.os }}-
+            ccache-whole-preamble-${{ runner.os }}-
 
       # Debug, matching the `test` job: a Release tur elides contract checks,
-      # so contract fixtures fail with the wrong error and the baseline below
-      # would be measuring the build type rather than the split.
+      # so contract fixtures fail with the wrong error and this job would be
+      # measuring the build type rather than the preamble.
       - name: Configure (Debug)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
-      # ALL targets: --runtime=split links libturt_preamble.a, and `tur` alone
-      # never builds it.  A tur-only build fails every fixture at the link with
-      # `cannot find -lturt_preamble`, which reads like a split bug and is not.
-      - name: Build (all targets -- split links libturt_preamble.a)
+      # ALL targets, so libturt_preamble.a IS present and the probe below shows
+      # TUR_PREAMBLE_SPLIT=0 is what turns the split off -- not a missing file.
+      - name: Build (all targets)
         run: cmake --build build -j
 
-      # Load-bearing, and the whole reason this job is worth having.  The split
-      # FAILS CLOSED: on any mismatch it silently emits the full preamble, so
-      # the suite still passes, slower, and nothing says so.  Without this
-      # check a build that lost the split entirely would report a clean green
-      # -- vacuously, having tested the default path twice.
-      - name: Verify the split actually engages
+      # The mirror image of the `test` job's engage probe.  If the opt-out
+      # stopped working, this job would quietly run the split a second time
+      # and report green for a path it never took.
+      - name: Verify the split does NOT engage
         run: |
-          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
-          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
-                  ./build/tur build /tmp/splitprobe.tur -o /tmp/splitprobe 2>&1) || true
+          test -f build/src/libturt_preamble.a || { echo "::error::libturt_preamble.a was not built"; exit 1; }
+          printf '(defn main [] : int 0)\n' > /tmp/wholeprobe.tur
+          out=$(TUR_SHOW_CC=1 ./build/tur build /tmp/wholeprobe.tur -o /tmp/wholeprobe 2>&1) || true
           printf '%s\n' "$out"
-          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
-            echo "::error::the split disengaged -- see the reason above (regenerate artifacts with tools/gen-runtime-split.py after a preamble change)"
-            exit 1
-          fi
-          if [ ! -x /tmp/splitprobe ]; then
-            echo "::error::split build produced no executable"
-            exit 1
-          fi
-          /tmp/splitprobe || { echo "::error::split-built binary did not run"; exit 1; }
-          echo "split engaged and the artifact runs."
+          case "$out" in
+            *-lturt_preamble*)
+              echo "::error::TUR_PREAMBLE_SPLIT=0 did not keep the whole preamble"
+              exit 1 ;;
+          esac
+          /tmp/wholeprobe || { echo "::error::whole-preamble binary did not run"; exit 1; }
+          echo "the whole preamble is compiled inline and the artifact runs."
 
-      # Plain "zero failures", like every other suite.
-      #
-      # This used to diff against a committed known-failure baseline, which was
-      # scaffolding while the split still had failures. Both lists reached empty
-      # on 2026-09-07, so the scaffolding went with them -- the investigation
-      # they carried is in
-      # docs/archive/cc-path-split-windows-and-hamt-findings.md.
-      #
-      # Worth one line on how they died, because the bug was in the harness and
-      # not the thing under test: with an empty list,
-      # `grep -vE '^\s*(#|$)' <file>` matches nothing and exits 1, and these
-      # steps run under `bash -e`. All four split legs reported
-      # `2828 passed, 0 failed` and then failed anyway. An empty-set edge case
-      # in a check is worse than no check, so the check is now the simple one.
-      - name: Suite under TUR_RUNTIME=split
+      - name: Suite with the whole preamble
         run: |
           set -o pipefail
-          TUR_RUNTIME=split bash tests/run.sh 2>&1 | tee /tmp/split-run.log
+          bash tests/run.sh 2>&1 | tee /tmp/whole-preamble-run.log
 
       - name: Save ccache
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+          key: ccache-whole-preamble-${{ runner.os }}-${{ github.sha }}
 
   # The fixture corpus under clang's -fsanitize=function (trap mode): every
   # indirect call the emitted C makes must go through a function pointer of
@@ -1393,6 +1395,25 @@ jobs:
         if: matrix.shard == '1/3'   # once
         run: TUR=./build-win/tur.exe bash tests/run-install.sh
 
+      # cc-path-preamble-split-plan: the preamble split is the default here, and
+      # it FAILS CLOSED -- a declined swap keeps the whole preamble and every
+      # fixture still passes, slower.  This probe is what notices.  It replaces
+      # the `windows-split` job, which ran the suite under TUR_RUNTIME=split
+      # while the split was opt-in; the suite below now runs it by default.
+      - name: Verify the preamble split engages by default
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_SHOW_CC=1 TUR_JIT_TIMING=1 \
+                  ./build-win/tur.exe build /tmp/splitprobe.tur -o /tmp/splitprobe.exe 2>&1) || true
+          printf '%s\n' "$out"
+          case "$out" in
+            *-lturt_preamble*) ;;
+            *) echo "::error::a default build did not take the preamble split on Windows -- see any 'disengaged' reason above"
+               exit 1 ;;
+          esac
+          /tmp/splitprobe.exe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "the default build takes the split and the artifact runs."
+
       - name: Fixture suite
         env:
           TUR_TEST_SHARD: ${{ matrix.shard }}
@@ -1440,7 +1461,7 @@ jobs:
     # frames, fixed by tur_sjlj_x64_win.S, and the corpus is now 2702 passed /
     # 0 failed / 70 skipped on Windows
     # (docs/archive/jit-windows-support-spike.md).  Two things keep it off:
-    # runner time (shard it like `windows-split` below -- a third of the corpus
+    # runner time (shard it like `windows` above -- a third of the corpus
     # takes ~5.5 min on a 12-core box), and the fallback ratchet, whose
     # baseline is Linux-generated and would fail on the ~47 fixtures that fall
     # back to cc only on Windows.  See docs/reported/windows-jit-corpus-not-in-ci.md.
@@ -1573,113 +1594,6 @@ jobs:
       # of that fallback.
       - name: REPL spice load through the JIT
         run: TUR=./build-win-jit/tur.exe timeout 600 bash tests/turi/repl-spice-jit.sh
-
-  # The split runtime on WINDOWS.  A separate job from `split` (Linux) because
-  # the two disagree, and the disagreement is the point: on Linux exactly one
-  # fixture fails under TUR_RUNTIME=split; on Windows three do, and the extra
-  # two are a real defect (no output, exit 127, while the DEFAULT runtime
-  # passes the same fixture with the same compiler and build).
-  #
-  # That defect was invisible to CI for as long as it existed, which is how it
-  # spent a whole session being mischaracterised as "three failures in the
-  # split" when three was a Windows number and one was the Linux number.
-  #
-  # SHARDED, like the `windows` job and for the same reason: a single Windows
-  # runner takes 28-52 minutes on this corpus and has died outright once.
-  windows-split:
-    name: Windows split runtime ${{ matrix.shard }} (MSYS2/UCRT64)
-    runs-on: windows-latest
-    timeout-minutes: 45
-
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ['1/3', '2/3', '3/3']
-
-    defaults:
-      run:
-        shell: msys2 {0}
-
-    steps:
-      # As in the `windows` job: a CRLF checkout would rewrite the committed
-      # split-runtime artifacts under src/runtime/generated/, which are exactly
-      # what this leg tests.
-      - name: Keep LF line endings
-        shell: bash
-        run: git config --global core.autocrlf input
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            diffutils
-            python
-            git
-
-      # Debug: a Release tur elides contract checks, so contract fixtures fail
-      # with the wrong error and the baseline would be measuring the build type.
-      # Sanitizers are off regardless here -- MinGW ships no ASan runtime.
-      - name: Configure
-        run: >-
-          cmake -S . -B build-win -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-
-      # ALL targets: --runtime=split links libturt_preamble.a, which a
-      # `--target tur` build never produces.  Every fixture would then die at
-      # the link with `cannot find -lturt_preamble`, which reads like a split
-      # bug and is not.
-      - name: Build (all targets -- split links libturt_preamble.a)
-        run: cmake --build build-win -j
-
-      # The split FAILS CLOSED: on a hash mismatch it silently emits the full
-      # preamble and everything still passes, slower.  Without this, a leg that
-      # lost the split would report green having run the default path twice.
-      - name: Verify the split actually engages
-        run: |
-          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
-          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
-                  ./build-win/tur.exe build /tmp/splitprobe.tur -o /tmp/splitprobe.exe 2>&1) || true
-          printf '%s\n' "$out"
-          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
-            echo "::error::the split disengaged on Windows -- see the reason above"
-            exit 1
-          fi
-          [ -f /tmp/splitprobe.exe ] || { echo "::error::split build produced no executable"; exit 1; }
-          /tmp/splitprobe.exe || { echo "::error::split-built binary did not run"; exit 1; }
-          echo "split engaged and the artifact runs."
-
-      # Plain "zero failures", like the Linux leg and every other suite.
-      #
-      # This shard used to assert its failures were a SUBSET of a committed
-      # baseline, with a second step checking the other direction (every listed
-      # name still fails). That scaffolding existed while the split had known
-      # failures; both lists reached empty on 2026-09-07 and it went with them.
-      # The investigation is in
-      # docs/archive/cc-path-split-windows-and-hamt-findings.md -- including the
-      # fact that the second, cheaper check was the one that caught something,
-      # which is worth remembering if a baseline is ever needed again.
-      - name: Suite under TUR_RUNTIME=split (shard ${{ matrix.shard }})
-        env:
-          TUR_TEST_SHARD: ${{ matrix.shard }}
-        run: |
-          set -o pipefail
-          TUR=./build-win/tur.exe TUR_RUNTIME=split bash tests/run.sh 2>&1 \
-            | tee ./split-win.log
-
-      - name: Upload split log
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: split-win-${{ strategy.job-index }}
-          path: ./split-win*.log
-          if-no-files-found: ignore
 
   check-guides:
     name: Check guide toggle pairs
@@ -1965,14 +1879,28 @@ jobs:
       # rather than left to be discovered. ci.spec.js (the /ci dashboard) was
       # itself an instance of that trap: it existed, passed locally, and had
       # never run here.
-      # Each non-blocking suite also writes JUnit (one <testcase> per test)
-      # for the timings step below, so the suites get /ci rows like every
-      # ctest suite -- including an honest `status: fail` on a run whose job
-      # stayed green (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
-      - name: Run broader smoke suite (desktop, non-blocking)
+      # Each suite also writes JUnit (one <testcase> per test) for the timings
+      # step below, so both get /ci rows like every ctest suite -- including an
+      # honest `status: fail` on a run whose job stayed green, which is still
+      # reachable for mobile
+      # (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
+      #
+      # BLOCKING since 2026-10-02, which is that report's fix direction 6 and
+      # was left to a human on purpose.  What changed is that the condition it
+      # set -- "once the desktop suite is genuinely clean" -- is now true and
+      # measured rather than asserted: the last standing failure was marked in
+      # docs/reported/docs-offline-cold-pane-never-boots.md, and the /ci
+      # history puts the residual ISOLATED flake at 6 commits in 266 (2.3%),
+      # damped by `retries: 2` in playwright.config.js (see the note there).
+      #
+      # If this does block PRs on flake after all, the honest revert is
+      # `continue-on-error: true` back on this step -- not deleting specs from
+      # the path list below, which lowers the failure count by running less and
+      # is the failure mode that report calls "a regression wearing a fix's
+      # clothes".
+      - name: Run broader smoke suite (desktop) -- BLOCKING
         id: desktop
         working-directory: web
-        continue-on-error: true
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-desktop.xml
         run: npx playwright test --project=desktop --reporter=list,junit
@@ -1983,16 +1911,37 @@ jobs:
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
           tests/security.spec.js tests/ci.spec.js
 
+      # `always()` because the desktop step above now BLOCKS: without it a
+      # desktop failure skips this step, mobile produces no JUnit, and
+      # collect-playwright-timings reports web_mobile as `skip` with "suite did
+      # not run" -- so a desktop regression would silently cost the mobile row
+      # too, and the skip ledger would blame the wrong thing.
+      #
+      # Still non-blocking, and NOT because its tests are worse: mobile's
+      # isolated-flake rate (1.9%) is lower than desktop's and its clean streak
+      # is longer.  The blocker is its precondition -- the WebKit download step
+      # above is itself `continue-on-error`, and when that fails the whole
+      # project dies at `browserType.launch: Executable doesn't exist` before
+      # any test body runs (the post-mortem in that step's own comment).
+      # Gating here would turn a third-party download failure into a blocked
+      # PR, which is infrastructure flake, not a test signal.
       - name: Run mobile smoke suite (non-blocking)
         id: mobile
+        if: always()
         working-directory: web
         continue-on-error: true
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-mobile.xml
         run: npx playwright test --project=mobile --reporter=list,junit
 
-      # A non-blocking failure must still announce itself: on the job summary
-      # and as a workflow annotation, not five thousand lines down a log.
+      # Mobile still needs this: a non-blocking failure must announce itself on
+      # the job summary and as an annotation, not five thousand lines down a
+      # log.  Desktop no longer depends on it to be noticed -- the job is red
+      # -- but it stays in the table so both are read the same way, and its
+      # annotation is `::error` rather than `::warning` to match.
+      #
+      # `outcome` is the step result BEFORE continue-on-error is applied, so it
+      # reads "failure" for either step regardless of which one gates.
       - name: Report browser suite outcomes
         if: always()
         run: |
@@ -2002,11 +1951,11 @@ jobs:
             echo "| suite | outcome |"
             echo "|---|---|"
             echo "| deploy-gate (blocking) | passed |"
-            echo "| desktop (non-blocking) | ${{ steps.desktop.outcome }} |"
+            echo "| desktop (blocking) | ${{ steps.desktop.outcome }} |"
             echo "| mobile (non-blocking) | ${{ steps.mobile.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.desktop.outcome }}" = "failure" ]; then
-            echo "::warning title=Try Turmeric desktop suite failed::non-blocking, but see the playwright-report artifact and the web_desktop row on /ci"
+            echo "::error title=Try Turmeric desktop suite failed::this suite BLOCKS -- see the playwright-report artifact and the web_desktop row on /ci"
           fi
           if [ "${{ steps.mobile.outcome }}" = "failure" ]; then
             echo "::warning title=Try Turmeric mobile suite failed::non-blocking, but see the playwright-report artifact and the web_mobile row on /ci"
@@ -2029,10 +1978,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # `!cancelled()`, not `failure()`: the suites are continue-on-error, so a
-      # failing suite never put the job into a failure state and the report
-      # was uploaded only when nothing had failed -- the one case it was not
-      # needed.  The report is the evidence; upload it every time.
+      # `!cancelled()`, not `failure()`.  Written when BOTH suites were
+      # continue-on-error, so a failing suite never put the job into a failure
+      # state and `failure()` uploaded the report only when nothing had failed
+      # -- the one case it was not needed.  Desktop blocks now, so `failure()`
+      # would cover that one; mobile is still continue-on-error and would still
+      # slip through, and `!cancelled()` covers both without anyone having to
+      # re-derive which suite gates.  The report is the evidence; upload it
+      # every time.
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

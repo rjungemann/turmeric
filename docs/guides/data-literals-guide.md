@@ -165,7 +165,7 @@ let [m #map{"name" 1 "age" 2}]
   there is one `hamt-of` builder for every key type (the old `smap-of` /
   `smap-*` split was retired in TMS3). (Runtime-built string keys must outlive
   the map -- the HAMT does not copy keys; see
-  [GMK / TCE4](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/typed-collection-elements-plan.md).) 
+  [GMK / TCE4](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/typed-collection-elements-plan.md).) 
 
 An odd number of slot forms is a `TUR-E0280` read error.
 
@@ -313,8 +313,8 @@ Rules:
 ## Numeric literals: `#rat{...}` and `#cx{...}`
 
 The numeric tower ships two more literals, for the exact rational type in
-[`stdlib/rational.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/rational.tur) and the complex type in
-[`stdlib/complex.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/complex.tur). Both are always on -- they are
+[`stdlib/rational.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/rational.tur) and the complex type in
+[`stdlib/complex.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/complex.tur). Both are always on -- they are
 core data-literal dispatches, not `#lang` layers.
 
 ### `#rat{n/d}` -- exact rationals

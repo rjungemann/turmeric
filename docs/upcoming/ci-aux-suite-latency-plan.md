@@ -18,7 +18,7 @@
 >
 > Written in response
 > to "why do the macOS auxiliary suites take 56m currently?" against
-> [#1010](https://github.com/rjungemann/turmeric/pull/1010), and then widened
+> [#1010](https://github.com/turmeric-lang/turmeric/pull/1010), and then widened
 > when the measurement showed the macOS runner POOL, not macOS CPU, is the
 > binding constraint.
 > **Type:** CI / test infrastructure

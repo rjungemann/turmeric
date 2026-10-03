@@ -31,7 +31,7 @@ if [ -f "$UPSTREAM" ]; then
     # shellcheck disable=SC1090
     . "$UPSTREAM"
 fi
-REPO="${MIR_REPOSITORY:-https://github.com/rjungemann/mir.git}"
+REPO="${MIR_REPOSITORY:-https://github.com/turmeric-lang/mir.git}"
 COMMIT="${MIR_COMMIT:-}"
 
 FROM=""

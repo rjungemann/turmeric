@@ -87,6 +87,11 @@ jobs:
           # failed at the C compile step.  Verified broken on macOS and Windows
           # before this; docs/archive/release-archive-cannot-compile.md.
           cp build/src/libturt_runtime.a dist/lib/
+          # libturt_preamble.a is what lets a default build skip recompiling the
+          # runtime preamble in every program (cc-path-preamble-split-plan).
+          # Without it the build still works -- it keeps the whole preamble --
+          # so a missing copy here would only ever show up as slowness.
+          cp build/src/libturt_preamble.a dist/lib/
           # TUR_JIT defaults ON (vendored MIR), so libturi.a carries the JIT
           # engine's image API and links PUBLIC against MIR: a C host that
           # embeds libturi and calls that API needs libtur_mir.a beside it.
@@ -257,6 +262,7 @@ jobs:
 
           cp build/tur.exe dist/bin/
           cp build/src/libturt_runtime.a dist/lib/
+          cp build/src/libturt_preamble.a dist/lib/
           cp build/src/libturi.a dist/lib/
           # See the `build` legs: the JIT engine's MIR, for libturi embedders.
           cp build/libtur_mir.a dist/lib/
@@ -420,7 +426,12 @@ jobs:
       # anyone to lose. A consumer verifies with:
       #
       #   gh attestation verify turmeric-<tag>-<target>.tar.gz \
-      #     --repo rjungemann/turmeric
+      #     --repo turmeric-lang/turmeric
+      #
+      # Assets built BEFORE the 2026-10-02 org move need `--owner rjungemann`
+      # instead: the attestation lives in the owning account's index, which a
+      # repo transfer does not move, so `--repo` 404s for those under either
+      # owner name.  Measured on v0.59.0.
       #
       # Placed AFTER the checksums step so sha256sums.txt is attested too, and
       # BEFORE the release is created so a failure here strands the tag rather

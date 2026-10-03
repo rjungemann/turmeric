@@ -379,8 +379,8 @@ instance.
 
 ## See also
 
-- [sum-types-either-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md) -- the design plan and ADR.
-- [`stdlib/result.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/result.tur) / `stdlib/option.tur` --
+- [sum-types-either-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md) -- the design plan and ADR.
+- [`stdlib/result.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/result.tur) / `stdlib/option.tur` --
   the unary-payload tagged structs that predate `Either`.
 - [[data-literals-guide]] -- literal construction syntax that composes with
   sum payloads.

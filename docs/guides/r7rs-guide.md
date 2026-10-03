@@ -33,7 +33,7 @@ as `stable`, nothing needs enabling, a project manifest cannot refuse it, and
 no lifecycle warning is printed (`--enable=r7rs` is accepted as a no-op for a
 release, with a TUR-W0063 notice). The stages, design decisions and known gaps
 live in
-[docs/archive/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md).
+[docs/archive/r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md).
 
 The single-file examples in this guide are compiled and run, on both back
 ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
@@ -473,7 +473,7 @@ kind each one is:
   The import is an error that says so, as in Racket.
 - **not planned**: refused, with the reason.
 - **not yet**: planned, and refused until the stage in parentheses lands
-  ([docs/archive/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-srfi-plan.md)).
+  ([docs/archive/r7rs-srfi-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-srfi-plan.md)).
 
 `only`, `except`, `prefix` and `rename` work on an SRFI as on any library,
 and their names are checked against its export list. One imported name has
@@ -703,5 +703,5 @@ floor in `tests/run-r7rs-conformance.sh` when the count goes up.
 - [saffron-guide.md](saffron-guide.md) -- the dynamically typed Turmeric
   dialect whose substrate `#lang r7rs` shares.
 - [syntax-guide.md](syntax-guide.md) -- the `#lang` line and every base dialect.
-- [docs/archive/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)
+- [docs/archive/r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)
   -- the plan, stage by stage, with what shipped.

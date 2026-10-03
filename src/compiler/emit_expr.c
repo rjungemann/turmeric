@@ -9776,7 +9776,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * `int64_t`. */
                     if (i < MAX_FN_ARITY && phase_f_concrete && typed_carrier &&
                         !poly_param_ctype[i] &&
-                        !emit_type_is_wide_byval_adt(ctx, e->as.call_.args[i]->type) &&
                         type_is_word_closure_slot(
                             emit_resolve_type(ctx, e->as.call_.args[i]->type))) {
                         Buf cast; buf_init(&cast);

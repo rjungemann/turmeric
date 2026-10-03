@@ -170,7 +170,7 @@ Individual values inside an arena are never freed one at a time.
 
 **Region-allocated values.** The third reclamation mode, on by default since
 2026-09-05 (see the
-[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/regions-plan.md)).
+[regions plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md)).
 A `:heap` `defdata` node -- a list cell, a tree node, the per-link box of a
 recursive sum -- has no unique owner by construction, so neither RC nor a
 scope-exit drop can free it. A **region** does not ask who owns the node; it
@@ -337,7 +337,7 @@ to become GC-visible first, which is exactly what `RcVec` is: the buffer's
 owner is an rc block, so the collector always knows whether the buffer is still
 held. The same argument applies unchanged to a HAMT node, which is why a cycle
 through a `Map` entry remains unreclaimed. See
-[docs/archive/history/collections-cannot-hold-rc-values.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/collections-cannot-hold-rc-values.md)
+[docs/archive/history/collections-cannot-hold-rc-values.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/collections-cannot-hold-rc-values.md)
 for the full design history.
 
 A closure that *captures* an `rc<T>` releases it correctly; that is not a blind
@@ -382,7 +382,7 @@ fails if a stdlib type annotation introduces `rc<...>` without an explicit
 `rc-cycle-ok` review marker.
 
 The escape hatch for the day shared ownership *is* wanted lives in the
-library: [`stdlib/weak.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur) provides `rc/downgrade`,
+library: [`stdlib/weak.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/weak.tur) provides `rc/downgrade`,
 `weak/upgrade`, `weak/unwrap`, `weak/alive?`, and `weak/drop` -- Rust's
 `Rc::downgrade` / `Weak::upgrade` pairing, wrapping the runtime's weak-ref
 intrinsics. It is opt-in (`(load "stdlib/weak.tur")`) and stdlib itself uses

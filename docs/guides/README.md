@@ -261,7 +261,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Data Structures and Libraries → [hamt-guide.md](hamt-guide.md), [frame-guide.md](frame-guide.md), [stats-guide.md](stats-guide.md), [json-guide.md](json-guide.md), [schema-guide.md](schema-guide.md), [ecs-guide.md](ecs-guide.md)
 - Networking and Web → [httpd-guide.md](httpd-guide.md), [httpd-middleware-guide.md](httpd-middleware-guide.md), [tourist-routing-guide.md](tourist-routing-guide.md), [websocket-guide.md](websocket-guide.md), [web-stack-guide.md](web-stack-guide.md), [cloudflare-deployment-guide.md](cloudflare-deployment-guide.md)
 - Tutorials → [snake-game-tutorial.md](snake-game-tutorial.md), [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md), [parser-combinators-tutorial.md](parser-combinators-tutorial.md), [datalog-01-concepts.md](datalog-01-concepts.md)
-- Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
+- Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices)
 - Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [time-travel-tracing-guide.md](time-travel-tracing-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
 - Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
@@ -279,6 +279,6 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Planning and Design
 
 For design documents, architecture, and phase planning, see:
-- **[docs/](https://github.com/rjungemann/turmeric/tree/main/docs)** -- Main docs folder
-- **[../archive/](https://github.com/rjungemann/turmeric/blob/main/docs/archive/README.md)** -- Active planning documents
-- **[../archive/history/](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/README.md)** -- Historical completed work
+- **[docs/](https://github.com/turmeric-lang/turmeric/tree/main/docs)** -- Main docs folder
+- **[../archive/](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/README.md)** -- Active planning documents
+- **[../archive/history/](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/README.md)** -- Historical completed work

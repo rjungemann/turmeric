@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover -- preflight, not a code path
 # web/site.js carries the same constant for the hand-written pages; the comment
 # on SIDEBAR_GROUPS below explains why these two lists are deliberately
 # duplicated rather than shared.
-GITHUB_URL = 'https://github.com/rjungemann/turmeric'
+GITHUB_URL = 'https://github.com/turmeric-lang/turmeric'
 
 
 def get_creation_date(path: Path, repo_root: Path) -> str | None:

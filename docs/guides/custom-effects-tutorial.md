@@ -686,6 +686,6 @@ with-stderr-log
 ### Further reading
 
 - [effects-system-guide.md](effects-system-guide.md) -- algebraic effects reference: effect rows, capability effects, deep vs shallow handlers
-- [`tests/fixtures/effect-*`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- full fixture test suite for every effect feature
-- [`stdlib/future.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/future.tur) -- async/await built on the effect substrate
-- [`stdlib/stm.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/stm.tur) -- STM built on the effect substrate
+- [`tests/fixtures/effect-*`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- full fixture test suite for every effect feature
+- [`stdlib/future.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/future.tur) -- async/await built on the effect substrate
+- [`stdlib/stm.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/stm.tur) -- STM built on the effect substrate

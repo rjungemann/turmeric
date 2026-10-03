@@ -25,7 +25,7 @@ inside a C host process with I/O, FFI, and unsafe memory operations denied.
 > is the narrower value-model channel: an erasing ascription on a type variable
 > (and continuation resume) can still launder an integer into a pointer without
 > passing through the native dispatch. This is tracked as S-5 in the
-> [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
+> [security audit plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
 > the [Security Guide](security-guide.md#t3-the-sandboxed-interpreter) states
 > the promise and where it stands. Treat the sandbox as protection against
 > *careless* code, and against the native handle-forgery channel, but not yet
@@ -417,7 +417,7 @@ handles a constructor of the matching kind actually minted, so a forged integer
 is refused while a real handle round-trips. The per-native handle-kind column
 lives beside this table in `src/turi/native_caps.c`
 (`k_handle_rows[]`); see the
-[S-5 report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md) for the
+[S-5 report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md) for the
 model and for the value-model channel that remains (direction 2).
 
 The operations that are not native functions are checked where they are
