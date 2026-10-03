@@ -4028,16 +4028,25 @@
 ;; MW2: mw-rate-limit -- sliding-window per-IP rate limiter
 ;; =============================================================================
 ;;
-;; State: a heap-allocated table of (ip_hash, window_start, count) slots
-;; protected by a pthread_mutex. Slots are addressed by linear probing on
-;; the FNV-1a hash of the client IP. Each mw-rate-limit closure has its
-;; OWN table; multiple instances do not share state.
+;; State: a heap-allocated table of (ip, window_start, count) entries
+;; protected by a pthread_mutex. The table is 8-way set-associative: the
+;; FNV-1a hash of the client IP picks a set of 8 entries, and the IP string
+;; itself is the key, so two IPs whose hashes collide never share a counter.
+;; Each mw-rate-limit closure has its OWN table; multiple instances do not
+;; share state.
 ;;
-;; Sliding window semantics: each slot remembers when its current window
+;; Sliding window semantics: each entry remembers when its current window
 ;; started. A request bumps the count; if (now - window_start) > window_s
 ;; the window resets first. When count > requests, the request is rejected
 ;; with 429 and a `Retry-After` header carrying the seconds until the
 ;; current window ends.
+;;
+;; A new IP takes an empty entry of its set, else one whose window has
+;; already ended (it carries no information), else the entry whose window
+;; started longest ago. So the table never fails open: a flood of distinct
+;; IPs cannot fill it so that every further IP goes unlimited -- under one,
+;; the IPs it evicts merely start a fresh window. Each check touches at most
+;; 8 entries.
 ;;
 ;; This is a single-process limiter -- it does not coordinate across
 ;; multiple server instances. Share the table only within one process.
@@ -4055,14 +4064,15 @@
 (defn httpd-mw-ratelimit-new [requests : int window-s : int] : int
   ```c
   typedef struct {
-      uint32_t ip_hash;
-      int64_t  window_start_s;
+      uint32_t ip_hash;          /* FNV-1a of the whole key; 0 = empty */
       int32_t  count;
+      int64_t  window_start_s;
+      char     ip[48];           /* the key (INET6_ADDRSTRLEN fits) */
   } RLEntry;
   typedef struct {
       pthread_mutex_t mtx;
       RLEntry        *entries;
-      int             capacity;
+      int             capacity;  /* n_sets * 8 */
       int             window_s;
       int             max_requests;
   } RLState;
@@ -4086,7 +4096,7 @@
   /* __tur_include__: static void httpd_rl_cleanup_all(void) { RLReg *r = g_rl_registry; while (r) { RLReg *nx = r->next; if (r->entries) free(r->entries); if (r->st) free(r->st); free(r); r = nx; } g_rl_registry = 0; } */
   RLState *st = (RLState *)calloc(1, sizeof(RLState));
   if (!st) return 0;
-  st->capacity     = 1024;
+  st->capacity     = 256 * 8;   /* 256 sets of 8 ways, 128 KiB */
   st->window_s     = window_s > 0 ? (int)window_s : 1;
   st->max_requests = requests > 0 ? (int)requests : 1;
   st->entries      = (RLEntry *)calloc((size_t)st->capacity, sizeof(RLEntry));
@@ -4111,64 +4121,73 @@
   ```c
   #include <time.h>
   typedef struct {
-      uint32_t ip_hash;
-      int64_t  window_start_s;
+      uint32_t ip_hash;          /* FNV-1a of the whole key; 0 = empty */
       int32_t  count;
+      int64_t  window_start_s;
+      char     ip[48];           /* the key (INET6_ADDRSTRLEN fits) */
   } RLEntry;
   typedef struct {
       pthread_mutex_t mtx;
       RLEntry        *entries;
-      int             capacity;
+      int             capacity;  /* n_sets * 8 */
       int             window_s;
       int             max_requests;
   } RLState;
   if (!state || !ip || !*ip) return 0;
   RLState *st = (RLState *)(intptr_t)state;
-  /* FNV-1a 32-bit hash of the IP cstr. */
+  /* FNV-1a 32-bit hash of the IP cstr: it picks the set and is a fast
+   * pre-check, but the key is the IP itself (the first 47 bytes of a longer
+   * one, whose hash still covers it whole) -- two IPs whose 32-bit hashes
+   * collide used to share one counter. */
   uint32_t h = 2166136261u;
   for (const char *p = ip; *p; p++) {
       h ^= (uint8_t)*p;
       h *= 16777619u;
   }
   if (h == 0) h = 1;  /* reserve 0 for "empty slot" */
+  const int ways = 8;
+  int n_sets = st->capacity / ways;
+  RLEntry *set = &st->entries[(size_t)(h % (uint32_t)n_sets) * (size_t)ways];
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   int64_t now = (int64_t)ts.tv_sec;
   pthread_mutex_lock(&st->mtx);
-  /* Linear probe up to capacity slots. */
-  int idx = (int)(h % (uint32_t)st->capacity);
-  for (int probe = 0; probe < st->capacity; probe++) {
-      RLEntry *e = &st->entries[idx];
-      if (e->ip_hash == 0) {
-          /* Fresh slot. */
-          e->ip_hash        = h;
-          e->window_start_s = now;
-          e->count          = 1;
-          pthread_mutex_unlock(&st->mtx);
-          return 0;
-      }
-      if (e->ip_hash == h) {
-          /* Existing window for this IP. */
-          int64_t age = now - e->window_start_s;
-          if (age >= (int64_t)st->window_s) {
-              e->window_start_s = now;
-              e->count          = 1;
-              pthread_mutex_unlock(&st->mtx);
-              return 0;
-          }
-          e->count++;
-          if (e->count > st->max_requests) {
-              int retry = (int)((int64_t)st->window_s - age);
-              if (retry < 1) retry = 1;
-              pthread_mutex_unlock(&st->mtx);
-              return retry;
-          }
-          pthread_mutex_unlock(&st->mtx);
-          return 0;
-      }
-      idx = (idx + 1) % st->capacity;
+  RLEntry *hit = NULL, *empty = NULL, *ended = NULL, *oldest = NULL;
+  for (int w = 0; w < ways; w++) {
+      RLEntry *e = &set[w];
+      if (e->ip_hash == 0) { if (!empty) empty = e; continue; }
+      if (e->ip_hash == h && strncmp(e->ip, ip, sizeof e->ip - 1) == 0) { hit = e; break; }
+      if (now - e->window_start_s >= (int64_t)st->window_s) { if (!ended) ended = e; }
+      if (!oldest || e->window_start_s < oldest->window_start_s) oldest = e;
   }
-  /* Table full -- fail-open (allow). */
+  if (!hit) {
+      /* A new IP: an empty entry, else one whose window has ended, else the
+       * oldest window in the set.  Never fail open -- a full table used to
+       * allow every IP it could not place. */
+      RLEntry *e = empty ? empty : ended ? ended : oldest;
+      e->ip_hash        = h;
+      e->window_start_s = now;
+      e->count          = 1;
+      strncpy(e->ip, ip, sizeof e->ip - 1);
+      e->ip[sizeof e->ip - 1] = '\0';
+      pthread_mutex_unlock(&st->mtx);
+      return 0;
+  }
+  /* Existing window for this IP. */
+  int64_t age = now - hit->window_start_s;
+  if (age >= (int64_t)st->window_s) {
+      hit->window_start_s = now;
+      hit->count          = 1;
+      pthread_mutex_unlock(&st->mtx);
+      return 0;
+  }
+  hit->count++;
+  if (hit->count > st->max_requests) {
+      int retry = (int)((int64_t)st->window_s - age);
+      if (retry < 1) retry = 1;
+      pthread_mutex_unlock(&st->mtx);
+      return retry;
+  }
   pthread_mutex_unlock(&st->mtx);
   return 0;
   ```)

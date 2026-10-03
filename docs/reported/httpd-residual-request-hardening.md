@@ -5,7 +5,24 @@ denial of service, a policy gap or a misleading surface).
 **Filed:** 2026-09-30, by security-audit-plan WP4 (M-4).
 **Tag:** security-
 
-**Narrowed 2026-10-03: item 10 is fixed too; 3, 4 and 9 remain** (3 and 4
+**Narrowed again 2026-10-03: item 4 is fixed; 3 and 9 remain** (3 needs a
+default chosen, 9 is an enhancement).
+
+- **4** -- `mw-rate-limit`'s table is keyed by the IP string (first 47
+  bytes, the whole of any IPv6 text form; the hash still covers a longer
+  key), so `10.0.107.237` and `10.2.219.40`, which share an FNV-1a hash, no
+  longer share a counter.  It is 8-way set-associative (256 sets, 2048
+  entries, 128 KiB): a new IP takes an empty entry of its set, else one whose
+  window has ended, else the oldest window in the set.  The default chosen is
+  **evict, never fail open and never fail closed**: a flood of distinct IPs
+  restarts the windows of the IPs it evicts, but a new IP is always tracked,
+  so it cannot leave every later IP unlimited (4096 distinct IPs used to);
+  and each check touches at most 8 entries, so the flood buys no
+  per-request scan.  Pinned by the `rl` cases in
+  `tests/fixtures/httpd-request-hardening` -- against the old table the
+  colliding IP was refused and the IP after the flood was never limited.
+
+**Narrowed 2026-10-03: item 10 is fixed too; 3, 4 and 9 remained** (3 and 4
 need a default chosen, 9 is an enhancement).
 
 - **10** -- `httpd-req-multipart-parse` refuses a non-`multipart/` media type;
