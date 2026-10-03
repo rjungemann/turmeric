@@ -616,11 +616,12 @@ harness's documented report-only class.
   runtime". So RE2 would consume the correctness path only, and is unstarted
   by decision. Trigger 1 above, which is phrased in terms of a profile showing
   the re-check is a real cost, cannot be fired by RE2.
-- **The gap that should be closed before graduating this row** is
+- **The gap that should be closed before graduating this row** was
   [reads-measure-rejected-in-invariant-and-pre](../reported/reads-measure-rejected-in-invariant-and-pre.md):
-  a `#reads` measure is rejected in a `:invariant` by `TUR-E0375` while a
-  parameter refinement accepts it, so no stdlib container's length can appear
-  in an invariant (every stdlib accessor is inline C). The bounded-index walk
-  this plan cites as its motivating example therefore cannot be written
-  against a real container -- only against a bound passed in as a plain
-  `int`.
+  a `#reads` measure was rejected in a `:invariant` by `TUR-E0375` while a
+  parameter refinement accepted it, so no stdlib container's length could
+  appear in an invariant. **Half-closed 2026-10-03:** the gate now accepts a
+  `#reads` measure in every contract position, so the bounded-index walk can be
+  written against a real container and is runtime-checked
+  (`refine-reads-measure-contract-positions`). It is not yet *proved*, even
+  inside `frozen` -- the report lists the three changes that stand in the way.

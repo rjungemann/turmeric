@@ -198,10 +198,9 @@ callee's own internal check still runs and aborts on a dead handle at runtime.
 > **The backstop is the accessor's *own* check, not an auto-generated contract.**
 > Read the second row carefully: it is `get-Pos!`'s hand-written `gens[idx]`
 > aliveness compare -- ordinary code in the body -- **not** a runtime contract
-> synthesized from the `#refine{ x | (alive? w x) }` parameter. That refinement
-> *contract* would be impure (`alive?` is impure -- the whole premise), and an
-> impure runtime contract is unemittable (`TUR-E0375`, "predicate has side
-> effects"); the compiler **suppresses** it (see [Codegen and
+> synthesized from the `#refine{ x | (alive? w x) }` parameter. The compiler
+> **suppresses** that entry contract for a `#reads` parameter, because the
+> crossing is the enforcement point (see [Codegen and
 > enforcement](#codegen-and-enforcement)). So a `#reads`-refined accessor gets
 > its safety backstop **only** from the check it writes itself. A minimal
 > accessor whose body is `(.n w)` with no internal guard -- like the
@@ -225,17 +224,28 @@ proof would be unsound, and is out of scope by construction.
 Two consequences of the measure being impure shape how a `#reads`-refined
 function compiles and how its crossings are enforced.
 
-**The entry contract is suppressed (it is unemittable).** An ordinary
-`#refine{ x | p }` parameter injects a runtime *entry contract* -- a
-`(tur-contract-check p ...)` at the top of the callee. For a `#reads` measure
-`p = (alive? w x)` is impure, and an impure contract predicate is a hard error
-(`TUR-E0375`: "contract predicate has side effects; predicates must be pure"),
-because whether the check is compiled in becomes observable. So the injector
-detects a `#reads`-measure predicate and **skips** the entry contract entirely
-(`rt_pred_reads_measure` in `src/compiler/elab_fns.c`). This is what lets a
-`#reads`-refined accessor `build`/`run` at all; the safety backstop is the
-accessor's own internal check (previous section), and non-`#reads` impure
-predicates still get `TUR-E0375` -- the suppression is scoped to the grant.
+**The entry contract is suppressed.** An ordinary `#refine{ x | p }` parameter
+injects a runtime *entry contract* -- a `(tur-contract-check p ...)` at the top
+of the callee. For a `#reads`-measure predicate the injector **skips** it
+(`rt_pred_reads_measure` in `src/compiler/elab_fns.c`): the crossing is where a
+`#reads` refinement is enforced, and the safety backstop is the accessor's own
+internal check (previous section).
+
+**The purity gate accepts a `#reads` measure.** A contract predicate with side
+effects is a hard error (`TUR-E0375`: "contract predicate has side effects;
+predicates must be pure"), because whether the check is compiled in becomes
+observable. A `#reads` measure's body is inline C, so the purity walk alone
+would call it impure. But `#reads` is the claim that it only *reads*, and a read
+is not observable however often the check runs. So the gate
+(`rt_pred_observably_impure`) does not count a call the predicate makes directly
+to a `#reads` measure. Its arguments are still walked, an impure term beside it
+is still `TUR-E0375`, and so is an unannotated function that wraps one. The
+other contract positions -- `:pre`, `:post`, a refined return, and a loop's
+`:invariant` -- therefore accept a `#reads` measure as an ordinary **runtime**
+check. Before 2026-10-03 all four were `TUR-E0375`
+([reads-measure-rejected-in-invariant-and-pre](../reported/reads-measure-rejected-in-invariant-and-pre.md)).
+A `#reads` invariant is not yet *proved*, even inside `frozen`; that report says
+why.
 
 **Enforcement of the crossing lives at compile time, under `--strict-refine`.**
 Because there is no runtime contract for a `#reads` crossing, an *unproven* one

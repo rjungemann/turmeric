@@ -332,7 +332,7 @@ VCSort rt_sort_of_kind(TypeKind k) {
  * like a defn's rather than being silently decorative.  Returns the new body
  * (the original when nothing was injected).  Must run while the function's
  * inner scope is still current -- the predicate is elaborated in it. */
-static bool rt_expr_definitely_impure(const Expr *x);
+static bool rt_pred_observably_impure(const Expr *x);
 
 /* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
  * Defined after rt_resolve_fn; forward-declared here for rt_inject_param_checks. */
@@ -356,7 +356,7 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f);
  * refinement experiment off. */
 static void rt_diag_impure_pred(Elab *e, const Expr *pred_e, Span span) {
     (void)e;
-    if (!pred_e || !rt_expr_definitely_impure(pred_e)) return;
+    if (!pred_e || !rt_pred_observably_impure(pred_e)) return;
     diag_emit_with_code(DIAG_ERROR, span, TUR_E0375_REFINE_EFFECTFUL,
         "contract predicate has side effects; predicates must be pure");
     diag_emit(DIAG_NOTE, span,
@@ -375,15 +375,16 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
         uint32_t pi = ct_idx[ci];
         if (pi >= n_params || !params[pi]) continue;
         /* C2 (#reads): a param whose refinement is a `#reads`-annotated measure
-         * is statically checked at its CROSSINGS, never at runtime.  The measure
-         * is impure by construction (that is why it needs the grant at all), so a
-         * runtime entry contract for it is impossible -- it would be TUR-E0375,
-         * "predicate has side effects" -- and would in any case defeat the
-         * trusted-congruence grant.  Suppress the entry-check injection here; the
-         * caller-side crossing obligation is the enforcement point (proven ->
-         * elided; unknown -> a kept impure check that is itself E0375, so a caller
-         * that cannot discharge the crossing still fails to compile).  The grant's
-         * soundness is pinned by tests/fixtures/errors/refine-stateful-*. */
+         * is statically checked at its CROSSINGS, never at runtime.  Suppress the
+         * entry-check injection here; the caller-side crossing obligation is the
+         * enforcement point (proven -> elided; unknown -> reported, a warning or
+         * under --strict-refine an error, as a proof-only obligation -- see
+         * `reads_no_runtime` in refine_resolve_call_sites).  This is a choice of
+         * enforcement point, not a purity verdict: the CT1 gate itself accepts a
+         * `#reads` measure in every contract position (rt_pred_observably_impure),
+         * and `:pre`, `:post`, a return refinement and `:invariant` keep their
+         * runtime checks.  The grant's soundness is pinned by
+         * tests/fixtures/errors/refine-stateful-*. */
         if (rt_pred_reads_measure(e, ct_preds[ci])) continue;
         const char *var_nm = ct_vars[ci];
 
@@ -536,7 +537,7 @@ Expr *elab_loop_invariant_pred(Elab *e, const Form *pred, Span span) {
     Expr *pred_e = elab_form(e, (Form *)pred);
     if (!pred_e) return NULL;
     rt_diag_impure_pred(e, pred_e, span);
-    if (rt_expr_definitely_impure(pred_e)) return NULL;
+    if (rt_pred_observably_impure(pred_e)) return NULL;
     pred_e = elab_saffron_truthy(e, pred_e, span);   /* D6, as for :pre */
     if (!type_eq(pred_e->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, span,
@@ -704,6 +705,11 @@ typedef struct RtPureCtx {
      * the rest of the walk (a frame opened afterwards loses a memo it could
      * have kept; that is a cost, never a wrong verdict). */
     bool     leaned_missing;
+    /* CT1 gate only (rt_pred_observably_impure): a call the PREDICATE makes
+     * directly to a `#reads` measure is UNKNOWN rather than walked.  Depth 0
+     * only, so every callee's verdict -- and its memo -- is exactly what it
+     * would be without the flag. */
+    bool     reads_exempt;
 } RtPureCtx;
 
 static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x);
@@ -922,9 +928,13 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
     case EX_CALL: {
         /* An indirect call (`fn_expr`) or a rank-2 poly call can land
          * anywhere, so there is no callee to interrogate. */
+        Binding *callee = x->as.call_.fn_binding;
         RtPurity r = (x->as.call_.fn_expr || x->as.call_.is_poly_call)
                    ? RT_P_UNKNOWN
-                   : rt_classify_binding(c, x->as.call_.fn_binding);
+                   : (c->reads_exempt && c->depth == 0 && callee &&
+                      callee->reads_params_mask != 0)
+                   ? RT_P_UNKNOWN
+                   : rt_classify_binding(c, callee);
         for (uint32_t i = 0; i < x->as.call_.n_args; i++)
             r = rt_p_join(r, rt_classify_expr(c, x->as.call_.args[i]));
         return r;
@@ -943,7 +953,7 @@ static RtPurity rt_classify_binding_top(Binding *b) {
     if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
     /* The declared-row veto lives in rt_classify_binding itself, so it is
      * memoized and transitive; nothing to add at the top. */
-    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false };
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false, false };
     return rt_classify_binding(&c, b);
 }
 
@@ -956,9 +966,21 @@ bool rt_binding_is_pure(Binding *b) {
 /* CT1/RT: does evaluating this elaborated predicate DO something observable?
  * Only a proven effect counts -- an unrecognised form answers false, so a
  * predicate the walk cannot model is never diagnosed and never blocks
- * elision on suspicion alone. */
-static bool rt_expr_definitely_impure(const Expr *x) {
-    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false };
+ * elision on suspicion alone.
+ *
+ * C2 (#reads): a direct call to a `#reads` measure does not count.  CT1's
+ * concern is a check whose evaluation changes state, so that compiling it in
+ * or out is observable; a measure that only READS borrowed state is neutral
+ * however often it runs.  Its body is still inline C (that is why it needs the
+ * annotation), so the plain walk calls it IMPURE -- the annotation is the
+ * trusted claim that it is not, the same trust a parameter refinement already
+ * extends to it (TUR-W0383 reports the violations the compiler can see).  The
+ * measure's ARGUMENTS are still walked, so `(vlen (next-vec!))` stays
+ * E0375, and so does an unannotated wrapper around one: only the predicate's
+ * own call sites are exempt.  One gate, so every contract position --
+ * parameter, `:pre`, `:post`/return, `:invariant` -- agrees. */
+static bool rt_pred_observably_impure(const Expr *x) {
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false, true };
     return rt_classify_expr(&c, x) == RT_P_IMPURE;
 }
 

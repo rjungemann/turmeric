@@ -770,7 +770,9 @@ maintains:
 
 `:invariant` goes directly after the condition, at most once (combine
 predicates with `and`). It must be a pure `bool` -- the same purity gate as any
-contract predicate (`TUR-E0375`).
+contract predicate (`TUR-E0375`). A `#reads` measure passes that gate, so an
+invariant can mention a container's length, as `(<= i (vlen v))`. It is
+runtime-checked: the analysis does not prove one yet.
 
 **It is a contract first.** The invariant is checked on entry and again as the
 last statement of every iteration; a failure panics with
@@ -1205,7 +1207,10 @@ anyway.
   prove -- so an effectful predicate makes behaviour depend on whether its own
   contracts were compiled in. Reported only on PROVEN impurity: a predicate
   calling a function whose body the purity walk does not model (a field read, a
-  loop) is left alone, since a wrong "impure" would reject working code.
+  loop) is left alone, since a wrong "impure" would reject working code. A
+  direct call to a `#reads` measure is not counted either: it only reads, so
+  running it is not observable (see
+  [stateful-refinements-guide](stateful-refinements-guide.md#codegen-and-enforcement)).
 - **[by design] Decisions are memoized within a compilation unit**, keyed by a fingerprint
   of the normalized VC under alpha-renaming, and every hit is confirmed by
   structural comparison before its verdict is reused. Repeating the same
