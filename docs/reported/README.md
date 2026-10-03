@@ -47,6 +47,16 @@ in the same change.
 | [httpd-residual-request-hardening](httpd-residual-request-hardening.md) | low-medium | WP4's httpd read-through.  **Narrowed 2026-10-01:** the quadratic header scan, the async writes that parked forever, silently-empty oversize request-line fields (now 400 / 414), the prefix-matched `Connection` header, the Basic-auth example that leaked username validity, and `mw-log`'s raw control bytes are fixed.  Left, each needing a default or an enhancement: no default in-flight cap on `httpd-new-async`, a rate limiter that hashes IPs to 32 bits and fails open when full, IPv4-only binding, loose multipart parsing |
 | ~~[lock-tracks-ref-not-resolved-commit](../archive/lock-tracks-ref-not-resolved-commit.md)~~ | medium | **RESOLVED 2026-10-01** (archived): a fetch checks out the lock's `:resolved` commit after the clone -- a bare-SHA fetch, else the branch's full history -- and never falls back to the branch tip; a commit that is gone is an error and no clone is kept.  `tur fetch --frozen` holds a fetch to the lock and never writes it.  Pinned by `tests/run-spice-fetch.sh` cases 11, 11b and 16-18 |
 
+## Refinement contract positions disagree about `#reads` (filed 2026-10-02)
+
+Found looking for an illustrating use case for the `loop-invariants`
+experiment and hitting the rejection on the first one tried -- a bounded-index
+walk whose invariant mentions the container's length.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [reads-measure-rejected-in-invariant-and-pre](reads-measure-rejected-in-invariant-and-pre.md) | medium | `TUR-E0375` is applied with no awareness of `#reads` in three of its four positions -- `:invariant`, `:pre` and a return refinement -- while a parameter refinement accommodates it (incidentally: the guard at `elab_fns.c:387` suppresses the entry-check injection and happens to skip the emit two lines later).  So the one mechanism the language has for an inline-C measure over borrowed state (C2's `#reads` + `frozen`) reaches a parameter refinement and nothing else.  Since every stdlib accessor is inline C, **no container's length or element can appear in a loop invariant** -- the bounded-index walk both `loop-invariants-plan` and `ecs-refinement-typed-apis-plan` cite as motivating cannot be written against a real container.  `vec-len` is declared `#fx{}`, so the effect row and the refinement purity walk also disagree about the same function.  Preferred fix is to teach `rt_diag_impure_pred` itself rather than copy the guard to three more sites: CT1's concern is observability of *writes*, and a read-only measure cannot be observed however often it runs |
+
 ## Effect rows and capability tags (filed 2026-10-01)
 
 Found investigating two security-guide questions -- whether `--no-proc-macros`

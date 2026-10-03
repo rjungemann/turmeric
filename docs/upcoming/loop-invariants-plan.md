@@ -603,6 +603,24 @@ harness's documented report-only class.
   [loop-invariant-silently-unverified-outside-a-defn](../reported/loop-invariant-silently-unverified-outside-a-defn.md).
   The "Scope of the defn-level pass" note above records the design; the report
   is that it is silent rather than declined.
-- The ECS `for-each` lowering itself (RE2) has not started -- it waits on its
-  own profile. What it needs from here is one `:invariant (>= i 0)` in its
-  expansion.
+- The ECS `for-each` lowering (RE2) is **no longer waiting on this plan, and
+  will not be the consumer that fires the trigger above.** C3 landed, and RE2
+  was re-measured 2026-10-02 (see its probe update in
+  [ecs-refinement-typed-apis-plan](v1/ecs-refinement-typed-apis-plan.md)): one
+  `:invariant (>= i 0)` in the expansion does discharge the bounds obligation,
+  3 of 3 proven under `--strict-refine`, with three negative controls
+  refuting. But the profile that gated RE2 shows the per-access bounds
+  re-check is *not* a real cost, and proving it changes no emitted code at all
+  -- a parameter refinement is a *hypothesis*, checked in the callee's
+  prologue, and the refinement guide says a hypothesis "is still checked at
+  runtime". So RE2 would consume the correctness path only, and is unstarted
+  by decision. Trigger 1 above, which is phrased in terms of a profile showing
+  the re-check is a real cost, cannot be fired by RE2.
+- **The gap that should be closed before graduating this row** is
+  [reads-measure-rejected-in-invariant-and-pre](../reported/reads-measure-rejected-in-invariant-and-pre.md):
+  a `#reads` measure is rejected in a `:invariant` by `TUR-E0375` while a
+  parameter refinement accepts it, so no stdlib container's length can appear
+  in an invariant (every stdlib accessor is inline C). The bounded-index walk
+  this plan cites as its motivating example therefore cannot be written
+  against a real container -- only against a bound passed in as a plain
+  `int`.
