@@ -12,7 +12,7 @@ notion of "untrusted input". This guide says which inputs the project promises
 to handle safely, so that a bug report has something to be graded against.
 
 Read this before filing a security report -- see
-[`SECURITY.md`](https://github.com/rjungemann/turmeric/blob/main/SECURITY.md)
+[`SECURITY.md`](https://github.com/turmeric-lang/turmeric/blob/main/SECURITY.md)
 for how. The difference between a bug and a non-bug here is usually the
 boundary, not the crash.
 
@@ -132,7 +132,7 @@ allowlist. The intended replacement is direnv's model -- hash the tree's
 `build.tur`, ask once, remember the answer -- which would turn auto-discovery
 from something this guide declines to promise into a documented design.
 Tracked as D-3 in the
-[security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
+[security audit plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
 
 ### Editor trust support
 
@@ -233,7 +233,7 @@ as a handle) and use-after-free are refused the same way, while a genuinely
 minted vector, map, HAMT or string still round-trips. The registry, the
 per-native handle-signature column it reads (`src/turi/native_caps.c`), and the
 one dispatch hook are described in
-[the S-5 report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md).
+[the S-5 report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md).
 
 What is **not** yet closed is the narrower *value-model* channel: an erasing
 ascription on a type variable, and continuation resume, still launder a caller
@@ -349,7 +349,7 @@ transit, not who produced them. Tags are annotated rather than signed, which is
 a recorded decision -- the attestation is what protects a downloader, and it
 needs no key anyone has to hold.
 
-**`brew install --HEAD rjungemann/turmeric/turmeric` builds whatever `main` is
+**`brew install --HEAD turmeric-lang/turmeric/turmeric` builds whatever `main` is
 at that moment and verifies no checksum.** That is the supported way to track
 development and the wrong way to install the compiler. The Homebrew formula is
 `--HEAD`-only by design; it is not a pinned channel.
@@ -370,7 +370,7 @@ commit. If that commit can no longer be fetched -- history rewritten -- the
 fetch fails and keeps no clone rather than falling back to the branch, which
 would quietly turn the pin back into branch-tracking. `tur fetch --frozen`
 holds a whole fetch to the lock and never writes it: run that in CI.
-([lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lock-tracks-ref-not-resolved-commit.md),
+([lock-tracks-ref-not-resolved-commit](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/lock-tracks-ref-not-resolved-commit.md),
 resolved.)
 
 So: **prefer a tag over a branch for `:ref`, and read a new spice before you add
@@ -477,9 +477,9 @@ that question is a possible future feature under its own name; it is not
 ## Reporting
 
 Private advisory form:
-<https://github.com/rjungemann/turmeric/security/advisories/new>. See
-[`SECURITY.md`](https://github.com/rjungemann/turmeric/blob/main/SECURITY.md).
+<https://github.com/turmeric-lang/turmeric/security/advisories/new>. See
+[`SECURITY.md`](https://github.com/turmeric-lang/turmeric/blob/main/SECURITY.md).
 
 The open items above are the audit's own backlog, tracked in the
-[security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
+[security audit plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
 Reporting one of them again is welcome but will not be news.

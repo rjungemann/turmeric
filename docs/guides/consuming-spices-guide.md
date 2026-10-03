@@ -18,7 +18,7 @@ and publish a spice of your own.
 ## Official First-Party Spices
 
 The canonical source for official spices is the
-[turmeric-spices](https://github.com/rjungemann/turmeric-spices) monorepo.
+[turmeric-spices](https://github.com/turmeric-lang/turmeric-spices) monorepo.
 Its packages include:
 
 | Spice | Description | C deps? |
@@ -46,16 +46,16 @@ independently with a per-package tag: `<spice>-vMAJOR.MINOR.PATCH`.
 Use `tur add` with `--subdir` to pull a spice from the monorepo:
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref test-v0.1.0 --subdir spices/test --name test
 
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref math-v0.1.0 --subdir spices/math --name math
 
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref sqlite-v0.1.0 --subdir spices/sqlite --name sqlite
 
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref json-v0.1.0 --subdir spices/json --name json
 ```
 
@@ -191,7 +191,7 @@ reproducible across machines and CI runs.
              :resolved   "a1b2c3d4e5f6..."
              :sha256     "abc123..."
              :fetched-at "2026-05-22T09:00:00Z"}
-    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+    "math" #{:url        "https://github.com/turmeric-lang/turmeric-spices"
              :ref        "math-v0.1.0"
              :subdir     "spices/math"
              :resolved   "d6e7f8a9b0c1..."
@@ -212,7 +212,7 @@ deflockfile
              :resolved   "a1b2c3d4e5f6..."
              :sha256     "abc123..."
              :fetched-at "2026-05-22T09:00:00Z"}
-    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+    "math" #{:url        "https://github.com/turmeric-lang/turmeric-spices"
              :ref        "math-v0.1.0"
              :subdir     "spices/math"
              :resolved   "d6e7f8a9b0c1..."
@@ -268,7 +268,7 @@ tooling. Optional spices that are absent do not cause a build error.
 
 ```turmeric no-check
 :spices #map{
-  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "test" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "test-v0.1.0"
               :subdir "spices/test"
               :optional true}
@@ -277,7 +277,7 @@ tooling. Optional spices that are absent do not cause a build error.
 
 ```sweet-exp
 :spices #map{
-  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "test" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "test-v0.1.0"
               :subdir "spices/test"
               :optional true}
@@ -397,7 +397,7 @@ CMake deps are also tracked in `tur.lock` with SHA-256 hashes for integrity
 verification. For the generated `cmake/CMakeLists.txt` format, the manifest
 schema, security considerations, and the outbound direction (publishing a
 Turmeric library so CMake projects can consume it), see the
-[CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
+[CMake/CPM integration notes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 
@@ -417,7 +417,7 @@ Turmeric library so CMake projects can consume it), see the
   fetch fails and keeps no clone -- it does not fall back to the branch, which
   would quietly undo the pin. A tag is still the clearer `:ref`, and read a
   new spice before you add it. See the
-  [Security Guide](https://github.com/rjungemann/turmeric/blob/main/docs/guides/security-guide.md)
+  [Security Guide](https://github.com/turmeric-lang/turmeric/blob/main/docs/guides/security-guide.md)
   for the promise this is measured against.
 - **`tur fetch --frozen`** fetches exactly what `tur.lock` pins and never
   writes it: a dependency with no row, or a `:url` / `:ref` / commit / tree

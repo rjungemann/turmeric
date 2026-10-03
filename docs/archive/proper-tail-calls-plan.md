@@ -471,7 +471,7 @@ emitted C was a hard error, so the Linux leg's silent exit-2 was the same defect
 wearing a warning.
 
 That is fixed, not worked around:
-[docs/archive/emit-tail-return-path-lacks-carrier-bridges.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-tail-return-path-lacks-carrier-bridges.md).
+[docs/archive/emit-tail-return-path-lacks-carrier-bridges.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-tail-return-path-lacks-carrier-bridges.md).
 `emit_fn_return_spelling` is now the one ladder both paths call, and the `let`
 arm gained the bridge it was missing. The extraction was verified as a pure
 no-op first (zero snapshot churn with the old routing still in place), and only
@@ -936,10 +936,10 @@ five shapes, including the typed-`vec-fold` safety case) and
 `tailcall-dyn-leak` (the same shapes, LeakSanitizer-gated).
 
 Two pre-existing defects surfaced and are filed rather than fixed here:
-[saffron-catch-unwind-around-dyn-call-fn-crashes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/saffron-catch-unwind-around-dyn-call-fn-crashes.md)
+[saffron-catch-unwind-around-dyn-call-fn-crashes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/saffron-catch-unwind-around-dyn-call-fn-crashes.md)
 (which is why no T6 fixture panics; since resolved -- compiled only, the
 CPS entry wrapper read a panicking body's NULL result box) and
-[cps-capturing-closure-env-leaks-through-dyn-call](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cps-capturing-closure-env-leaks-through-dyn-call.md)
+[cps-capturing-closure-env-leaks-through-dyn-call](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-capturing-closure-env-leaks-through-dyn-call.md)
 (since resolved: the env is reaped at the DK entry boundary, unless `__kont`
 is the trampoline root, where a bounce would run the lambda after the reap).
 `#lang r7rs` does not exist yet; when it does, its procedures ride the same
@@ -1039,7 +1039,7 @@ makes "a frame is open here" and "there is cleanup after this call" the same
 condition. The residual risk moved somewhere the original text did not look --
 the emitted-C bridges on the way to the `return`, not the control constructs --
 and is now its own report
-([emit-tail-return-path-lacks-carrier-bridges](https://github.com/rjungemann/turmeric/blob/main/docs/reported/emit-tail-return-path-lacks-carrier-bridges.md)),
+([emit-tail-return-path-lacks-carrier-bridges](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/emit-tail-return-path-lacks-carrier-bridges.md)),
 contained by T2's exact-return-type gate. `tco-tail-call-panic-propagates` pins
 the panic-surfacing half.
 

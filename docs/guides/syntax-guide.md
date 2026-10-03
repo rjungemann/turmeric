@@ -685,7 +685,7 @@ Saffron module links against a Turmeric one in the same program. See
 
 **R7RS** is R7RS-small Scheme, over Saffron's dynamic substrate under a
 Scheme reader
-([r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)).
+([r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)).
 It **graduated in v0.57.0**: `tur dialects` shows it as `stable`,
 `tur experiments` no longer lists a row, the `#lang r7rs` line is all that is
 needed, and no lifecycle warning is printed. Today it has the reader (R1), the core
@@ -814,7 +814,7 @@ still accepted for one minor line, warned once (`TUR-W0064`) and ignored, so a
 file that opted in per-file keeps compiling across the boundary. Drop the
 token; nothing is lost, because what it turned on is now always on. At 0.50.0
 it becomes the same `TUR-E0330` any other trailing token gets. See
-[the decommission plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
+[the decommission plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
 
 ---
 

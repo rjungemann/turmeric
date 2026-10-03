@@ -6,7 +6,7 @@ that branch points at, and the consumer is asked to approve the change rather
 than being held to the commit they locked.
 
 **Status:** **RESOLVED 2026-10-01.** The detection half shipped as C-3 of
-[security-audit-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
+[security-audit-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
 the pinning half landed with the fix direction below, both of its hazards
 handled, and the `--frozen` flag it recommended pairing with it.
 

@@ -43,8 +43,8 @@ of the four offline-docs assertions are therefore unexercised, not one.
 
 | run | head | result |
 | --- | --- | --- |
-| [36901587136](https://github.com/rjungemann/turmeric/actions/runs/36901587136) (`main`) | `8bb60d0` | 1 failed, 1 skipped, 2 did not run, 128 passed |
-| [36911685873](https://github.com/rjungemann/turmeric/actions/runs/36911685873) (#1009) | `57cd436` | 1 failed, 2 skipped, 140 passed |
+| [36901587136](https://github.com/turmeric-lang/turmeric/actions/runs/36901587136) (`main`) | `8bb60d0` | 1 failed, 1 skipped, 2 did not run, 128 passed |
+| [36911685873](https://github.com/turmeric-lang/turmeric/actions/runs/36911685873) (#1009) | `57cd436` | 1 failed, 2 skipped, 140 passed |
 
 Same test, same line, same 30s timeout on both. The +12 on the PR is the `/ci`
 spec it adds; it is unrelated to this.

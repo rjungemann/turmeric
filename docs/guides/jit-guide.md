@@ -434,7 +434,7 @@ fall back are listed by name in `tests/jit-fallback-baseline.txt` -- a new
 fallback fails the run, a reclaimed one is reported so its line can be
 removed, and `TUR_JIT_FALLBACK_UPDATE=1 bash tests/run-jit.sh` regenerates
 the file. See
-[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md)
 (a blob URL rather than a relative one because `docs/reported/` is not
 rendered into the pack -- the Justfile's `docs` recipe spells out why).
 
@@ -473,7 +473,7 @@ producing the shape (it builds every such value with statements in the body),
 so today only user inline C could reach it, and
 `tests/fixtures/jit-inline-c-struct-stmtexpr-slot` fails if the MIR pin ever
 drops below the fix. See
-[jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
+[jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
 for the shapes and the sites. On an older pin, a Linux-only `stdout mismatch`
 in the JIT suite on a program that passes under cc is the signature.
 

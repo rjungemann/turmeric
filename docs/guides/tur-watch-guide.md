@@ -16,7 +16,7 @@ need a "file changed, react" loop.
 
 ```turmeric no-check
 :spices #map{
-  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "watch" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "watch-v0.2.0"
                :subdir "spices/watch"}
 }
@@ -24,7 +24,7 @@ need a "file changed, react" loop.
 ```sweet-exp
 :spices
 #map{
-  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "watch" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "watch-v0.2.0"
                :subdir "spices/watch"}
 }

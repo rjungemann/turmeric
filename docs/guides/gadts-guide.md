@@ -147,7 +147,7 @@ shared range bounds):
 
 This is exactly the `Bound` GADT that backs `stdlib/range.tur`'s internal
 endpoint representation -- `Inclusive` / `Exclusive` / `Unbounded` range
-bounds (see [`range-gadt-typeclass-migration-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/range-gadt-typeclass-migration-plan.md)).
+bounds (see [`range-gadt-typeclass-migration-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/range-gadt-typeclass-migration-plan.md)).
 
 GADT support is on by default, so no flag is needed. (Passing the legacy
 `-Xgadt` flag still works but prints a deprecation notice.)
@@ -742,5 +742,5 @@ defn show-type [x : any] :int
   that enables GADT skolem propagation
 - [hkt-guide.md](hkt-guide.md) -- Higher-kinded types; used by `equal-cong`
   and polymorphic GADT indices
-- [`tests/fixtures/gadt-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Working GADT examples
-- [`tests/fixtures/union-types-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing examples
+- [`tests/fixtures/gadt-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- Working GADT examples
+- [`tests/fixtures/union-types-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing examples

@@ -3,9 +3,10 @@
 > **Status: ALL SEVEN REPOS TRANSFERRED 2026-10-02.** O1 landed 2026-10-01;
 > O2 (redirect verification) RESOLVED; O3 (org pre-staging) done; Tiers 1-3
 > transferred, spices before turmeric per 4.1; **O4 (the Class A owner
-> literals) landed in the same PR as this text.** What remains is **O5** (the
-> ~520-occurrence Class B doc sweep) and **O6** (the four paths no test
-> covers). Written in
+> literals) and O5 (the 502-occurrence Class B doc sweep) both landed in the
+> same PR as this text.** What remains is **O6**, and of its four checks three
+> are done -- only "verify a release cut under the org" is genuinely
+> outstanding, since it needs a release. Written in
 > answer to "what is a good option for moving turmeric repos out of my
 > rjungemann account -- a free-tier GH org?" The short answer is **yes, GitHub
 > Free for organizations is sufficient and costs nothing here**, and section 1
@@ -86,8 +87,8 @@ resolves a URL into it at build or install time.
 | 1 | `asdf-turmeric` | `turmeric-lang` | **2026-10-02** | `lib/utils.bash`, `README.md`, `bin/help.overview` |
 | 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | `build.yml:36,107`, `README.md` |
 | 2 | `trowel` | `turmeric-lang` | **2026-10-02** | cask name (4.3); `CMakeLists.txt:219`. **Its 7 secrets carried over** -- see 2.1 |
-| 3 | `turmeric-spices` | `turmeric-lang` | **2026-10-02** | its 3 hardcoded `rjungemann/turmeric` refs (`ci.yml:36,373,404`) |
-| 3 | `turmeric` | `turmeric-lang` | **2026-10-02** | O5 sweep; O6 verification. Class A (O4) done; `SENTRY_DSN` org-wide |
+| 3 | `turmeric-spices` | `turmeric-lang` | **2026-10-02** | its own repo's 3 hardcoded refs (`ci.yml:36,373,404`) -- a spices-side PR |
+| 3 | `turmeric` | `turmeric-lang` | **2026-10-02** | O6: verify a post-move release's attestation. O4 + O5 done; `SENTRY_DSN` org-wide |
 
 Every transfer was verified afterwards, not assumed: for all five, an
 old-path `git clone --depth 1` and `git ls-remote` still succeed, and the
@@ -121,7 +122,7 @@ repositories**. The Free plan's 2,000 minutes/month applies only to private
 repos, and there it is billed against multipliers -- macOS 10x, Windows 2x.
 
 That multiplier is why visibility, not plan tier, is the real decision. From
-[ci-aux-suite-latency-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ci-aux-suite-latency-plan.md),
+[ci-aux-suite-latency-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/ci-aux-suite-latency-plan.md),
 the `Auxiliary suites (macos-latest)` job alone runs **56-66 minutes**. Were
 these repos private on a Free org:
 
@@ -574,7 +575,7 @@ Nothing else was owed at transfer time: `SENTRY_DSN` was already org-wide
 (2.1), there is no web deploy integration to reconnect (2.1), and there is no
 branch protection or ruleset to re-apply (section 2).
 
-### O5 -- sweep Class B
+### O5 -- sweep Class B (**LANDED 2026-10-02**)
 
 **The only step left besides O6.** One commit, applying the 3.2 rule. Not a
 blind `sed`: the 34 surviving Class C references would be caught by one. BSD
@@ -602,8 +603,53 @@ three hardcoded refs (`ci.yml:36,373,404`) to sweep in its own repo.
 
 Then `git diff --stat`, and read the diff before committing -- the pattern is
 URL-anchored precisely so that `rjungemann/turmeric#1002` cannot match.
-Regenerate the docs (`tur run docs`) and confirm the rendered output moves
-only where expected.
+
+**What actually ran.** Anchored on *both* the host and the repo name, which is
+stronger than the one-liner above and is what made the result reviewable:
+
+```
+\b(github\.com|raw\.githubusercontent\.com)/rjungemann/(<7 repo names, longest first>)(?![A-Za-z0-9-])
+```
+
+Requiring a real repo name is not belt-and-braces -- it is what protects the
+sweep rule three paragraphs up, which contains the literal
+`github.com/rjungemann/<repo>` and would otherwise have been rewritten into a
+sentence saying to rewrite `turmeric-lang` to `turmeric-lang`.
+
+Result: **502 occurrences across 157 files**, plus 3 by hand. Totals reconcile
+exactly -- 514 found, minus 8 in `CHANGELOG.md`, minus 4 in this file = 502.
+
+**Two files were excluded from the automated pass:**
+
+- `CHANGELOG.md` (8) -- Class C, a historical record.
+- **this plan** -- it carries deliberate *examples* of the old owner: the sweep
+  rule itself, the `asdf plugin add` URL users already have in their shells,
+  and the push-redirect probe in O2a. Rewriting those would make each sentence
+  assert the opposite of what it means. Its two genuine citation links were
+  updated by hand; three old-owner strings remain on purpose.
+
+One more hand edit, because the automated pattern only matches URLs:
+`docs/guides/security-guide.md` had a live
+`brew install --HEAD rjungemann/turmeric/turmeric`. The three *other*
+occurrences of that string stay -- `web/worker.js:6` records what the installer
+"used to be", and two in this file are before/after contrasts.
+
+**Verified after the sweep**, which is the whole point of anchoring:
+
+| Kept intact | Count |
+| --- | --- |
+| Class C issue shorthand (`rjungemann/turmeric#1002`) | 34 |
+| Filesystem paths (`/Users/rjungemann/...`) | 22 |
+| Deliberate 3-part tap references | 3 |
+| Surviving old-owner URLs (CHANGELOG 8 + this plan 2) | 10 |
+
+No non-ASCII was introduced: the diff shows 7 lines with non-ASCII added and 7
+removed -- box-drawing characters in a tree diagram, carried along by lines
+whose URL changed.
+
+`genguides.py` output is **not** committed, so no doc regeneration is owed;
+the guides are the source. The rendered site picks the change up on the next
+web deploy.
 
 ### O6 -- verify the four paths no test covers
 
@@ -690,5 +736,5 @@ Two consequences worth keeping in view:
   considering once the move is done -- a check that the Class A files contain
   no literal owner would keep the one-line property true -- but adding a job
   to the auxiliary suites runs against
-  [ci-aux-suite-latency-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ci-aux-suite-latency-plan.md),
+  [ci-aux-suite-latency-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/ci-aux-suite-latency-plan.md),
   which is actively trying to make that job smaller.

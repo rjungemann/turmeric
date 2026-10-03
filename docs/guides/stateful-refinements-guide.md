@@ -12,7 +12,7 @@ description: Refining predicates over mutable state -- the `frozen` region and t
 > lingering `--enable=refined` was a no-op through 0.37.0 and is a hard
 > `TUR-E0310` from 0.38.0; delete it.) The design
 > of record is
-> [`docs/archive/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md).
+> [`docs/archive/refine-stateful-measures-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md).
 > A `#reads`-refined accessor proves its guarded crossings *and* codegens
 > (see [Codegen and enforcement](#codegen-and-enforcement) -- the impure
 > entry contract is suppressed). Read the
@@ -83,7 +83,7 @@ This is sound by construction, and needs no new machinery:
   arrive by different routes -- an in-frame borrow is visible to the frame, while
   a `^borrow` parameter's aliasing happened in the caller -- and for a while only
   the first was checked (see
-  [docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md)).
+  [docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md)).
 - `frozen` *borrows*, it does not consume: `w` is usable again after the region,
   so a real `despawn!` outside the region is fine.
 - Read-only accessors take `[^borrow w]` and coexist with the region borrow, so
@@ -299,7 +299,7 @@ both are worth knowing.
 about a mutable resource, congruent in a scope where that resource is frozen."
 The same `frozen` + `#reads` pair covers an open file (`(open? conn)`), a
 resizable buffer (`(in-bounds? buf i)` -- the bounds-elimination case
-[`loop-invariants-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md) wants;
+[`loop-invariants-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md) wants;
 pinned by
 `tests/fixtures/refine-stateful-resizable-bounds`: the guard proves inside the
 region, `grow!` is `TUR-E0200` there, and without the region the read is
@@ -344,7 +344,7 @@ feature. **Step 2 has landed** (as the `write-frames` experiment, graduated in
 0.37.0) -- `#writes w` / `#writes [a b]` declares which arguments a body may
 write, and a frame on a body with no inline C is *checked* rather than
 believed. See
-[`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/checked-write-frames-plan.md).
+[`checked-write-frames-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/checked-write-frames-plan.md).
 
 `#reads` itself is unchanged by it: still trusted where it cannot be checked,
 still refinement-only, still step 1. What a checked `#writes` frame buys today is on the
@@ -416,7 +416,7 @@ saying so beats a message about parameters.
 `#reads` is deliberately **not** part of this. It is the annotation that
 *grants* congruence, so letting it name a global would let a promise about
 mutable global state pay out in proofs -- see
-[`mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mutable-globals-plan.md)
+[`mutable-globals-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/mutable-globals-plan.md)
 sections 12.2 and 12.4, and the `refine-reads-frame-omits-global` fixture pair
 that pins what a broken read-side promise costs.
 
@@ -449,7 +449,7 @@ design -- there is no runtime fallback to fall back to -- so refusing buys a
 diagnostic, not a check. Outside `--strict-refine` the program still compiles
 and still runs the unearned crossing; what changed is that the compiler now
 says so rather than staying silent. Fix the frame. See
-[`trusted-refinement-claims-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/trusted-refinement-claims-plan.md)
+[`trusted-refinement-claims-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/trusted-refinement-claims-plan.md)
 (R2 for the mutable-global evidence, R4 slice 1 for the omitted-parameter
 evidence -- `errors/r4-checked-reads-refuses-param-read` pins the refusal and
 `refine-reads-multi-param-visible-quiet` the fixed frame, while
@@ -502,7 +502,7 @@ verdict would speak about actually exists.
   `^unique ^mut`, and the `TUR-E0200` exclusive-access rule the `frozen` region
   relies on.
 - [Uniqueness Types guide](uniqueness-types-guide.md) -- `^unique` semantics.
-- [`refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)
+- [`refine-stateful-measures-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)
   -- the design record, including why the capability-token approach was retired
   in favour of `frozen` and why `#reads` is trusted.
 - [ECS guide](ecs-guide.md) -- the first consumer; `tur-ecs`'s `ecs/freeze`

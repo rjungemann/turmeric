@@ -196,7 +196,7 @@ App authors and spice authors describe browser needs declaratively. Read when
   :name    "my-game"
   :version "0.1.0"
   :spices #map{
-    "raylib" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+    "raylib" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "raylib-v0.3.0"
                   :subdir "spices/raylib"}
   }
