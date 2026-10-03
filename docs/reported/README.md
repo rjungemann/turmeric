@@ -2541,6 +2541,18 @@ compiler the only candidate. Bisected to the day: the spices CI re-pins turmeric
 | ~~[refine-float-field-selector-declared-int](../archive/refine-float-field-selector-declared-int.md)~~ | high (soundness) | **RESOLVED 2026-10-03** (archived, found by the new `shape_reflect` and fixed in one change): a record field selector was declared Int whatever the field's type, so a `float` field's constructor axiom or a written `(= (.a v) 0.5)` was a contradiction that proved every goal and elided its check.  `rt_resolve_fn` now gives `.f` its field's sort (Real where Int and Real fields share a name) |
 | ~~[early-return-bypasses-return-refinement](../archive/early-return-bypasses-return-refinement.md)~~ | high (soundness) | **RESOLVED 2026-10-03** (archived, found and fixed in one change): an early `return` left a function with a refined return or `:post` unchecked -- statically "proved" from the last body form alone (check elided), and at runtime the C `return` jumped past the whole-body wrap.  Now the obligation is reported unknown when the body can `return`, and `elab_return` wraps each returned value in the enclosing function's checks (`Elab.ret_contract`; lambdas and default methods clear it).  `?` was not audited |
 
+## Found cutting the v0.60.0 release (filed 2026-10-03)
+
+Both found when `v0.60.0`'s `linux-aarch64` release leg failed and `Create
+Release` was correctly skipped, leaving the tag with no release behind it. The
+first is why that happened; the second is the mechanism underneath it, and bites
+user inline C on its own.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [jit-xopen-source-guard-inert-on-glibc](jit-xopen-source-guard-inert-on-glibc.md) | high (cost a release) | The emitted unit defines `_XOPEN_SOURCE 700` for `<ucontext.h>` (`emit_module.c:13251`) six lines *after* the BSD networking headers already pulled in the include-guarded `features.h`, so on glibc it is inert; aarch64's `sys/ucontext.h` then includes `sys/procfs.h` -> `sys/user.h`, which c2mir cannot parse, and `tur jit` falls back to cc on every program. Hoisting the define is ruled out by the macOS constraints at `:13231` (T24) and `:13247` (T21) |
+| [c2mir-rejects-uint128](c2mir-rejects-uint128.md) | medium | c2mir fails to parse `__uint128_t`, so inline C that writes it never reaches the JIT -- `TUR-W0070`, cc takes over, right answer by the slow path. Belongs in the vendored fork; `jit-arm64-uint128-align-struct-layout-skew` suggests layout is already modelled, so the gap may be parser-only |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

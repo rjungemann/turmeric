@@ -18,7 +18,9 @@ description: python-markdown's fenced_code only knows a column-0 fence, so a quo
 > than only when the stray text happens to look like an unclosed tag -- the
 > quiet case this report said nothing could see.  Re-verified against the
 > repro below: the body renders as `<pre><code>`, the `# a comment` line stays
-> a comment, and `<placeholder>` is escaped.
+> a comment, and `<placeholder>` is escaped.  Fix direction 1 landed beside it
+> on `main` (#1043): `tools/check-guide-pairs.py` also rejects a blockquoted
+> fence in a guide, pointing at the indented-block form -- see item 1 below.
 
 
 **Severity: medium.** Content is silently mangled in the rendered guide, and
@@ -85,9 +87,16 @@ The guide itself is fixed by using an indented code block inside the blockquote
 (the companion change to this report). The general hole is still open; options,
 cheapest first:
 
-1. **Lint it.** Reject `^> *```` in `docs/guides/` from the guide checker
-   (`tools/check-guide-pairs.py`) with a message pointing at the indented-block
-   form. Cheap, and converts a silent mangle into an actionable error.
+1. **Lint it. DONE.** `find_blockquoted_fences` in
+   `tools/check-guide-pairs.py` rejects a fence line inside a blockquote and
+   points at the indented-block form; it gates the `Check guide toggle pairs`
+   job. Only fence OPENERS are reported, and the pattern is anchored at
+   end-of-line so an inline span that merely *talks* about a fence (the
+   4-backtick form in `package-management-guide.md:121`) is not flagged.
+   Verified against the pre-fix guide, a nested `> >` fence and a `~~~` fence
+   as positives, and against that inline span, a column-0 fence and the
+   correct `>     cmd` form as negatives. The silent mangle is now an
+   actionable error -- which is what was missing when this shipped.
 2. **Pre-process blockquoted fences.** A preprocessor ahead of `fenced_code`
    that rewrites `> ```lang` ... `> ``` ` into an indented block keeps the
    source form authors expect. More code, and it has to not disturb the

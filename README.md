@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.59.0` -- `#fx{...}` is honest: `println` declares `#fx{IO}`, an undeclared effect tag is an error instead of a silently empty row, and compiler attributes move off the row onto `^construct` / `^byval`; the generic-specialization sweep closes the open-argument axis and the forward-call ordering holes, and the fixture corpus reaches zero `-fsanitize=function` traps behind a new CI gate.
+**Latest release:** `v0.60.0` -- the JIT engine and its vendored MIR are on by default, a default `tur build` links the prebuilt runtime preamble instead of recompiling it (10-15% faster builds on Linux and Windows), `stdlib/either.tur` is generic in `(Either L R)`, and the repos now live in the `turmeric-lang` GitHub org.
 
 ## What
 
