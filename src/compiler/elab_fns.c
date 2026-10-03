@@ -4166,6 +4166,147 @@ static bool rt_env_has_name(RefineEnv *env, const Symbol *sym) {
     return false;
 }
 
+/* Does `f` bind a name that `h` mentions?  Binding positions, conservatively:
+ * the names of a `let`/`letrec`/`loop` binding vector; every symbol in any
+ * other vector (`fn` parameters, destructuring -- and vector literals, which
+ * only costs a fact); every symbol in a `match` pattern; and every symbol in a
+ * `handle` clause head.  A false
+ * "yes" drops a fact; a false "no" would let a fact about an OUTER binding be
+ * read as one about the inner binding of the same name. */
+static bool rt_syms_in_mentioned(const Elab *e, const Form *pat, const Form *h,
+                                 uint32_t depth) {
+    if (!pat || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (pat->tag == F_SYM)
+        return pat->as.sym && rt_form_mentions_name(e, h, pat->as.sym->name, 0);
+    if (pat->tag != F_LIST && pat->tag != F_VEC) return false;
+    for (uint32_t i = 0; i < pat->as.list.len; i++)
+        if (rt_syms_in_mentioned(e, pat->as.list.items[i], h, depth + 1)) return true;
+    return false;
+}
+
+static bool rt_rebinds_mentioned(const Elab *e, const Form *f, const Form *h,
+                                 uint32_t depth);
+
+/* A `let`-style binding vector: only the NAMES bind (an init is an ordinary
+ * expression -- `[e __i]` binds `e`, not `__i`); the inits are walked like any
+ * other code.  The shape elab_let accepts: `^ann`* name [type-ann] init. */
+static bool rt_bvec_rebinds(const Elab *e, const Form *bv, const Form *h,
+                            uint32_t depth) {
+    uint32_t i = 0, len = bv->as.list.len;
+    while (i < len) {
+        const Form *cur = bv->as.list.items[i];
+        while (cur->tag == F_SYM && cur->as.sym && cur->as.sym->name[0] == '^') {
+            if (++i >= len) return false;
+            cur = bv->as.list.items[i];
+        }
+        if (rt_syms_in_mentioned(e, cur, h, depth + 1)) return true;
+        i++;
+        if (i < len) {
+            const Form *ann = bv->as.list.items[i];
+            if (ann->tag == F_TYPE_ANN ||
+                (ann->tag == F_KEYWORD && ann->as.sym &&
+                 typekind_from_symbol(ann->as.sym->name) != TY_UNKNOWN))
+                i++;
+        }
+        if (i >= len) return false;
+        if (rt_rebinds_mentioned(e, bv->as.list.items[i++], h, depth + 1)) return true;
+    }
+    return false;
+}
+
+static bool rt_rebinds_mentioned(const Elab *e, const Form *f, const Form *h,
+                                 uint32_t depth) {
+    if (!f || !h || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx && rt_rebinds_mentioned(e, mx, h, depth)) return true;
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 3 &&
+        (rt_head_is(f, "let") || rt_head_is(f, "letrec") || rt_head_is(f, "loop"))) {
+        uint32_t bi = 1;
+        if (f->as.list.items[1]->tag == F_SYM && f->as.list.len >= 4) {
+            /* A named `let`: the loop's name binds too. */
+            if (rt_syms_in_mentioned(e, f->as.list.items[1], h, depth + 1)) return true;
+            bi = 2;
+        }
+        if (f->as.list.items[bi]->tag == F_VEC) {
+            if (rt_bvec_rebinds(e, f->as.list.items[bi], h, depth)) return true;
+            for (uint32_t i = bi + 1; i < f->as.list.len; i++)
+                if (rt_rebinds_mentioned(e, f->as.list.items[i], h, depth + 1)) return true;
+            return false;
+        }
+    }
+    if (f->tag == F_VEC)
+        for (uint32_t i = 0; i < f->as.list.len; i++) {
+            const Form *it = f->as.list.items[i];
+            if (it->tag == F_SYM && it->as.sym &&
+                rt_form_mentions_name(e, h, it->as.sym->name, 0))
+                return true;
+        }
+    if (rt_head_is(f, "match")) {
+        uint32_t i = 2;
+        while (i < f->as.list.len) {
+            if (rt_syms_in_mentioned(e, f->as.list.items[i++], h, depth + 1)) return true;
+            if (i + 1 < f->as.list.len && rt_sym_is(f->as.list.items[i], "when")) i += 2;
+            i++;   /* the arm body, walked below */
+        }
+    }
+    if (rt_head_is(f, "handle") || rt_head_is(f, "handle-shallow"))
+        for (uint32_t i = 2; i < f->as.list.len; i += 2)
+            if (rt_syms_in_mentioned(e, f->as.list.items[i], h, depth + 1)) return true;
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_rebinds_mentioned(e, f->as.list.items[i], h, depth + 1)) return true;
+    return false;
+}
+
+/* The names a crossing's match-arm constructor facts must connect to (see the
+ * `match` case of rt_collect_path_conds).  Seeded with every name the call
+ * form mentions and grown bottom-up: a level whose facts mention one adds the
+ * names its facts mention, so an outer arm that binds what an inner match
+ * scrutinizes is reached too. */
+#define RT_CS_REL_MAX 32
+typedef struct RtRel {
+    const char *names[RT_CS_REL_MAX];
+    uint32_t    n;
+} RtRel;
+
+/* Variable names only: a list head is a function or constructor, and a
+ * constructor name is in every pattern, so counting one would connect a
+ * ground `(Cons 2 (Nil))` argument to every `(Cons h t)` arm. */
+static void rt_rel_add_syms(Elab *e, RtRel *rel, const Form *f, uint32_t depth) {
+    if (!f || depth >= RT_CS_PATH_MAX_DEPTH) return;
+    if (f->tag == F_SYM && f->as.sym) {
+        if (elab_lookup_ctor(e, f->as.sym)) return;
+        for (uint32_t i = 0; i < rel->n; i++)
+            if (strcmp(rel->names[i], f->as.sym->name) == 0) return;
+        if (rel->n < RT_CS_REL_MAX) rel->names[rel->n++] = f->as.sym->name;
+        return;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+    for (uint32_t i = (f->tag == F_LIST ? 1 : 0); i < f->as.list.len; i++)
+        rt_rel_add_syms(e, rel, f->as.list.items[i], depth + 1);
+}
+
+static bool rt_rel_mentioned(const Elab *e, const RtRel *rel, const Form *f) {
+    for (uint32_t i = 0; i < rel->n; i++)
+        if (rt_form_mentions_name(e, f, rel->names[i], 0)) return true;
+    return false;
+}
+
+/* Append path fact `h`, collected at a level whose descent toward the target
+ * continues into `below`.  Dropped when `below` rebinds a name `h` mentions:
+ * at the target that name is the INNER binding, and the encoder's one flat
+ * namespace would read `h` as a fact about it.  `(let [x 1] (let [x -5] (f x)))`
+ * put `x = -5` and `x = 1` side by side, a contradiction that "proved" every
+ * crossing under --strict-refine.  Dropping a fact only ever weakens. */
+static void rt_cs_push(const Elab *e, const Form **hyps, uint32_t *n,
+                       const Form *h, const Form *below) {
+    if (rt_rebinds_mentioned(e, below, h, 0)) return;
+    if (*n >= RT_CS_PATH_MAX_HYPS) { refine_caps()->path_hyps_hits++; return; }
+    hyps[(*n)++] = h;
+}
+
 /* `*shadowed` is set when a binder on the path rebinds a name the environment
  * already has hypotheses about.  The caller must then abandon the crossing
  * entirely, not merely drop a fact: the encoder has ONE FLAT NAMESPACE, so the
@@ -4180,7 +4321,8 @@ static bool rt_env_has_name(RefineEnv *env, const Symbol *sym) {
  * program that panics. */
 static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                                   const Form *target, const Form **hyps,
-                                  uint32_t *n, bool *shadowed, uint32_t depth) {
+                                  uint32_t *n, bool *shadowed, RtRel *rel,
+                                  uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
     if (rt_form_ident(node, target)) return true;
     if (node->tag != F_LIST && node->tag != F_VEC) return false;
@@ -4193,29 +4335,26 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
     {
         const Form *mx = rt_macro_expansion(e, node);
         if (mx) return rt_collect_path_conds(e, env, mx, target, hyps, n,
-                                             shadowed, depth);   /* lateral hop */
+                                             shadowed, rel, depth);   /* lateral hop */
     }
 
     if (rt_head_is(node, "if") && node->as.list.len == 4) {
         const Form *c = node->as.list.items[1];
-        if (rt_collect_path_conds(e, env, c, target, hyps, n, shadowed, depth + 1))
+        if (rt_collect_path_conds(e, env, c, target, hyps, n, shadowed, rel, depth + 1))
             return true;
         for (uint32_t br = 2; br <= 3; br++) {
             if (!rt_collect_path_conds(e, env, node->as.list.items[br], target,
-                                       hyps, n, shadowed, depth + 1))
+                                       hyps, n, shadowed, rel, depth + 1))
                 continue;
-            if (*n >= RT_CS_PATH_MAX_HYPS) {
-                refine_caps()->path_hyps_hits++;   /* a guard dropped */
-                return true;                        /* deep enough */
-            }
             if (br == 2) {
-                hyps[(*n)++] = c;
+                rt_cs_push(e, hyps, n, c, node->as.list.items[br]);
             } else {
                 Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
                 notk[0] = form_sym(e->arena, node->span,
                                    symtab_intern(e->st, strslice("not", 3)));
                 notk[1] = (Form *)c;
-                hyps[(*n)++] = form_list(e->arena, node->span, notk, 2);
+                rt_cs_push(e, hyps, n, form_list(e->arena, node->span, notk, 2),
+                           node->as.list.items[br]);
             }
             return true;
         }
@@ -4240,15 +4379,11 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
             binds->as.list.items[0]->as.sym) {
             const Form *x = binds->as.list.items[0];
             const Form *v = binds->as.list.items[1];
-            if (rt_collect_path_conds(e, env, v, target, hyps, n, shadowed, depth + 1))
+            if (rt_collect_path_conds(e, env, v, target, hyps, n, shadowed, rel, depth + 1))
                 return true;
-            if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, depth + 1))
+            if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, rel, depth + 1))
                 return false;
             if (rt_env_has_name(env, x->as.sym)) { *shadowed = true; return true; }
-            if (*n >= RT_CS_PATH_MAX_HYPS) {
-                refine_caps()->path_hyps_hits++;   /* a let-equation dropped */
-                return true;
-            }
             /* A bound FUNCTION is not an arithmetic fact, and asserting it
              * actively costs: the encoder abstracts the lambda to an
              * uninterpreted symbol, and `refine_model_search` declines any VC
@@ -4260,23 +4395,30 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
              * The general shape of that hazard is worth remembering: adding a
              * hypothesis can never make a goal easier to PROVE incorrectly,
              * but it can make it harder to REFUTE. Hypotheses are not free. */
-            if (!rt_head_is(v, "fn")) hyps[(*n)++] = rt_form_eq(e, node->span, x, v);
+            if (!rt_head_is(v, "fn")) rt_cs_push(e, hyps, n, rt_form_eq(e, node->span, x, v), body);
             return true;
         }
         /* A wider binding list: descend without claiming any equation. */
     }
 
     /* (match scrut pat [when g] body ...) -- an arm contributes what selected
-     * it.  Only the two sources that introduce no NAMES are collected here: a
-     * literal pattern's `(= scrut <lit>)` and a guard, verbatim.  A
-     * constructor's tag and its field selectors are deliberately left out --
-     * they come with pattern BINDERS, and a binder that shadows an outer name
-     * would silently inherit its hypotheses in this flat namespace, which is
-     * the unsound direction rather than the imprecise one. */
+     * it: a guard, verbatim; a literal pattern's `(= scrut <lit>)`; and, with
+     * `ctor_facts`, a constructor's tag `(= (#dt/tag scrut) k)` and one
+     * `(= b (.field scrut))` per record binder -- the facts rt_prove_paths
+     * gives a return obligation, spelled the same way so RF4 selects the same
+     * arm from them (reflect-two-provable-facts-report-as-not-holding).
+     *
+     * A binder that shadows a name the environment talks about still abandons
+     * the crossing (below); one rebound deeper on the path drops the facts that
+     * mention it (rt_cs_push).  The constructor facts are opt-in because their
+     * symbols are uninterpreted: `refine_model_search` declines a VC carrying
+     * one, so a crossing that is REFUTED today, with a counterexample, would
+     * degrade to unknown.  The caller asks for them only where the predicate
+     * mentions a reflected measure, which cannot be decided without them. */
     if (rt_head_is(node, "match") && node->as.list.len >= 4) {
         const Form *scrut = node->as.list.items[1];
         const uint32_t len = node->as.list.len;
-        if (rt_collect_path_conds(e, env, scrut, target, hyps, n, shadowed, depth + 1))
+        if (rt_collect_path_conds(e, env, scrut, target, hyps, n, shadowed, rel, depth + 1))
             return true;
         uint32_t i = 2;
         while (i < len) {
@@ -4290,9 +4432,9 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
             const Form *arm = node->as.list.items[i++];
             /* A call inside the guard runs before the arm is chosen. */
             if (guard &&
-                rt_collect_path_conds(e, env, guard, target, hyps, n, shadowed, depth + 1))
+                rt_collect_path_conds(e, env, guard, target, hyps, n, shadowed, rel, depth + 1))
                 return true;
-            if (!rt_collect_path_conds(e, env, arm, target, hyps, n, shadowed, depth + 1))
+            if (!rt_collect_path_conds(e, env, arm, target, hyps, n, shadowed, rel, depth + 1))
                 continue;
             if (pat && (pat->tag == F_LIST || pat->tag == F_VEC))
                 for (uint32_t k = 1; k < pat->as.list.len; k++) {
@@ -4302,14 +4444,48 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                         return true;
                     }
                 }
-            if (guard) {
-                if (*n < RT_CS_PATH_MAX_HYPS) hyps[(*n)++] = guard;
-                else refine_caps()->path_hyps_hits++;
-            }
-            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT)) {
-                if (*n < RT_CS_PATH_MAX_HYPS)
-                    hyps[(*n)++] = rt_form_eq(e, pat->span, scrut, pat);
-                else refine_caps()->path_hyps_hits++;
+            if (guard) rt_cs_push(e, hyps, n, guard, arm);
+            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT))
+                rt_cs_push(e, hyps, n, rt_form_eq(e, pat->span, scrut, pat), arm);
+            CtorDef *cd = rel ? rt_pat_ctor(e, pat) : NULL;
+            /* Only when this arm connects to what the call is about: the
+             * scrutinee or a binder is a relevant name.  A ground argument
+             * connects to nothing, so its crossing keeps the model search that
+             * refutes it with a counterexample. */
+            bool connects = cd && (rt_rel_mentioned(e, rel, scrut) ||
+                                   rt_rel_mentioned(e, rel, pat));
+            if (connects) {
+                rt_rel_add_syms(e, rel, scrut, 0);
+                rt_rel_add_syms(e, rel, pat, 0);
+                rt_cs_push(e, hyps, n,
+                           rt_form_eq(e, pat->span,
+                                      rt_form_call1(e, pat->span, RT_DT_TAG_FN, scrut),
+                                      form_int(e->arena, pat->span, (int64_t)cd->tag)),
+                           arm);
+                /* Only a record constructor has a field name to select with,
+                 * and only an Int-sorted field: the binder is not declared in
+                 * this environment, and an undeclared name is read as Int. */
+                for (uint32_t k = 1; cd->is_record && k < pat->as.list.len; k++) {
+                    const Form *b = pat->as.list.items[k];
+                    uint32_t fi = k - 1;
+                    if (b->tag != F_SYM || !b->as.sym || fi >= cd->n_fields ||
+                        !cd->fields[fi].name ||
+                        rt_sort_of_kind(cd->fields[fi].kind) != VS_INT)
+                        continue;
+                    /* `(Pair _ _)` would equate both fields through one name. */
+                    if (b->as.sym->name[0] == '_') continue;
+                    bool dup = false;
+                    for (uint32_t k2 = 1; k2 < pat->as.list.len && !dup; k2++)
+                        dup = k2 != k && pat->as.list.items[k2]->tag == F_SYM &&
+                              pat->as.list.items[k2]->as.sym == b->as.sym;
+                    if (dup) continue;
+                    char acc[128];
+                    snprintf(acc, sizeof(acc), ".%s", cd->fields[fi].name);
+                    rt_cs_push(e, hyps, n,
+                               rt_form_eq(e, b->span, b,
+                                          rt_form_call1(e, b->span, acc, scrut)),
+                               arm);
+                }
             }
             return true;
         }
@@ -4318,7 +4494,7 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
 
     for (uint32_t i = 0; i < node->as.list.len; i++)
         if (rt_collect_path_conds(e, env, node->as.list.items[i], target, hyps,
-                                  n, shadowed, depth + 1))
+                                  n, shadowed, rel, depth + 1))
             return true;
     return false;
 }
@@ -5983,6 +6159,21 @@ static bool li_cs_path_facts(Elab *e, RefineCallSite *cs, bool *skip) {
     return true;
 }
 
+/* Does predicate `f` call a `^reflect` measure the encoder can unfold? */
+static bool rt_pred_mentions_reflected(Elab *e, const Form *f, uint32_t depth) {
+    if (!f || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *h = f->as.list.items[0];
+    if (h->tag == F_SYM && h->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        if (rt_resolve_fn(e, h->as.sym->name, &info) && info.reflect_body) return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_mentions_reflected(e, f->as.list.items[i], depth + 1)) return true;
+    return false;
+}
+
 /* Push this crossing's path conditions onto `cs->env`, returning the saved
  * head so the caller can rewind.  Declines -- pushing nothing -- when the body
  * assigns anywhere, since a condition mentioning a reassigned name may no
@@ -6016,11 +6207,24 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
 
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
 
+    /* Match-arm constructor facts only where a reflected measure needs them
+     * (see the `match` case of rt_collect_path_conds for the cost). */
+    bool ctor_facts = false;
+    if (g_opt_reflected_measures && cs->callee && cs->callee->refine_param_preds)
+        for (uint32_t i = 0; i < cs->callee->n_refine_params && !ctor_facts; i++)
+            ctor_facts = rt_pred_mentions_reflected(e, cs->callee->refine_param_preds[i], 0);
+    RtRel rel;
+    rel.n = 0;
+    if (ctor_facts)
+        for (uint32_t i = cs->arg_offset; i < cs->call_form->as.list.len; i++)
+            rt_rel_add_syms(e, &rel, cs->call_form->as.list.items[i], 0);
+
     const Form *hyps[RT_CS_PATH_MAX_HYPS];
     uint32_t n = 0;
     bool shadowed = false;
     bool reached = rt_collect_path_conds(e, cs->env, cs->caller_body,
-                                         cs->call_form, hyps, &n, &shadowed, 0);
+                                         cs->call_form, hyps, &n, &shadowed,
+                                         ctor_facts ? &rel : NULL, 0);
     /* Recorded on every crossing, not only the capped ones: a cap that never
      * fires still has to report how close it came.  Saturates at the limit --
      * see RefineCapStats.path_hyps_peak for why it cannot do better. */

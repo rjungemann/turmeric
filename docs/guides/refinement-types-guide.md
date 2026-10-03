@@ -905,6 +905,12 @@ note: counterexample: x = -2
 help: (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) }
 ```
 
+That predicate note is a claim against your code, so it appears only on a
+refutation, where a counterexample exists. An unknown (`TUR-W0372`) gets a
+different note instead: `the predicate ... could not be proved here, which is
+not evidence that it fails`. The solver declining to decide says nothing about
+whether the code is right.
+
 The `help:` line is **not a heuristic**. It is a second query through the same
 solver seam: a candidate fact is asserted as a hypothesis and the chain is
 asked again, so only a candidate that genuinely discharges the goal is ever
@@ -1175,9 +1181,18 @@ anyway.
   than soundness -- the callee's own entry check always remains:
   a caller whose body **assigns** anywhere (a condition naming a reassigned
   variable may no longer hold at the call); a **constructor tag or field
-  selector**, since those arrive with pattern binders; a `let` that binds a
-  **function**, which is not an arithmetic fact; and a call reachable by more
-  than one route, which a macro sharing a node can produce.
+  selector**, except where a reflected measure needs one (below); a `let`
+  that binds a **function**, which is not an arithmetic fact; and a call
+  reachable by more than one route, which a macro sharing a node can produce.
+
+  The constructor exception is for `^reflect` measures. When the callee's
+  predicate mentions a reflected measure, an arm that connects to a variable
+  the argument mentions contributes `(= (#dt/tag s) k)` and its Int-sorted
+  record selectors, so RF4 can select the arm, as it does for a return
+  obligation. It is no wider than that, because those symbols switch off the
+  model search that produces a counterexample. A fact that names a variable
+  rebound further down the path is dropped: at the call, the name means the
+  inner binding.
 - **[by design] A crossing under a shadowing binder is abandoned, not answered.** The
   encoder has one flat namespace, so an argument naming a shadowed variable
   would inherit the outer one's hypotheses -- `(let [x (- x x)] (sdiv 10 x))`
