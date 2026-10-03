@@ -93,7 +93,7 @@ See [`tvm/README.md`](tvm/README.md) for the full command set
 
 **GitHub Codespaces:**
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rjungemann/turmeric)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/turmeric-lang/turmeric)
 
 **Build from source:**
 
