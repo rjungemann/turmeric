@@ -285,6 +285,26 @@ def known_bug_slug(tags):
     return None
 
 
+# Probes whose ONLY symptom is a trap from clang's `-fsanitize=function`.
+#
+# Such a program builds, runs, and prints the CORRECT answer -- the mismatch is
+# invisible to everything but the detector.  So on a box where the detector is
+# unavailable (stock macOS: Apple clang does not provide it, and the banner
+# reads `fnsan: UNAVAILABLE`) the probe comes back `clean`, which the FIXED arm
+# below would report as "retire its known_bug_slug row" -- advice to close a
+# report that is still open, on the one kind of box that cannot see it.
+#
+# A row listed here reports UNKNOWN rather than FIXED whenever the run's banner
+# is not ARMED.  It says nothing about boxes that ARE armed: there the row is
+# judged normally, and Linux CI is armed.
+#
+# This is about the SYMPTOM, not the tags: a wrong-ANSWER defect belongs in the
+# 3-tuple form instead, which is visible without any sanitizer.
+TRAP_ONLY_PROBES = frozenset({
+    "generator-thunk-call-site-returns-void-ptr-not-carrier",
+})
+
+
 # Pinned minimal repros, one per open report above, used by --known-probes to
 # keep the avoid list honest: when one prints `fixed`, retire its
 # known_bug_slug row.
@@ -1739,6 +1759,10 @@ def seam_matrix(tur, workdir):
 
 def known_probes(tur, workdir):
     print("known-probe status (open reports the generator avoids by default):")
+    status = fuzz_arm.armed_env(dict(os.environ))[1]
+    fnsan_armed = status.startswith("fnsan: ARMED")
+    if not fnsan_armed and TRAP_ONLY_PROBES:
+        print("  (%s -- trap-only rows report UNKNOWN)" % status)
     any_fixed = False
     for i, row in enumerate(KNOWN_PROBES):
         label, src = row[0], row[1]
@@ -1755,10 +1779,17 @@ def known_probes(tur, workdir):
                 and out.stdout != expected:
             fired = True
             how = "wrong_output: %r != %r" % (out.stdout, expected)
-        if not fired:
+        if fired:
+            verdict = "fires (%s)" % how
+        elif label in TRAP_ONLY_PROBES and not fnsan_armed:
+            # Not FIXED and not firing: unjudgeable here.  Deliberately does
+            # NOT set any_fixed -- a caller must not read this as a closed
+            # report.
+            verdict = "UNKNOWN -- trap-only, needs -fsanitize=function"
+        else:
             any_fixed = True
-        print("  %-62s %s" % (label, "fires (%s)" % how if fired
-                              else "FIXED -- retire its known_bug_slug row"))
+            verdict = "FIXED -- retire its known_bug_slug row"
+        print("  %-62s %s" % (label, verdict))
     return any_fixed
 
 
