@@ -302,7 +302,17 @@ test.describe('CI metrics dashboard', () => {
     await page.locator('#ci-spark-search').fill('jit');
     await expect(sparks).not.toHaveCount(total);
 
-    const target = sparks.first();
+    // Deliberately NOT sparks.first(): `toggleSuite` DESELECTS a sparkline
+    // that is already charted, which REMOVES its legend item rather than
+    // adding one. defaultSuites() pre-selects the five slowest suites and
+    // renderSparks sorts by mean descending, so the first match of a filter
+    // is frequently one of them -- `jit` picks `tur_jit_fixture_tests`, the
+    // slowest suite in the default environment, whenever the Linux jit leg
+    // is the broadest env. Reading live data, that made this assertion flip
+    // from pass to fail with no change to the test. An unselected sparkline
+    // is what "clicking charts a suite" actually means.
+    const target = page.locator('#ci-sparks .ci-spark:not(.is-selected)').first();
+    await expect(target).toBeVisible();
     const name = await target.getAttribute('data-suite');
     await target.click();
     await expect(page.locator(`#ci-legend .ci-legend-item[data-suite="${name}"]`)).toHaveCount(1);
