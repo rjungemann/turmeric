@@ -1,5 +1,24 @@
 # `#lang r7rs`: the conformance program emits 5.6 MB of C and takes ~4 minutes to build
 
+**RESOLVED 2026-10-03.**  The whole build is **42.5 s** on the box that
+measured 248 s below, and `R7RS_CONFORMANCE_BACKEND=compiled
+tests/run-r7rs-conformance.sh` runs end to end in 44 s (1223 passed, 0
+failed).  Two causes, both fixed (details in the narrowing that follows):
+
+- the 1,557 per-function copies of the direct->cps entry wrapper, each with
+  a `setjmp` -- one shared helper now (unit 5.66 MB -> 4.78 MB, `cc -O2`
+  90.5 s -> 35.1 s);
+- five lookups in the compiler that were linear in the program's size and
+  asked in proportion to it (`emit-c` 130 s -> 8.5 s, output identical).
+
+Directions 2 and 3 were measured and are not worth doing: `gcc -O2
+-ftime-report` on the remaining unit spends 82% in ordinary per-function
+optimization spread across the usual passes (register allocation 6%,
+scheduling 5%, alias walking 5%), with no superlinear pass for a split `main`
+or a table-driven `__tur_fatbox_init` to remove.  What is left is
+proportional to the code.  `tests/run-r7rs-conformance.sh` keeps its
+`--timeout 480` as headroom; the default 240 s would now do.
+
 **Narrowed 2026-10-03: fix direction 1 landed, and `emit-c` is 15x faster.**
 The direct->cps entry wrapper of a zero-parameter colored function that is
 not a T6 bouncer is now a two-line shim over one shared helper, `__dk_enter0` (emitted once per unit
