@@ -2,29 +2,33 @@ name: aarch64 JIT include probe
 
 # THROWAWAY DIAGNOSTIC -- delete this file and its branch once answered.
 #
-# v0.60.0's release failed on linux-aarch64:
+# Settled by runs 1 and 2:
+#   * <ucontext.h> is the ONLY one of the JIT unit's 19 includes that reaches
+#     sys/user.h, via aarch64 sys/ucontext.h -> sys/procfs.h (the only header
+#     in /usr/include that includes sys/user.h).
+#   * <ucontext.h> under _XOPEN_SOURCE 700 does NOT reach it -- but the unit
+#     defines that macro at line 63, after <sys/select.h> (line 53) already
+#     pulled in the include-guarded features.h, so on glibc it is inert.
+#   * c2mir does not understand __uint128_t (inline C writing it produces extra
+#     errors at the body that no other program produces).
+#   * Hoisting the macro is ruled out by emit_module.c:13231 (T24) and :13246
+#     (T21) -- macOS needs the BSD networking headers processed WITHOUT it, and
+#     needs the full 880-byte ucontext_t.
 #
-#   /usr/include/aarch64-linux-gnu/sys/user.h:30:1: syntax error on struct
-#   TUR-W0070: jit engine could not compile this program; falling back to cc
+# Run 3 asks whether fix option B is viable: keep sys/procfs.h out of the JIT
+# unit by predefining its guard.  Three things have to hold, and the second is
+# the one that could quietly ruin everything -- T21 exists BECAUSE ucontext_t's
+# size depends on how its header was reached:
 #
-# Run 1 established the JIT unit's include set (build tree and extracted
-# archive agree, byte for byte) and that the unit never writes __uint128_t
-# itself -- so the token appears only inside that header, in
-# `struct user_fpsimd_struct { __uint128_t vregs[32]; ... }`, which sits at the
-# line c2mir names.  Run 1's `gcc -H` arm was useless: it ran without the JIT's
-# -I flags and died on `hamt.h: No such file or directory`.
+#   1. <ucontext.h> still compiles with sys/procfs.h stubbed out.
+#   2. sizeof(ucontext_t) is UNCHANGED.  Measured by running a program, not by
+#      reading headers.
+#   3. the JIT then compiles a program instead of falling back to cc.
 #
-# This run answers the two questions that choose the fix, and needs no -I at
-# all because it tests the SYSTEM headers directly:
-#
-#   chain   -- which of the unit's includes reaches sys/user.h, named rather
-#              than guessed.  If it is incidental, dropping it is the whole fix.
-#   uint128 -- whether c2mir rejects __uint128_t on its own, which says whether
-#              the header is merely the messenger.
+# (3) patches the emitter in the workflow rather than on the branch, so this
+# branch stays a diagnostic and carries no pretend fix.
 
 on:
-  # A new workflow file is NOT dispatchable until it is on the default branch,
-  # so this triggers on a push to its own throwaway branch instead.
   push:
     branches: [claude/aarch64-jit-include-probe]
   workflow_dispatch:
@@ -33,64 +37,56 @@ permissions:
   contents: read
 
 jobs:
-  # ---------------------------------------------------------------- the chain
-  chain:
-    name: Which include reaches sys/user.h
+  # ------------------------------------------------- is the stub even safe?
+  headers:
+    name: Does stubbing sys/procfs.h keep ucontext intact
     runs-on: ubuntu-24.04-arm
     steps:
-      - name: libc version
-        run: ldd --version | head -1
-
-      - name: Every /usr/include header that mentions sys/user.h
-        run: grep -rln 'sys/user\.h' /usr/include 2>/dev/null | head -40 || echo "(none)"
-
-      - name: Which of the JIT unit's own includes reaches it
+      - name: What aarch64 sys/ucontext.h takes from procfs.h
         run: |
-          # The unit's include set, from run 1's dump. Tested one at a time, as
-          # the system headers alone -- no turmeric, no -I, nothing to go wrong.
-          hdrs="sys/select.h sys/socket.h netinet/in.h arpa/inet.h ucontext.h
-                setjmp.h stdio.h stdint.h stdbool.h pthread.h stdlib.h stddef.h
-                string.h stdarg.h regex.h time.h unistd.h fcntl.h errno.h"
-          for h in $hdrs; do
-            printf '%-16s ' "$h"
-            if printf '#include <%s>\n' "$h" \
-                 | gcc -H -fsyntax-only -xc - 2>&1 | grep -q 'sys/user\.h'; then
-              echo "REACHES sys/user.h"
-            else
-              echo "-"
-            fi
-          done
+          echo "--- its includes ---"
+          grep -n '#include' /usr/include/aarch64-linux-gnu/sys/ucontext.h
+          echo "--- every procfs/elf-ish identifier it mentions ---"
+          grep -nE 'greg|gregset|fpregset|prgreg|elf_|prstatus' \
+            /usr/include/aarch64-linux-gnu/sys/ucontext.h || echo "(none -- it only includes it)"
 
-      - name: The same, under the macro the unit actually defines for ucontext.h
+      - name: 1. does it still compile with the guard predefined
+
         run: |
-          # The unit wraps that one include in `#define _XOPEN_SOURCE 700` /
-          # `#undef`, and glibc's header content is feature-macro dependent, so
-          # a bare test of ucontext.h is not the same question.
-          printf '#define _XOPEN_SOURCE 700\n#include <ucontext.h>\n' \
-            | gcc -H -fsyntax-only -xc - 2>&1 | grep -q 'sys/user\.h' \
-            && echo "ucontext.h under _XOPEN_SOURCE 700: REACHES sys/user.h" \
-            || echo "ucontext.h under _XOPEN_SOURCE 700: -"
+          printf '#define _SYS_PROCFS_H 1\n#include <ucontext.h>\nint main(void){ucontext_t u;(void)u;return 0;}\n' > stub.c
+          if gcc -fsyntax-only stub.c 2>&1; then
+            echo "YES -- <ucontext.h> compiles with sys/procfs.h stubbed"
+          else
+            echo "::error::NO -- stubbing procfs.h breaks <ucontext.h>; option B is dead"
+            exit 1
+          fi
 
-      - name: The full chain, with each includer named
+      - name: 1b. and does it stop reaching sys/user.h
         run: |
-          # -H indents one dot per nesting level, so the nearest preceding line
-          # with one fewer dot is the includer. Print the whole tree for any
-          # header that reached it, so the path is readable end to end.
-          hdrs="sys/select.h sys/socket.h netinet/in.h arpa/inet.h ucontext.h
-                setjmp.h pthread.h regex.h time.h unistd.h fcntl.h errno.h"
-          for h in $hdrs; do
-            printf '#include <%s>\n' "$h" \
-              | gcc -H -fsyntax-only -xc - > /dev/null 2> tree.txt || true
-            if grep -q 'sys/user\.h' tree.txt; then
-              echo "##### <$h> -- full tree up to and including sys/user.h"
-              sed -n '1,/sys\/user\.h/p' tree.txt
-              echo ""
-            fi
-          done
+          gcc -H -fsyntax-only stub.c 2>&1 | grep -q 'sys/user\.h' \
+            && { echo "::error::still reaches sys/user.h"; exit 1; } \
+            || echo "confirmed: sys/user.h is no longer in the include tree"
 
-  # -------------------------------------------------------------- the mechanism
-  uint128:
-    name: Does c2mir reject __uint128_t on its own
+      - name: 2. is sizeof(ucontext_t) unchanged -- the T21 question
+        run: |
+          # Run it, do not read headers: T21 exists because this size silently
+          # changes with how <ucontext.h> was reached, and a wrong answer here
+          # would corrupt every fiber rather than fail to build.
+          printf '#include <ucontext.h>\n#include <stdio.h>\nint main(void){printf("%%zu\\n",sizeof(ucontext_t));return 0;}\n' > size-plain.c
+          printf '#define _SYS_PROCFS_H 1\n#include <ucontext.h>\n#include <stdio.h>\nint main(void){printf("%%zu\\n",sizeof(ucontext_t));return 0;}\n' > size-stub.c
+          gcc -o size-plain size-plain.c && plain=$(./size-plain)
+          gcc -o size-stub  size-stub.c  && stub=$(./size-stub)
+          echo "sizeof(ucontext_t): plain=$plain stubbed=$stub"
+          if [ "$plain" = "$stub" ]; then
+            echo "UNCHANGED -- the stub does not disturb the fiber layout"
+          else
+            echo "::error::CHANGED ($plain -> $stub) -- option B would corrupt fibers"
+            exit 1
+          fi
+
+  # ------------------------------------------- does the JIT then compile?
+  jit:
+    name: Does the JIT compile with procfs stubbed
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -98,65 +94,60 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libedit-dev
 
-      - name: Configure and build (Release)
+      - name: Baseline -- build unpatched and confirm the fallback
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build build -j
-
-      - name: A program whose inline C writes __uint128_t
-        run: |
-          cat > u128.tur <<'EOF'
-          (defn widen [x : int] : int
-            ```c
-            __uint128_t v = (__uint128_t)x;
-            v = v * 3u;
-            return (int64_t)v;
-            ```)
-
+          cat > hello.tur <<'EOF'
           (defn main [] : int
-            (println (widen 14))
+            (println "hello from the archive")
             0)
           EOF
           set +e
-          TUR_JIT_DUMP_C=u128-jit.c ./build/tur jit u128.tur 2>&1 | tee u128.log
+          ./build/tur jit hello.tur 2>&1 | tee before.log
+          grep -q "TUR-W0070" before.log \
+            && echo "BASELINE: falls back to cc, as the release leg saw" \
+            || echo "::warning::baseline did NOT fall back -- the premise moved"
+
+      - name: Patch the emitter in the workflow, not on the branch
+        run: |
+          # Throwaway: emit the glibc guard just before <ucontext.h>. A real fix
+          # would scope this to __linux__ and justify it where T21/T24 are
+          # documented; this only has to answer "does it work".
+          perl -0pi -e 's{(buf_puts\(out, "#define _XOPEN_SOURCE 700\\n"\);)}{buf_puts(out, "#ifdef __linux__\\n#define _SYS_PROCFS_H 1\\n#endif\\n");\n    $1}' \
+            src/compiler/emit_module.c
+          grep -n -B2 -A2 '_SYS_PROCFS_H' src/compiler/emit_module.c | head -12
+
+      - name: Rebuild and retest
+        run: |
+          cmake --build build -j
+          set +e
+          TUR_JIT_DUMP_C=after-jit.c ./build/tur jit hello.tur 2>&1 | tee after.log
           echo "---- exit: ${PIPESTATUS[0]} ----"
-          if grep -q "TUR-W0070" u128.log; then
-            echo "VERDICT: the JIT declined this program (see diagnostics above)"
+          if grep -q "TUR-W0070" after.log; then
+            echo "::error::STILL falling back -- option B does not fix it"
+          elif grep -q "sys/user.h" after.log; then
+            echo "::error::sys/user.h still reached"
           else
-            echo "VERDICT: c2mir compiled __uint128_t fine -- the header is NOT"
-            echo "         failing merely because of that token"
+            echo "OPTION B WORKS: the JIT engine compiled the program"
           fi
 
-      - name: A program whose inline C includes sys/user.h directly
+      - name: And the cc path still works
         run: |
-          # Isolates the header from whatever transitively pulls it: if this
-          # alone reproduces the same sys/user.h:30 error, the chain only
-          # determines WHERE it enters, not whether it breaks.
-          cat > suser.tur <<'EOF'
-          (defn regs-size [] : int
-            ```c
-            #include <sys/user.h>
-            return (int64_t)sizeof(struct user_regs_struct);
-            ```)
-
-          (defn main [] : int
-            (println (regs-size))
-            0)
-          EOF
           set +e
-          ./build/tur jit suser.tur 2>&1 | tee suser.log
-          echo "---- exit: ${PIPESTATUS[0]} ----"
-          grep -q "sys/user.h" suser.log \
-            && echo "VERDICT: including sys/user.h alone reproduces it" \
-            || echo "VERDICT: sys/user.h alone did NOT reproduce it"
+          ./build/tur run hello.tur 2>&1 | tee run.log
+          grep -q "hello from the archive" run.log \
+            && echo "cc path unaffected" \
+            || echo "::error::the cc path broke"
 
-      - name: Upload the logs and dumps
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: aarch64-uint128-probe
+          name: aarch64-procfs-stub-probe
           path: |
-            u128.log
-            u128-jit.c
-            suser.log
+            before.log
+            after.log
+            run.log
+            after-jit.c
           if-no-files-found: warn
