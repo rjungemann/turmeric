@@ -1,0 +1,148 @@
+name: aarch64 JIT include probe
+
+# THROWAWAY DIAGNOSTIC -- delete this file and its branch once the question is
+# answered.  It exists because v0.60.0's release failed on one leg:
+#
+#   /usr/include/aarch64-linux-gnu/sys/user.h:30:1: syntax error on struct
+#   TUR-W0070: jit engine could not compile this program; falling back to cc
+#
+# Nothing under src/ or stdlib/ includes sys/user.h, sys/ptrace.h or
+# sys/procfs.h, so it arrives transitively -- and the chain can only be seen on
+# an aarch64 Linux host.  This prints:
+#
+#   1. the exact text c2mir is handed (TUR_JIT_DUMP_C), as an artifact
+#   2. that text's own #include lines
+#   3. gcc -H's include TREE, which names whichever header pulls sys/user.h
+#   4. the construct at the line c2mir rejects, plus the glibc version
+#
+# Run from the BUILD TREE and again from an EXTRACTED RELEASE ARCHIVE, because
+# the failing step ran from the archive and the two resolve the runtime
+# differently -- if the chains disagree, a build-tree-only answer would be the
+# wrong answer.
+
+on:
+  # A new workflow file is NOT dispatchable until it is on the default branch,
+  # so this triggers on a push to its own throwaway branch instead.
+  push:
+    branches: [claude/aarch64-jit-include-probe]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe (linux-aarch64)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+
+      - name: Toolchain and libc versions
+        run: |
+          cc --version | head -1
+          ldd --version | head -1
+          uname -m
+
+      - name: Configure and build (Release)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build -j
+
+      - name: The same two-line program the release leg used
+        run: |
+          cat > hello.tur <<'EOF'
+          (defn main [] : int
+            (println "hello from the archive")
+            0)
+          EOF
+
+      # ---------------------------------------------------------------- build tree
+      - name: Reproduce from the build tree, dumping the text c2mir is handed
+        run: |
+          set +e
+          TUR_JIT_DUMP_C=jit-build.c ./build/tur jit hello.tur 2>&1 | tee jit-build.log
+          echo "---- tur jit exit: ${PIPESTATUS[0]} ----"
+          if [ -f jit-build.c ]; then
+            echo "dump: $(wc -l < jit-build.c) lines"
+          else
+            echo "::warning::no dump produced -- TUR_JIT_DUMP_C did not fire from the build tree"
+          fi
+
+      # ------------------------------------------------------------------ archive
+      # Packaged and extracted exactly as release.yml does, so this arm is the
+      # faithful reproduction of the leg that failed.
+      - name: Package and extract, as the release workflow does
+        run: |
+          mkdir -p dist/bin dist/lib dist/include/turi dist/share/turmeric
+          cp build/tur dist/bin/
+          cp build/src/libturi.a dist/lib/
+          cp build/src/libturt_runtime.a dist/lib/
+          cp build/src/libturt_preamble.a dist/lib/
+          cp build/libtur_mir.a dist/lib/
+          cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
+          cp -R stdlib dist/share/turmeric/
+          tar -czf probe.tar.gz -C dist .
+          rm -rf verify && mkdir verify && tar -xzf probe.tar.gz -C verify
+          cp hello.tur verify/
+
+      - name: Reproduce from the extracted archive (the authoritative arm)
+        run: |
+          set +e
+          (cd verify && TUR_JIT_DUMP_C=../jit-archive.c ./bin/tur jit hello.tur 2>&1) | tee jit-archive.log
+          echo "---- tur jit exit: ${PIPESTATUS[0]} ----"
+          if [ -f jit-archive.c ]; then
+            echo "dump: $(wc -l < jit-archive.c) lines"
+          else
+            echo "::warning::no dump produced from the archive"
+          fi
+
+      # -------------------------------------------------------------- the answer
+      - name: The include set of the dumped text
+        run: |
+          for f in jit-archive.c jit-build.c; do
+            [ -f "$f" ] || continue
+            echo "##### $f"
+            grep -n '#include' "$f" || echo "(no #include lines)"
+          done
+
+      - name: Which header pulls in sys/user.h
+        run: |
+          # gcc -H prints the include tree with one leading dot per nesting level,
+          # so the nearest preceding line with ONE FEWER dot is the includer.
+          # -fsyntax-only, and || true: the text is written for c2mir, so gcc may
+          # reject it later -- the tree is already printed by then.
+          for f in jit-archive.c jit-build.c; do
+            [ -f "$f" ] || continue
+            echo "##### $f"
+            gcc -H -fsyntax-only "$f" > /dev/null 2> "tree-$f.txt" || true
+            if grep -q "user\.h" "tree-$f.txt"; then
+              echo "--- context around every user.h entry ---"
+              grep -n -B6 "user\.h" "tree-$f.txt"
+            else
+              echo "(gcc -H never reached sys/user.h for $f)"
+              echo "--- first 40 tree lines, for comparison ---"
+              head -40 "tree-$f.txt"
+            fi
+          done
+
+      - name: The construct c2mir rejects
+        run: |
+          echo "--- sys/user.h lines 1-45 (c2mir reports line 30) ---"
+          sed -n '1,45p' /usr/include/aarch64-linux-gnu/sys/user.h
+
+      - name: Upload the dumps and include trees
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aarch64-jit-probe
+          path: |
+            jit-build.c
+            jit-archive.c
+            jit-build.log
+            jit-archive.log
+            tree-*.txt
+          if-no-files-found: warn
