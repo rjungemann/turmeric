@@ -15771,6 +15771,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
 
+    /* r7rs-conformance-program-emits-megabytes-of-c: the direct->cps entry
+     * wrapper of a ZERO-parameter colored function (emit_cps_ir.c) is this one
+     * helper plus a two-line shim, not a ~670-byte copy of its body per
+     * function -- 1,557 byte-identical copies in the r7rs conformance program,
+     * each with its own setjmp.  Exactly the inline wrapper's sequence: seed the
+     * root prompt, install the trampoline driver, run the body, copy a boxed
+     * (Tier-C) result out into `out` BEFORE the reap frees its box, then free
+     * the root and reap.  Here, after tur_async_suspended, which it reads. */
+    if (dk_machine_emitted) {
+        buf_puts(out,
+"__attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {\n"
+"    __dk_entry_depth++;\n"
+"    size_t __dk_reap_mark = __dk_reap_n;\n"
+"    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n"
+"    int64_t __r;\n"
+"    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n"
+"    if (TUR_SETJMP(__dkjb) == 0) { __r = body(__root); }\n"
+"    else { __r = __dk_drive_after(); }\n"
+"    g_dk_driver = __dksave;\n"
+"    if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }\n"
+"    if (!tur_async_suspended) dk_free(__root);\n"
+"    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n"
+"    return __r;\n"
+"}\n\n");
+    }
+
     /* async-panic-task-boundary: a panic inside an (async ...) body must
      * reject THAT task's future, not unwind whoever spawned it.  The body runs
      * inline on the caller's stack (there is no fiber to carry a per-fiber

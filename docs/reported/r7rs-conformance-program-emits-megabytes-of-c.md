@@ -1,5 +1,26 @@
 # `#lang r7rs`: the conformance program emits 5.6 MB of C and takes ~4 minutes to build
 
+**Narrowed 2026-10-03: fix direction 1 landed.**  The direct->cps entry
+wrapper of a zero-parameter colored function that is not a T6 bouncer is now
+a two-line shim over one shared helper, `__dk_enter0` (emitted once per unit
+beside `tur_async_suspended`, emit_module.c), which runs exactly the inline
+wrapper's sequence -- root prompt, trampoline driver, body, a boxed result
+copied out before the reap, reap.  In the conformance program 1,559 of the
+entries take it.  Measured on one idle 4-core box, against the same program
+unit with the shims expanded back to the old inline bodies:
+
+| | before | after |
+| --- | --- | --- |
+| program unit | 5.66 MB | 4.78 MB |
+| `cc -O2` on it | 90.5 s | 35.1 s |
+
+So the per-function `setjmp` copies were most of the optimizer's time, not
+just ~1 MB of text.  Still open: the `emit-c` phase itself (130 s under the
+Debug `tur` here), and directions 2-3 (`main` and `__tur_fatbox_init` as
+single huge functions), which matter less now that cc is a third of what it
+was.  The harness's `--timeout 480` workaround stays until CI shows the new
+wall clock.
+
 **Filed 2026-10-01**, investigating CI #3079.
 
 **Severity:** medium (CI wall-clock and stability, and build cost for any large

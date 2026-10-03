@@ -11268,11 +11268,6 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         free(pn);
     }
     buf_puts(file, ") {\n");
-    buf_puts(file, "    __dk_entry_depth++;\n");
-    /* r7rs-callcc-memory-never-freed: where this entry's registrations
-     * start, so a nested exit can drop them (__dk_reap_drop_to). */
-    buf_puts(file, "    size_t __dk_reap_mark = __dk_reap_n;\n");
-    buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     /* proper-tail-calls T6 (T-D6): a bouncer's direct entry is where the
      * trampoline's arming lands -- the driver arms exactly this function, and
      * the fat box's shim calls it directly.  Armed, it publishes its root as
@@ -11281,6 +11276,35 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * Saved and restored around the body so a nested entry cannot leak its
      * root outward. */
     bool tb_entry = !fd->closure && fn_may_bounce(fd);
+    /* r7rs-conformance-program-emits-megabytes-of-c: a zero-parameter entry
+     * that is not a bouncer is the shared __dk_enter0 helper (emit_module.c,
+     * beside tur_async_suspended) -- the same sequence as below, once per
+     * program instead of once per function.  The result is read the way the
+     * inline wrapper reads it: a boxed (Tier-C) value is copied out by the
+     * helper before its reap, a word converted after (a pure conversion). */
+    if (fd->n_params == 0 && !tb_entry) {
+        if (void_ret) {
+            buf_printf(file, "    (void)__dk_enter0(%s__cps, NULL, 0);\n    return;\n}\n", cn);
+        } else {
+            Type _rr; const Type *rrt = cps_resolve_ty(rt, &_rr);
+            if (slot_box_ty(rrt)) {
+                buf_printf(file, "    %s __ret;\n"
+                                 "    (void)__dk_enter0(%s__cps, &__ret, sizeof __ret);\n"
+                                 "    return __ret;\n}\n", rety, cn);
+            } else {
+                char *ld = slot_load(ctx, rt->kind, rt, "__r", false);
+                buf_printf(file, "    int64_t __r = __dk_enter0(%s__cps, NULL, 0);\n"
+                                 "    return %s;\n}\n", cn, ld);
+                free(ld);
+            }
+        }
+        goto entry_wrapper_done;
+    }
+    buf_puts(file, "    __dk_entry_depth++;\n");
+    /* r7rs-callcc-memory-never-freed: where this entry's registrations
+     * start, so a nested exit can drop them (__dk_reap_drop_to). */
+    buf_puts(file, "    size_t __dk_reap_mark = __dk_reap_n;\n");
+    buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     if (tb_entry) {
         ensure_saffron_dyn_runtime(ctx);
         buf_puts(file, "    void *__tb_save = tur_tb_root; tur_tb_root = NULL;\n");
@@ -11349,6 +11373,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     } else {
         buf_puts(file, "    return __ret;\n}\n");
     }
+entry_wrapper_done:
 
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
