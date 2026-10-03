@@ -85,7 +85,7 @@ resolves a URL into it at build or install time.
 | 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | `build.yml:36,107`, `README.md` |
 | 2 | `trowel` | `rjungemann` | -- | **7 signing secrets (2.1)**; cask name; `CMakeLists.txt:219` |
 | 3 | `turmeric-spices` | `rjungemann` | -- | must precede `turmeric`; own owner refs |
-| 3 | `turmeric` | `rjungemann` | -- | `SENTRY_DSN`; Class A one-liners (O4); Cloudflare reconnect; O5 sweep; O6 verification |
+| 3 | `turmeric` | `rjungemann` | -- | `SENTRY_DSN`; Class A one-liners (O4); O5 sweep; O6 verification |
 
 Tier 1 was verified after transfer, not assumed: for all four, an old-path
 `git clone --depth 1` and `git ls-remote` still succeed, and `mir`'s 9
@@ -154,7 +154,7 @@ existing clones and already-installed `tvm` keep working.
 | **CodeQL default setup** | `codeql.yml` may need re-enabling | security tab goes quiet |
 | **Allowed-actions policy** | third-party actions blocked | `mymindstorm/setup-emsdk`, and every pinned action in `ci.yml` |
 | **Fine-grained PATs scoped to `rjungemann/*`** | 404s, not auth errors | any local tooling, `gh` config, release scripts |
-| **Deploy keys / Git integrations** | web deploy stops | Cloudflare/Vercel connection is per-account |
+| **Deploy keys / Git integrations** | ~~web deploy stops~~ | **measured 2026-10-02: does not apply here.** No deploy keys on any of the 7 repos, and the web deploy is a local `wrangler deploy`, not a Git integration -- see 2.1 |
 
 Set `SENTRY_DSN` as an **org-level** secret rather than three repo-level
 copies. That is strictly better than today's arrangement and is the one place
@@ -220,13 +220,19 @@ is enough to catch a missing one, and is all GitHub will tell you.
 
 #### Not a GitHub secret, but in the same class
 
-- **The Cloudflare Workers connection.** `try-turmeric` and `turmeric-spices`
-  are both live Workers, but **no** `CLOUDFLARE_API_TOKEN` exists in any repo
-  and no workflow mentions `wrangler`. So the web deploy is either a local
-  `wrangler deploy` (nothing breaks on transfer) or Cloudflare **Workers
-  Builds** connected to the GitHub repo -- which is authorized per GitHub
-  *account* and must be re-authorized against the org. Determine which
-  **before** `turmeric` moves; it is the one unmeasured item left.
+- **The Cloudflare Workers deploy -- settled 2026-10-02, and it is a
+  non-issue.** `try-turmeric` and `turmeric-spices` are both live Workers, and
+  the worry was that a Cloudflare **Workers Builds** connection (authorized per
+  GitHub *account*) would need re-authorizing against the org. It is not one:
+  no `CLOUDFLARE_API_TOKEN` exists in any repo, no workflow mentions
+  `wrangler`, and the Justfile's `deploy-web` recipe runs
+  `cd web && npm run deploy` -> `vite build && wrangler deploy`, documented as
+  "requires `wrangler` auth". The deploy is therefore local and authenticated
+  against the **Cloudflare** account, which the GitHub transfer does not touch;
+  the custom domains are bound in `web/wrangler.jsonc`, not on GitHub's side.
+  Nothing to reconnect. (If a Workers Builds connection *also* exists in the
+  Cloudflare dashboard, it would not show up from the repo side -- worth one
+  glance there, but the documented deploy path does not use it.)
 - **Fine-grained PATs** scoped to `rjungemann/*` 404 rather than failing auth
   (section 2). Re-scope to the org.
 - **Trowel's transfer is safe even with the secrets missing.** Its `ci.yml`
@@ -419,8 +425,9 @@ Consequences for the rest of the plan:
   routine smoke check.
 - `trowel`'s `CMakeLists.txt:219`, which downloads a *turmeric release asset*
   by URL, is redirect-safe by the release-asset row above.
-- The one thing still unmeasured is not a GitHub redirect at all: the
-  Cloudflare Workers Builds connection (see 2.1).
+- The Cloudflare Workers deploy, briefly the last open item, turned out not
+  to involve GitHub at all (see 2.1). Nothing about the transfer is unmeasured
+  now.
 
 ### O3 -- create the org and pre-stage settings (**partially done**)
 
@@ -483,7 +490,8 @@ Then immediately, in one commit on a branch:
 - `.github/workflows/ci.yml`: **nothing**
 
 Then: re-add `SENTRY_DSN` (or set it org-wide first, per 2.1), confirm CI is
-still gated on `main` (6.1), and reconnect the web deploy integration (2.1).
+still gated on `main` (6.1). There is **no** web deploy integration to
+reconnect -- the deploy is a local `wrangler deploy` (2.1).
 There is **no** branch protection or ruleset to re-apply -- measured empty on
 all 7 repos (section 2).
 
