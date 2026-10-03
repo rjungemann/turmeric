@@ -2427,7 +2427,7 @@ ran the fixture that shows it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [tail-grammar-skips-and-or-and-carrier-lets](tail-grammar-skips-and-or-and-carrier-lets.md) | low-medium | **Narrowed 2026-09-29**: the last operand of `and`/`or` is a tail position (`tailcall-and-or-deep`, `tailcall-and-or-annot`, `errors/tailcall-and-or-test-operand`). Open: `tco_let_simple`'s carrier-ABI bail -- audited, still load-bearing (dropping it sent 21 fixtures' pointer-represented carrier bindings through emit_tail's partial init ladder, -Wint-conversion); needs one shared per-binding init emission first |
+| ~~[tail-grammar-skips-and-or-and-carrier-lets](../archive/tail-grammar-skips-and-or-and-carrier-lets.md)~~ | low-medium | **RESOLVED 2026-10-03** (archived): `emit_tail`'s inline `let` arm shares `emit_let_value`'s declaration ladder (`emit_let_binding_decl`) and puts its scope-exit releases on the drop channel the backedge and every `return` fire, so `tco_let_simple`'s carrier-ABI bail is gone -- a `Vec`, a list or a parametric heap ADT bound in a loop's `let` keeps the backedge (`tailcall-carrier-let-deep`, -O0, 1,000,000 steps).  A binding with a release stays refused only when it is used as more than a number while the backedge carries a non-number (`TC_LET_DROP`).  Also fixed: a by-value recursive spine bound in a tail `let` leaked every iteration (`tailcall-carrier-let-releases`, leak-checked).  The `and`/`or` half was fixed 2026-09-29 |
 
 ## Found archiving saffron-lang-plan (filed 2026-09-28)
 
