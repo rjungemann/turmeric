@@ -47,6 +47,16 @@ in the same change.
 | [httpd-residual-request-hardening](httpd-residual-request-hardening.md) | low-medium | WP4's httpd read-through.  **Narrowed 2026-10-01:** the quadratic header scan, the async writes that parked forever, silently-empty oversize request-line fields (now 400 / 414), the prefix-matched `Connection` header, the Basic-auth example that leaked username validity, and `mw-log`'s raw control bytes are fixed.  Left, each needing a default or an enhancement: no default in-flight cap on `httpd-new-async`, a rate limiter that hashes IPs to 32 bits and fails open when full, IPv4-only binding, loose multipart parsing |
 | ~~[lock-tracks-ref-not-resolved-commit](../archive/lock-tracks-ref-not-resolved-commit.md)~~ | medium | **RESOLVED 2026-10-01** (archived): a fetch checks out the lock's `:resolved` commit after the clone -- a bare-SHA fetch, else the branch's full history -- and never falls back to the branch tip; a commit that is gone is an error and no clone is kept.  `tur fetch --frozen` holds a fetch to the lock and never writes it.  Pinned by `tests/run-spice-fetch.sh` cases 11, 11b and 16-18 |
 
+## Refinement contract positions disagree about `#reads` (filed 2026-10-02)
+
+Found looking for an illustrating use case for the `loop-invariants`
+experiment and hitting the rejection on the first one tried -- a bounded-index
+walk whose invariant mentions the container's length.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [reads-measure-rejected-in-invariant-and-pre](reads-measure-rejected-in-invariant-and-pre.md) | medium | `TUR-E0375` is applied with no awareness of `#reads` in three of its four positions -- `:invariant`, `:pre` and a return refinement -- while a parameter refinement accommodates it (incidentally: the guard at `elab_fns.c:387` suppresses the entry-check injection and happens to skip the emit two lines later).  So the one mechanism the language has for an inline-C measure over borrowed state (C2's `#reads` + `frozen`) reaches a parameter refinement and nothing else.  Since every stdlib accessor is inline C, **no container's length or element can appear in a loop invariant** -- the bounded-index walk both `loop-invariants-plan` and `ecs-refinement-typed-apis-plan` cite as motivating cannot be written against a real container.  `vec-len` is declared `#fx{}`, so the effect row and the refinement purity walk also disagree about the same function.  Preferred fix is to teach `rt_diag_impure_pred` itself rather than copy the guard to three more sites: CT1's concern is observability of *writes*, and a read-only measure cannot be observed however often it runs |
+
 ## Effect rows and capability tags (filed 2026-10-01)
 
 Found investigating two security-guide questions -- whether `--no-proc-macros`
@@ -62,6 +72,25 @@ question 3 as Option A.
 | ~~[strict-effects-w0030-names-synthesized-lambdas](../archive/strict-effects-w0030-names-synthesized-lambdas.md)~~ | low (diagnostic quality) | **RESOLVED 2026-10-02** (archived): a synthesized binding carries a `diag_label` set where it is minted -- *anonymous function in 'dfs-or'*, *method 'eq?' of instance Eq [int]*, *default body of method 'greeting' in class Greet* -- and `binding_fn_describe` is how every effect diagnostic (`TUR-E0009`, `W0030`-`W0032`) names a function; corpus-wide no effect diagnostic prints a `__` gensym (a rank-2 `__poly_N` wrapper is skipped: the function it wraps answers for its row).  `TUR-W0030` also spells the row to add in `#fx{}` syntax.  Pinned by `tests/run-flags.sh` `strict-effects-lambda-name` |
 | ~~[strict-effects-and-lint-effects-are-indistinguishable](../archive/strict-effects-and-lint-effects-are-indistinguishable.md)~~ | low (flag taxonomy) | **RESOLVED 2026-10-02** (archived): one flag with a real promotion path -- `-Werror=strict-effects` makes `TUR-W0030`/`W0032` errors and implies `--strict-effects`; `--lint-effects` is a deprecated alias (`TUR-W0050`); the duplicated emitter and its wrong comment are gone.  Pinned by `tests/run-flags.sh` `lint-effects-alias`, `strict-effects-werror`, `strict-effects-werror-clean` |
 | ~~[module-members-skip-effect-row-checking](../archive/module-members-skip-effect-row-checking.md)~~ | medium | **RESOLVED 2026-10-02** (archived): `effect_check_pass` walks one flattened list -- top-level items with `(defmodule ...)` bodies and top-level `(do ...)` forms spread in place, as the emitter flattens them -- so a module member (or a macro's `(do (defn ...))`) is resolved (`TUR-E0026`), inferred and checked (`TUR-E0009`), and `--dump-effects` lists it.  The binding index that silently dropped functions past slot 1024 -- already live on `main`: `#lang r7rs` programs index 1241-1587 functions, so a late callee's inferred effects never reached its callers -- is a growable hash.  Measured blast radius: 0 of this repo's fixtures; 3 of turmeric-spices' 777 files (the three spice tests the report named, each a printing `#fx{Unsafe}` that needs `IO`).  Pinned by `tests/fixtures/errors/effect-row-module-member`, `errors/effect-row-toplevel-do-defn`, `errors/effect-row-past-1024-fns`, `effect-row-module-member-ok`, and `tests/run-flags.sh` `dump-effects-module-members` |
+
+## Refinement experiments reviewed at the v0.59.0 cut (filed 2026-10-02)
+
+Found reviewing the two live `EXPERIMENTS[]` rows --
+[loop-invariants](../upcoming/loop-invariants-plan.md) (`expires_at 0.58.0`,
+so due) and [reflected-measures](../upcoming/reflected-measures-plan.md)
+(`expires_at 0.61.0`, not due) -- against what graduating each would freeze.
+Every row below was reproduced against a v0.59.0 Debug build. None is a
+soundness bug: in all four the runtime check is kept, so the programs are
+correct. They are the completeness and diagnostic gaps the `prototype`
+lifecycle label is currently covering for, and each one is a thing to decide
+before either row graduates.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [loop-invariant-silently-unverified-outside-a-defn](loop-invariant-silently-unverified-outside-a-defn.md) | medium | A `while` with an `:invariant` in a `definstance` method or a top-level lambda gets **no analysis and no diagnostic** -- not a proof, not a decline, not even the `TUR-W0372` every other unanalysable loop gets, at any strictness level.  It keeps both runtime checks and verifies nothing, while the stats line reports `0 loop(s) declined`.  `li_analyze_loops` has one call site, inside `elab_defn` (`elab_fns.c:10625`), but `elab_while` registers a site and emits checks for every annotated loop regardless of enclosing form.  Same enclosing-form blind spot as [module-members-skip-effect-row-checking](module-members-skip-effect-row-checking.md) |
+| [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md) | medium | RF3 calls `--n 400` at two seeds "non-optional" because both prior refinement soundness bugs lived in the encoder.  The run passes (table in the report: 0 soundness bugs at seeds 11 and 23) but the only admitted measure the fuzzer generates, `reflect_if`, is scalar and non-recursive by design, so recursive unfolding, fuel, arm selection and RF4's tag-fact selection -- the entire RF3/RF4 encoder addition -- are unfuzzed.  `loop-invariants` got a dedicated `shape_loop` + `--only-shape loop`; `^reflect` got helper kinds and has no way to run at density |
+| [reflect-two-provable-facts-report-as-not-holding](reflect-two-provable-facts-report-as-not-holding.md) | low-medium | Two independent provable facts come back unknown, both with the note `the predicate ... does not hold for every input here` -- a claim the code is wrong when it is not.  (1) `(= r true)` is unknown where bare `r` proves: the goal path gets a plain `VC_EQ` over two propositions, the atom that `refine_collect.c:938` already works around with an implication pair for the measure's own equation.  (2) The same RF4 fact proves at a return obligation and is unknown at a call-site crossing, because `rt_collect_path_conds` records only guards and literal-pattern equalities, never a constructor arm's tag/selector facts.  RF6.1 landing may have removed the reason that extension was deferred |
+| [loop-invariant-declines-more-than-soundness-requires](loop-invariant-declines-more-than-soundness-requires.md) | low | Two declines broader than their own reason.  (1) An inner loop assigning a purely inner-local counter declines the outer invariant; the trigger at `elab_fns.c:5169` tests only "the nested loop assigns *something*", never whether the assigned names are visible outside it.  (2) An early `return` declines initiation and preservation too, though neither depends on how the loop exits -- only the post-loop fact `p AND (not c)` is genuinely unavailable.  Also: the nested-loop decline path has no fixture, the one decline in `li_compose` that `loop-invariant-declines` does not cover |
 
 ## P0 representation confusion (filed 2026-09-30)
 
@@ -2425,7 +2454,7 @@ answers.
 ## Found investigating the AOT-compiled REPL plan (filed 2026-09-29)
 
 Found while checking the 2026-06-28 draft of
-[aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md) against
+[aot-compiled-repl-plan](../upcoming/aot-compiled-repl-plan.md) against
 `main`. The first two were resolved the next day; the first was that plan's
 phase C0. The third was filed 2026-09-30 and resolved the same day.
 

@@ -78,6 +78,7 @@
 #include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
 #include "turi/spice_loader.h" /* J2: the REPL's in-process jit hook */
 #include "turi/jit_ffi.h"      /* jit-ffi-c2mir-plan: dynamic-FFI provider */
+#include "turi/inline_c_jit.h"  /* aot-compiled-repl-plan C1 */
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "fmt.h"
@@ -5080,14 +5081,16 @@ static int cmd_jit(int argc, char **argv) {
     char **jit_rm = discover_manifest_reader_macros(input, &jit_rm_n);
     /* The `jit` experiment GRADUATED 2026-08-17 -- `tur jit` no longer needs
      * `--enable=jit`.  The BUILD-TIME gate below is the one that remains: a
-     * default build vendors no MIR and therefore carries no engine. */
+     * build configured -DTUR_JIT=OFF (or on a host the default leaves off)
+     * carries no engine. */
 #ifndef TUR_HAVE_JIT
     (void)passthrough_start;   /* used only by the engine path below */
     (void)timing_json;
     fprintf(stderr,
             "tur: this build carries no JIT engine; reconfigure with "
             "-DTUR_JIT=ON\n"
-            "     (vendors MIR at configure time -- see cmake/mir.cmake)\n");
+            "     (the default on 64-bit x86-64/arm64; MIR is vendored under "
+            "external/mir)\n");
     free_reader_macro_paths(jit_rm, jit_rm_n);
     free(user_inc);
     return 2;
@@ -5461,6 +5464,59 @@ static int repl_jit_shadow_entry(const char *src, const char *link) {
 #endif
 }
 
+/* The image compile the REPL's two in-process builds share (the spice
+ * build below, and C1's inline-C defns): swap in the S2 split preamble when
+ * its hash matches, compile, and on a failed split attempt retry with the
+ * full preamble -- the same ladder as cmd_jit, because the full TU is
+ * self-contained against a hole the hash guard cannot see.
+ *
+ * `prune` drops what nothing live names, as cmd_jit does
+ * (src/compiler/jit_prune.h).  Only for a TU whose every entry point is a
+ * non-static definition: a static export the manifest names but nothing in the
+ * TU calls would be dropped.  The spice build passes false for that reason;
+ * C1's one function is reached through its non-static __ffi shim. */
+static int repl_jit_compile_image(Buf *csrc, const char *autolink, bool prune,
+                                  TurJitImage **out) {
+    Buf split_src;
+    buf_init(&split_src);
+    bool split_used = jit_try_split_preamble(csrc, &split_src);
+    bool reduced_used = split_used;
+    if (prune) {
+        JitPruneStats ps;
+        memset(&ps, 0, sizeof ps);
+        if (split_used) {
+            (void)jit_prune_split_source(&split_src, &ps);
+        } else {
+            buf_write(&split_src, csrc->data, csrc->len);
+            if (jit_prune_full_source(&split_src, &ps)) {
+                reduced_used = true;
+            } else {
+                buf_free(&split_src);
+                buf_init(&split_src);
+            }
+        }
+    }
+
+    static char jinc0[4096], jinc1[4096], jinc2[4096];
+    const char *jincs[3];
+    int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
+                                       jinc1, sizeof(jinc1),
+                                       jinc2, sizeof(jinc2), jincs);
+
+    const Buf *use = reduced_used ? &split_src : csrc;
+    int jrc = tur_jit_compile_image(use->data, use->len, autolink,
+                                    jincs, n_jincs, out);
+    if (jrc != TUR_JIT_OK && reduced_used) {
+        fprintf(stderr,
+                "tur: warning: TUR-W0071: split-runtime path failed; "
+                "retrying with the full preamble\n");
+        jrc = tur_jit_compile_image(csrc->data, csrc->len, autolink,
+                                    jincs, n_jincs, out);
+    }
+    buf_free(&split_src);
+    return jrc;
+}
+
 static int repl_jit_build(const char *build_dir, void **out_image,
                           char **out_manifest) {
     *out_image = NULL;
@@ -5606,33 +5662,11 @@ static int repl_jit_build(const char *build_dir, void **out_image,
 
     /* S2: same hash-gated preamble swap as cmd_jit -- a REPL reload is
      * exactly the loop the split exists for. */
-    Buf split_src;
-    buf_init(&split_src);
-    bool split_used = jit_try_split_preamble(&csrc, &split_src);
-
-    static char jinc0[4096], jinc1[4096], jinc2[4096];
-    const char *jincs[3];
-    int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
-                                       jinc1, sizeof(jinc1),
-                                       jinc2, sizeof(jinc2), jincs);
-
     TurJitImage *img = NULL;
-    const Buf *use = split_used ? &split_src : &csrc;
-    int jrc = tur_jit_compile_image(use->data, use->len,
-                                    autolink.len ? autolink.data : NULL,
-                                    jincs, n_jincs, &img);
-    if (jrc != TUR_JIT_OK && split_used) {
-        /* Same ladder as cmd_jit: the full TU is self-contained against a
-         * hole the hash guard cannot see. */
-        fprintf(stderr,
-                "tur: warning: TUR-W0071: split-runtime path failed; "
-                "retrying with the full preamble\n");
-        jrc = tur_jit_compile_image(csrc.data, csrc.len,
-                                    autolink.len ? autolink.data : NULL,
-                                    jincs, n_jincs, &img);
-    }
+    int jrc = repl_jit_compile_image(&csrc,
+                                     autolink.len ? autolink.data : NULL,
+                                     /*prune=*/false, &img);
     buf_free(&csrc);
-    buf_free(&split_src);
     buf_free(&autolink);
     if (jrc != TUR_JIT_OK) {
         fprintf(stderr,
@@ -5658,6 +5692,127 @@ static void repl_jit_hook_free(void *image) {
 }
 static const TurSpiceJitHook g_repl_jit_hook = {
     repl_jit_build, repl_jit_hook_sym, repl_jit_hook_free,
+};
+
+/* aot-compiled-repl-plan C1: compile ONE inline-C defn the interpreter cannot
+ * run (turi/inline_c_jit.c builds the program text and does the calling).
+ *
+ * Unlike repl_jit_build this runs in the MIDDLE of an evaluation -- inside the
+ * call that needed the function -- so it puts back everything compile_to_c
+ * resets that the interpreter's turn still uses: the diagnostic file registry
+ * (the turn's own source is id 0, and its loaded files keep their ids), the
+ * had-error flag, and the emission flags repl_jit_build also saves.  The
+ * scratch file is the program compile_to_c reads; it is named after the
+ * function so a diagnostic says which defn it is about, and removed once
+ * read.  The image is never freed: the interpreter calls into it for the rest
+ * of the process. */
+static int repl_inline_c_jit_build(const char *name, const char *src,
+                                   size_t len, void **out_image,
+                                   char **out_manifest) {
+    *out_image = NULL;
+    *out_manifest = NULL;
+
+    /* TEMP/TMP are what a Windows host sets; /tmp need not exist there. */
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = getenv("TEMP");
+    if (!tmp || !*tmp) tmp = getenv("TMP");
+    if (!tmp || !*tmp) tmp = "/tmp";
+    char stem[64];
+    size_t o = 0;
+    for (const char *p = name; *p && o + 1 < sizeof stem; p++)
+        stem[o++] = (isalnum((unsigned char)*p) || *p == '-' || *p == '_')
+                    ? *p : '_';
+    stem[o] = '\0';
+    char path[4300];
+    snprintf(path, sizeof path, "%s/tur-repl-jit-%s-XXXXXX.tur", tmp, stem);
+    int fd = mkstemps(path, 4);
+    if (fd < 0) {
+        fprintf(stderr, "tur: repl-jit-inline-c: cannot create %s: %s\n",
+                path, strerror(errno));
+        return -1;
+    }
+    FILE *f = fdopen(fd, "w");
+    bool wrote = f && fwrite(src, 1, len, f) == len;
+    if (f) fclose(f); else close(fd);
+    if (!wrote) {
+        fprintf(stderr, "tur: repl-jit-inline-c: cannot write %s\n", path);
+        unlink(path);
+        return -1;
+    }
+
+    size_t cap = diag_files_capacity();
+    const SourceFile **saved_files =
+        (const SourceFile **)calloc(cap ? cap : 1, sizeof *saved_files);
+    if (!saved_files) { unlink(path); return -1; }
+    size_t n_saved = diag_files_save(saved_files, cap);
+    bool had_error = diag_had_error();
+
+    bool saved_efl = g_emit_for_link;
+    bool saved_interp = g_interpret_mode;
+    bool saved_shims = g_emit_ffi_export_shims;
+    Buf *saved_sink = g_manifest_sink;
+    Buf csrc, manifest;
+    buf_init(&csrc);
+    buf_init(&manifest);
+    /* COMPILED-mode elaboration, as in repl_jit_build: inheriting the
+     * interpreter's g_interpret_mode would select `#?(:turi ...)` branches
+     * into native code.  The __ffi shim is what the interpreter calls. */
+    g_emit_for_link = true;
+    g_interpret_mode = false;
+    g_emit_ffi_export_shims = true;
+    g_manifest_sink = &manifest;
+    int rc = compile_to_c(path, &csrc, NULL, 0, NULL, 0);
+    g_manifest_sink = saved_sink;
+    g_emit_ffi_export_shims = saved_shims;
+    g_interpret_mode = saved_interp;
+    g_emit_for_link = saved_efl;
+    unlink(path);
+
+    TurJitImage *img = NULL;
+    if (rc == 0) {
+        hoist_tur_include_directives(&csrc);
+        /* The image runs __tur_static_init by name, but it is static and, in
+         * a TU with no main, nothing calls it -- so the prune below would drop
+         * it.  One non-static caller keeps it (and what it initializes). */
+        buf_puts(&csrc, "\nvoid __tur_repl_jit_keep_init(void) "
+                        "{ __tur_static_init(); }\n");
+        Buf autolink;
+        buf_init(&autolink);
+        /* c2mir's system-header warnings are noise at a prompt; its errors
+         * (why a body was refused) still print. */
+        bool was_quiet = tur_jit_set_quiet_warnings(true);
+        if (!scan_autolink_markers(&csrc, &autolink)) {
+            rc = -1;
+        } else if (repl_jit_compile_image(&csrc,
+                                          autolink.len ? autolink.data : NULL,
+                                          /*prune=*/true, &img) != TUR_JIT_OK) {
+            rc = -1;
+        }
+        tur_jit_set_quiet_warnings(was_quiet);
+        buf_free(&autolink);
+    }
+    buf_free(&csrc);
+
+    /* Put the turn's diagnostic state back exactly as it was. */
+    diag_reset();
+    diag_files_replace(saved_files, n_saved);
+    free(saved_files);
+    if (had_error) diag_force_had_error();
+
+    if (rc != 0 || !img) {
+        buf_free(&manifest);
+        return -1;
+    }
+    buf_putc(&manifest, '\0');
+    *out_manifest = strdup(manifest.data);
+    buf_free(&manifest);
+    if (!*out_manifest) return -1;
+    *out_image = img;
+    return 0;
+}
+
+static const TuriInlineCJitHook g_repl_inline_c_jit_hook = {
+    repl_inline_c_jit_build, repl_jit_hook_sym,
 };
 #endif /* TUR_HAVE_JIT */
 
@@ -5697,8 +5852,8 @@ static int run_delegate_engine(const char *engine, const char *entry,
     fprintf(stderr,
             "tur run: engine \"jit\" is configured, but this build carries "
             "no JIT engine\n"
-            "     reconfigure with -DTUR_JIT=ON (vendors MIR at configure "
-            "time -- see cmake/mir.cmake),\n"
+            "     reconfigure with -DTUR_JIT=ON (the default on 64-bit "
+            "x86-64/arm64),\n"
             "     or override the engine: --engine cc / TUR_ENGINE=cc\n");
     return 2;
 #else
@@ -12039,6 +12194,9 @@ static int tur_main_inner(int argc, char **argv) {
      * spice FFI ladder can synthesize call thunks at runtime.  JIT builds
      * only; without it every consumer keeps the non-JIT fallback behavior. */
     tur_jit_ffi_install();
+    /* aot-compiled-repl-plan C1: the interpreter's compiler for inline-C
+     * defns it cannot run.  Inert until --enable=repl-jit-inline-c. */
+    turi_set_inline_c_jit_hook(&g_repl_inline_c_jit_hook);
 #endif
 
     /* Phase 8: Check for global flags before command */
@@ -13288,8 +13446,8 @@ static int tur_main_inner(int argc, char **argv) {
                 fprintf(stderr,
                         "tur repl: engine \"jit\" is configured, but this "
                         "build carries no JIT engine\n"
-                        "     reconfigure with -DTUR_JIT=ON (vendors MIR at "
-                        "configure time -- see cmake/mir.cmake),\n"
+                        "     reconfigure with -DTUR_JIT=ON (the default on "
+                        "64-bit x86-64/arm64),\n"
                         "     or override the engine: --engine cc / "
                         "TUR_ENGINE=cc\n");
                 return 2;

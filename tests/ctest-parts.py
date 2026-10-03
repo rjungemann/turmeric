@@ -60,7 +60,7 @@ PARTS = {
         # default -- which is the property that makes a dropped suite hard.
         # Adding a name to this pattern WITHOUT adding a part that runs it is
         # the drift --check exists to catch.
-        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_generic_spec_matrix$|^tur_emitted_float_conversions$"),
+        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_generic_spec_matrix$|^tur_emitted_float_conversions$|^tur_jit_fixture_tests$|^tur_repl_spice_jit$"),
         "fconv":    ("include", r"^tur_emitted_float_conversions$"),
         # 4066 live cells at ~1.5s of CPU each, RUN_SERIAL because it fans out
         # internally.  Two jobs, TUR_GSM_SHARD=i/2, which between them run the
@@ -76,7 +76,7 @@ PARTS = {
         # queueing behind the first three.  The other three quarters are the
         # nightly's job.  tur_shard_partition is excluded outright -- see
         # LEG_INVARIANT, it cannot answer differently here.
-        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_emitted_float_conversions$|^tur_shard_partition$"),
+        "aux":      ("exclude", r"^tur_tests$|r7rs|^tur_emitted_float_conversions$|^tur_shard_partition$|^tur_jit_fixture_tests$|^tur_repl_spice_jit$"),
     },
 }
 
@@ -143,6 +143,47 @@ LEG_INVARIANT = {
     },
     "linux": {},
 }
+
+# Suites a DIFFERENT per-PR job runs in full on both legs, so no `test` part
+# runs them.  Since TUR_JIT defaulted ON (2026-10-02) the `test` job builds the
+# engine too, which registers these two; left in `aux` they would re-run the
+# whole fixture corpus through `tur jit` there, a second copy of what the `jit`
+# job already runs on the same two OSes.  --check confirms each name is in the
+# named job's own `ctest -R` pattern in ci.yml, so a row cannot outlive the
+# coverage it claims.  They are only registered on a TUR_JIT build, so a row
+# naming an unregistered test is not stale on a -DTUR_JIT=OFF tree.
+OTHER_JOB = {
+    "tur_jit_fixture_tests": (
+        "jit",
+        "the fixture corpus through the MIR engine: ~440s on Linux and up to "
+        "~940s on a 3-core mac, RUN_SERIAL.  The `jit` job exists to run it.",
+    ),
+    "tur_repl_spice_jit": (
+        "jit",
+        "the in-process spice build behind `tur repl --engine jit`; runs "
+        "beside tur_jit_fixture_tests in the `jit` job.",
+    ),
+}
+
+
+def ci_job_ctest_pattern(job):
+    """The `ctest ... -R '<pattern>'` the ci.yml job `job` runs, or None.
+
+    Read from the job's own block: from its `  <job>:` header to the next
+    top-level job header.  The first single-quoted -R argument wins.
+    """
+    try:
+        with open(os.path.join(REPO, CI_WORKFLOW)) as f:
+            text = f.read()
+    except OSError:
+        return None
+    m = re.search(r"^  %s:\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)" % re.escape(job),
+                  text, re.M | re.S)
+    if not m:
+        return None
+    r = re.search(r"-R\s+'([^']+)'", m.group(1))
+    return r.group(1) if r else None
+
 
 # Where --check reads the sample sizes from, to compare against SAMPLED, and the
 # env var each sampled suite's slice is spelled with.  A suite sampled per-PR has
@@ -286,6 +327,7 @@ def check(build):
         # cover it (nightly: yes, invariant: the other leg already did).
         omitted = dict(nightly)
         omitted.update(invariant)
+        omitted.update({n: why for n, (_job, why) in OTHER_JOB.items()})
 
         # Completeness -- the dangerous half.  A test in no part is a suite
         # that stopped running, and nothing else in CI would notice.
@@ -295,9 +337,10 @@ def check(build):
             print("FAIL check-ctest-partition -- %s: test '%s' is in NO part, "
                   "so this leg never runs it.\n"
                   "     Add it to a part's pattern, or record it in "
-                  "NIGHTLY_ONLY['%s'] (the nightly covers it) or "
+                  "NIGHTLY_ONLY['%s'] (the nightly covers it), "
                   "LEG_INVARIANT['%s'] (the other leg's answer is the same by "
-                  "construction) with the reason."
+                  "construction) or OTHER_JOB (another per-PR job runs it) "
+                  "with the reason."
                   % (leg, name, leg, leg))
             fail = 1
 
@@ -334,7 +377,10 @@ def check(build):
         # A stale row hides a test that IS covered, or names one that no longer
         # exists -- both make the table lie about coverage.
         for name in sorted(omitted):
-            which = "LEG_INVARIANT" if name in invariant else "NIGHTLY_ONLY"
+            which = ("LEG_INVARIANT" if name in invariant
+                     else "OTHER_JOB" if name in OTHER_JOB else "NIGHTLY_ONLY")
+            if name not in all_tests and name in OTHER_JOB:
+                continue    # a TUR_JIT=OFF tree; see OTHER_JOB
             if name not in all_tests:
                 print("FAIL check-ctest-partition -- %s: %s names "
                       "'%s', which is not a registered test; delete the row."
@@ -344,6 +390,22 @@ def check(build):
                 print("FAIL check-ctest-partition -- %s: %s names "
                       "'%s', but part(s) %s already run it; delete the row."
                       % (leg, which, name, ", ".join(members[name])))
+                fail = 1
+
+        # An OTHER_JOB row must name a suite that job's own -R pattern selects,
+        # or "another job runs it" is false and nothing does.
+        for name, (job, _why) in sorted(OTHER_JOB.items()):
+            pat = ci_job_ctest_pattern(job)
+            if pat is None:
+                print("FAIL check-ctest-partition -- %s: OTHER_JOB says the "
+                      "'%s' job runs '%s', but no `ctest -R '...'` was found in "
+                      "that job in %s" % (leg, job, name, CI_WORKFLOW))
+                fail = 1
+            elif not re.search(pat, name):
+                print("FAIL check-ctest-partition -- %s: OTHER_JOB says the "
+                      "'%s' job runs '%s', but that job's -R pattern %r does "
+                      "not select it, so nothing in CI runs it."
+                      % (leg, job, name, pat))
                 fail = 1
 
         # A SAMPLED row must name a test that IS in a part (it runs, partially)
@@ -397,6 +459,9 @@ def check(build):
                 notes.append("%d sampled" % len(SAMPLED[leg]))
             if invariant:
                 notes.append("%d leg-invariant" % len(invariant))
+            other = [n for n in OTHER_JOB if n in all_tests]
+            if other:
+                notes.append("%d run by another job" % len(other))
             print("  ok  %s -- %d registered test(s) across %d part(s) / %d "
                   "job(s)%s" % (leg, len(all_tests), len(PARTS[leg]), n_jobs,
                                 " (%s)" % ", ".join(notes) if notes else ""))

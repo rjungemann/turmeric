@@ -418,6 +418,10 @@ extern bool g_dump_reflect;
  * written `:invariant` always PARSES; this bit gates the acting -- runtime
  * checks, static discharge, and the post-loop fact. */
 extern bool g_opt_loop_invariants;
+/* aot-compiled-repl-plan C1: `--enable=repl-jit-inline-c`.  An inline-C defn
+ * the interpreter cannot run is compiled in process on its first call, on a
+ * host that registered a compiler (turi/inline_c_jit.h; TUR_HAVE_JIT `tur`). */
+extern bool g_opt_repl_jit_inline_c;
 extern bool g_opt_r7rs_gc;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
