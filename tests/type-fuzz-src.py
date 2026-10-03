@@ -275,6 +275,28 @@ def known_bug_slug(tags):
     # 2026-09-17 -- the slot's type reached the SIGNATURE (gen-unwrap / await
     # declared :int), so bool printed 1 and cstr a raw pointer.  Both read
     # the slot back at the payload's declared type now and have no row here.
+    #
+    # ---- crossings, reopened 2026-10-03 ------------------------------------
+    #
+    # generator-thunk-call-site-returns-void-ptr-not-carrier: inside a generic
+    # body, a generator yield whose expression is an immediately-applied
+    # closure, wrapped in a generic thunk, is CALLED through
+    # `tur_thunk_void___t` (`void *(*)(void *)`) while the closure itself is
+    # emitted returning the tyvar's `int64_t` carrier.  Return-type mismatch
+    # only; ABI-benign on LP64, so the program prints the right answer and
+    # nothing but -fsanitize=function sees it.  Found by the nightly at seed
+    # 20261003 case 376.  Reduction showed gid and thin_hof are incidental, so
+    # the predicate is the three crossings that are load-bearing -- narrow on
+    # purpose: a broader one would match a large slice of the thunk pool to
+    # cover one shape.
+    #
+    # Measured at that seed, before and after this row: the one case moves
+    # from BUG_fnptr_trap to KNOWN(...) and every other bucket is unchanged
+    # (ok 369, SEAM_REJECT 29, GEN_REJECT 1).  The leg is still GENERATED and
+    # counted in the summary rather than vanishing -- which is what the
+    # seam-axis note above argues for, so do not widen this into an avoid.
+    if {"gbody", "thunk", "closure_ret"} <= set(tags):
+        return "generator-thunk-call-site-returns-void-ptr-not-carrier"
     return None
 
 
@@ -289,6 +311,28 @@ def known_bug_slug(tags):
 # form is required for any defect whose symptom is a wrong ANSWER; without it
 # such a probe exits 0 and reports FIXED on a build that is still broken.
 KNOWN_PROBES = [
+    # generator-thunk-call-site-returns-void-ptr-not-carrier (open).
+    # Reduced from the nightly's case 376 at seed 20261003: a generator yield
+    # of an immediately-applied closure, wrapped in a generic thunk, inside a
+    # generic body.  All three are required -- drop the generator, the inner
+    # application, or the thunk and the mismatch goes away.
+    #
+    # 2-tuple on purpose: the symptom is a TRAP, which run_case classifies
+    # `fnptr_trap` and known_probes already counts as firing.  It is NOT a
+    # wrong-answer defect, so the 3-tuple form would be wrong -- the program
+    # prints the correct `true`.
+    #
+    # BEWARE: that also means this row reports FIXED on any box without
+    # -fsanitize=function (stock macOS Apple clang; the banner then says
+    # `fnsan: UNAVAILABLE`).  Do not retire it on a FIXED whose run banner
+    # does not say `fnsan: ARMED`.
+    ("generator-thunk-call-site-returns-void-ptr-not-carrier",
+     "(defn mk [x : bool] : (fn [] bool) (fn [] x))\n"
+     "(defn thunk [B] [v : B] : (fn [] B) (fn [] v))\n"
+     "(defn gbody [A] [x : A] : A\n"
+     "  ((thunk (gen-unwrap (gen-next (gen [] (yield ((fn [] x)))))))))\n"
+     "(defn main [] : int\n"
+     "  (println ((gbody (mk true))))\n  0)\n"),
     # The tyvar-result and by-value-result rows are FIXED (stage 1 and
     # increment 2 of fn-value-fat-normalization) and pinned by
     # tests/fixtures/fn-value-fat-normalized-{,tyvar-}params/.  They stay here
