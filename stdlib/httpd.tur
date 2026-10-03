@@ -90,6 +90,7 @@
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: static int64_t httpd_max_body = 8388608; */
   /* __tur_include__: static int httpd_bind_any = 0; */
+  /* __tur_include__: static char httpd_bind_addr_s[64] = {0}; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
@@ -225,6 +226,40 @@
   httpd_bind_any = on ? 1 : 0;
   return prev != 0;
   ```)
+;;; httpd-set-bind-addr! -- listen on one address, IPv4 or IPv6.
+;;;
+;;; httpd-set-bind-any! chooses between loopback and every interface; this
+;;; names the interface -- a numeric address like "192.168.1.5", "::1" or
+;;; "::" (every IPv6 interface).  It applies to the servers created after it
+;;; (httpd-new, httpd-new-pool, httpd-new-async, ...) and wins over
+;;; httpd-set-bind-any!.  "" clears it, back to that default.  An address
+;;; that does not parse is refused and the setting is left as it was.
+;;; TUR_BIND_LOOPBACK, which the test harnesses export, still forces loopback
+;;; -- of the address's own family (127.0.0.1 or ::1).
+;;;
+;;; Parameters:
+;;;   addr -- a numeric IPv4 or IPv6 address, or "" to clear
+;;;
+;;; Returns:
+;;;   true if the address was accepted (or cleared), false if it did not parse.
+;;;
+;;; Example:
+;;;   (httpd-set-bind-addr! "::1")
+;;;   (httpd-new 8080 handler)   ; IPv6 loopback only
+;;;
+;;; Since: 2026-10-03 (security-audit-plan WP4 residual)
+
+(defn httpd-set-bind-addr! [addr : cstr] : bool
+  ```c
+  if (!addr) return false;
+  if (!*addr) { httpd_bind_addr_s[0] = '\0'; return true; }
+  if (strlen(addr) >= sizeof httpd_bind_addr_s) return false;
+  unsigned char probe[16];
+  if (inet_pton(AF_INET, addr, probe) != 1 && inet_pton(AF_INET6, addr, probe) != 1)
+      return false;
+  memcpy(httpd_bind_addr_s, addr, strlen(addr) + 1);
+  return true;
+  ```)
 ;;; httpd-bind-addr -- internal: the IPv4 address (host order) to listen on.
 
 (defn httpd-bind-addr [] : int
@@ -233,6 +268,50 @@
   const char *e = getenv("TUR_HTTPD_BIND_ANY");
   int any = httpd_bind_any || (e && *e && strcmp(e, "0") != 0);
   return (int64_t)(any ? INADDR_ANY : INADDR_LOOPBACK);
+  ```)
+;;; httpd-listen-socket -- internal: a bound, listening, non-blocking socket for
+;;; `port` on the configured address (httpd-set-bind-addr!, else loopback or
+;;; every interface per httpd-bind-addr), or -1.  Shared by the constructors.
+
+(defn httpd-listen-socket [port : int] : int
+  ```c
+  #include <fcntl.h>
+  const char *a = httpd_bind_addr_s;
+  int fam = AF_INET;
+  unsigned char a6[16];
+  if (a[0] && inet_pton(AF_INET, a, a6) != 1) {
+      if (inet_pton(AF_INET6, a, a6) != 1) return -1;
+      fam = AF_INET6;
+  }
+  int loop = getenv("TUR_BIND_LOOPBACK") != NULL;
+  struct sockaddr_storage ss;
+  memset(&ss, 0, sizeof ss);
+  socklen_t sl;
+  if (fam == AF_INET) {
+      struct sockaddr_in *s4 = (struct sockaddr_in *)&ss;
+      s4->sin_family = AF_INET;
+      s4->sin_port   = htons((uint16_t)port);
+      /* No explicit address, or forced loopback: exactly the old default. */
+      if (!a[0] || loop) s4->sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
+      else inet_pton(AF_INET, a, &s4->sin_addr);
+      sl = (socklen_t)sizeof *s4;
+  } else {
+      struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&ss;
+      s6->sin6_family = AF_INET6;
+      s6->sin6_port   = htons((uint16_t)port);
+      if (loop) ((unsigned char *)&s6->sin6_addr)[15] = 1;   /* ::1 */
+      else memcpy(&s6->sin6_addr, a6, 16);
+      sl = (socklen_t)sizeof *s6;
+  }
+  int fd = socket(fam, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  if (bind(fd, (struct sockaddr *)&ss, sl) < 0) { close(fd); return -1; }
+  if (listen(fd, 128) < 0) { close(fd); return -1; }
+  return fd;
   ```)
 ;;; httpd-status-text -- internal: the reason phrase for a status code.
 
@@ -946,24 +1025,13 @@
     TUR_CLOSURE_DROP(handler);
     return NULL;
   }
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
-  int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  int flags = fcntl(fd, F_GETFL, 0);
-  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family      = AF_INET;
   /* Loopback unless the program opted in to every interface with
-   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
-   * server that is reachable from the network should be one somebody asked
-   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
-   * loopback. */
-  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
-  addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1, or named one with
+   * httpd-set-bind-addr! (security-audit-plan M-4: a server that is reachable
+   * from the network should be one somebody asked for).  TUR_BIND_LOOPBACK,
+   * which the test suite exports, still forces loopback. */
+  int fd = (int)httpd_hylisten_hysocket(port);
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdBlock *hb = (HttpdBlock *)calloc(1, sizeof(HttpdBlock));
   if (!hb) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   hb->listen_fd = fd;
@@ -1196,10 +1264,12 @@
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
-  struct sockaddr_in addr;
+  struct sockaddr_storage addr;
   socklen_t len = sizeof(addr);
   if (getsockname(hb->listen_fd, (struct sockaddr *)&addr, &len) < 0) return -1;
-  return (int64_t)ntohs(addr.sin_port);
+  if (addr.ss_family == AF_INET6)
+      return (int64_t)ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+  return (int64_t)ntohs(((struct sockaddr_in *)&addr)->sin_port);
   ```)
 ;;; httpd-run -- run the listener reactor until httpd-stop is called.
 ;;;
@@ -2982,24 +3052,13 @@
       int   max_in_flight;        /* A4: cap; 0 = unlimited */
       int   in_flight;            /* A4: live request count */
   } HttpdAsync;
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
-  int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  int flags = fcntl(fd, F_GETFL, 0);
-  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family      = AF_INET;
   /* Loopback unless the program opted in to every interface with
-   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
-   * server that is reachable from the network should be one somebody asked
-   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
-   * loopback. */
-  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
-  addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1, or named one with
+   * httpd-set-bind-addr! (security-audit-plan M-4: a server that is reachable
+   * from the network should be one somebody asked for).  TUR_BIND_LOOPBACK,
+   * which the test suite exports, still forces loopback. */
+  int fd = (int)httpd_hylisten_hysocket(port);
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
   if (!ha) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   ha->listen_fd     = fd;
@@ -3180,10 +3239,12 @@
   } HttpdAsync;
   if (!h) return 0;
   HttpdAsync *ha = (HttpdAsync *)h;
-  struct sockaddr_in sa;
+  struct sockaddr_storage sa;
   socklen_t sl = sizeof(sa);
   if (getsockname(ha->listen_fd, (struct sockaddr *)&sa, &sl) < 0) return 0;
-  return (int64_t)ntohs(sa.sin_port);
+  if (sa.ss_family == AF_INET6)
+      return (int64_t)ntohs(((struct sockaddr_in6 *)&sa)->sin6_port);
+  return (int64_t)ntohs(((struct sockaddr_in *)&sa)->sin_port);
   ```)
 ;;; httpd-await-readable -- suspend the current fiber until conn fd is readable.
 ;;;

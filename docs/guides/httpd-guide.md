@@ -105,8 +105,12 @@ past its in-flight cap.
 Servers listen on **127.0.0.1** unless the program asks for more. To be
 reachable from the network, call `(httpd-set-bind-any! true)` before the
 constructor (or set `TUR_HTTPD_BIND_ANY=1` in the environment); that binds
-`0.0.0.0`. `TUR_BIND_LOOPBACK`, which the test harnesses export, forces
-loopback either way.
+`0.0.0.0`. To name one interface instead -- IPv4 or IPv6 -- call
+`(httpd-set-bind-addr! "192.168.1.5")` (or `"::1"`, or `"::"` for every IPv6
+interface); it wins over `httpd-set-bind-any!`, `""` clears it, and an
+address that does not parse returns `false` and changes nothing.
+`TUR_BIND_LOOPBACK`, which the test harnesses export, forces loopback either
+way -- of the named address's own family.
 
 Before a handler runs, the server refuses, and closes the connection on:
 

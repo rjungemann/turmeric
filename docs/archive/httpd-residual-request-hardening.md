@@ -5,7 +5,23 @@ denial of service, a policy gap or a misleading surface).
 **Filed:** 2026-09-30, by security-audit-plan WP4 (M-4).
 **Tag:** security-
 
-**Narrowed a third time 2026-10-03: item 3 is fixed; only 9 remains** (an
+**RESOLVED 2026-10-03: item 9 is done too, so every item is closed.**
+
+- **9** -- `(httpd-set-bind-addr! addr)` names the interface: a numeric IPv4
+  or IPv6 address (`"192.168.1.5"`, `"::1"`, `"::"`), winning over
+  `httpd-set-bind-any!`; `""` clears it; an address that does not parse
+  returns `false` and leaves the setting alone.  Both constructors now open
+  their listener through one helper, `httpd-listen-socket`, which picks the
+  socket family from the address -- with no address set it binds exactly as
+  before -- and `httpd-port` / `httpd-async-port` read either family's port.
+  `TUR_BIND_LOOPBACK` still forces loopback, of the address's own family.
+  Pinned by `tests/fixtures/httpd-bind-addr` (the parse, IPv6 literals
+  included, and a live round trip on a named IPv4 address).  The IPv6 BIND
+  was not exercised: the container this was written in has no IPv6 stack
+  (`EAFNOSUPPORT`), where a server on `"::1"` comes back NULL from both
+  constructors, cleanly -- checked by hand.
+
+**Narrowed a third time 2026-10-03: item 3 is fixed; only 9 remained** (an
 enhancement: IPv6 and a bind address beyond loopback / every interface).
 
 - **3** -- the default chosen is **512** for both servers.  `httpd-new-async`
