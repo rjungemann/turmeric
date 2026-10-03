@@ -6,6 +6,14 @@ type the way the guide's own shape suggests: one method spelling is
 unreachable and generic code over such a class cannot name the projection, so
 the class is usable only one concrete instance at a time.
 
+**Narrowed 2026-10-03: the third blocker of half 2 is fixed** -- a
+constrained generic that does not name the projection, in a module that holds
+no instance, no longer fails TUR-E0015 "declares no instance at all" when the
+importer declares the instances (see "Fixed 2026-10-03" at the end).  Half 1
+(a nullary method whose only class mention is the associated type) and the
+projection at a type variable stay open: both need an unreduced projection
+type the instantiation can reduce later.
+
 **Status: OPEN.** Found 2026-09-29 implementing `DeltaCRDT` for
 [crdt-spice-plan](../upcoming/crdt-spice-plan.md) C4, on `tur` v0.56.3
 (`origin/main` at `dc95b2fdc`). Both are worked around in the spice and the
@@ -133,3 +141,34 @@ Fixtures worth having: a nullary associated-type method called through an
 ascription; a constrained generic taking `(Assoc A)`; and the
 class-in-one-module, instances-in-another layout, which is the shape every
 spice will hit.
+
+## Fixed 2026-10-03: a constrained generic in an instance-less module
+
+The `neutral?` shape above -- a generic over the class, in the module that
+declares the class and no instance -- failed because an imported module is
+elaborated whole at the import, before any of the importer's instances is
+registered, and a method call on a constrained type variable needs a
+*representative* instance to elaborate against (emit and the interpreter
+re-resolve it per instantiation).  With none registered yet, the dispatch fell
+through to the "declares no instance at all" diagnostic for a program that
+declares several.  It had nothing to do with associated types: any class
+reaches it.
+
+Such a defn is now **parked** rather than reported (`elab_module.c`,
+`noinst_park` / `elab_noinst_retry`): in an imported module a defn is
+attempted under a capture frame, and a failure that is only that diagnostic
+(counted by `Elab.noinst_failures`) waits.  At the importer's next statement
+boundary after a new instance registers, the parked defns are retried with
+their module context restored, and a success is appended to that module's
+body.  Whatever is still parked when the program ends is elaborated once more
+for real, so a genuinely instance-less program still reports TUR-E0015 against
+each defn that needs an instance.  An instance declared after its use, a
+nested import chain (a third module's generic over the parked ones), and
+parked generics calling each other all resolve, on both back ends.  Pinned by
+`tests/fixtures/typeclass-generic-in-instance-less-module`.
+
+Not covered: separate compilation (`tur build <dir>` compiling the class
+module as its own translation unit) still has no instance to elaborate the
+generic against, and `tur check` of the class module ALONE still reports the
+error -- in both cases the instances are genuinely absent from the program
+being elaborated.

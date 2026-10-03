@@ -10625,7 +10625,7 @@ int main(int argc, char **argv) {
             void *__t267 = __t265;
             void * __ps_268 = (_____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t264), (int64_t)(intptr_t)(__t267)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            void * h_305 = __ps_268;
+            int64_t h_305 = (int64_t)(intptr_t)(__ps_268);
             (void)h_305;
             void *__t270 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
             *(void (**)(void *))__t270 = 0;
@@ -10641,7 +10641,7 @@ int main(int argc, char **argv) {
             void *__t274 = __t272;
             void * __ps_275 = (_____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t271), (int64_t)(intptr_t)(__t274)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            void * h3_306 = __ps_275;
+            int64_t h3_306 = (int64_t)(intptr_t)(__ps_275);
             (void)h3_306;
             double __ps_276 = (call_hyf((int64_t)(intptr_t)(h_305), 3.0));
             /* panic-return-signal: ret ctype unknown; no propagation here */

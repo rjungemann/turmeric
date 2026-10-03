@@ -279,6 +279,108 @@ static bool module_body_form_is_definition(const Expr *be) {
     }
 }
 
+/* class-and-generic-in-an-instance-less-module.  The class and a constrained
+ * generic over it sit in one module, the instances in the importer -- the
+ * layout a spice takes, with the vocabulary in one module and the instances
+ * beside the types.  The imported module is elaborated whole at the import,
+ * before any importer instance exists, so the generic's tyvar-receiver
+ * dispatch had no representative instance and reported "declares no instance
+ * at all" (TUR-E0015) for a program that declares several.  Such a defn is
+ * parked instead, and retried once an instance has registered. */
+typedef struct NoInstPending {
+    Form       *form;
+    DefModule  *mod;
+    bool        in_imported_module;
+    bool        done;
+} NoInstPending;
+
+static void noinst_park(Elab *e, Form *f, DefModule *mod) {
+    if (e->n_noinst_pending >= e->cap_noinst_pending) {
+        uint32_t nc = e->cap_noinst_pending ? e->cap_noinst_pending * 2 : 4;
+        NoInstPending *np = (NoInstPending *)realloc(
+            e->noinst_pending, nc * sizeof(NoInstPending));
+        if (!np) { fprintf(stderr, "tur: oom\n"); abort(); }
+        e->noinst_pending = np;
+        e->cap_noinst_pending = nc;
+    }
+    NoInstPending *p = &e->noinst_pending[e->n_noinst_pending++];
+    p->form = f;
+    p->mod = mod;
+    p->in_imported_module = e->in_imported_module;
+    p->done = false;
+}
+
+/* Append a retried definition to its module's body (arena arrays, sized
+ * exactly, so grow by copy).  Emission walks mod->body, and generic bodies
+ * are forward-declared, so the position at the end is immaterial. */
+static void noinst_append_body(Elab *e, DefModule *mod, Expr *x) {
+    Expr **nb = (Expr **)arena_alloc(e->arena,
+                                     (mod->n_body + 1) * sizeof(Expr *));
+    for (uint32_t i = 0; i < mod->n_body; i++) nb[i] = mod->body[i];
+    nb[mod->n_body] = x;
+    mod->body = nb;
+    mod->n_body++;
+}
+
+bool elab_noinst_retry(Elab *e, bool final) {
+    if (e->n_noinst_pending == 0 || e->noinst_retrying) return true;
+    if (!final && e->typeclass_env.instances == e->noinst_seen_head) return true;
+    e->noinst_retrying = true;
+    e->noinst_seen_head = e->typeclass_env.instances;
+    bool saved_has_defmodule = e->has_defmodule;
+    const Symbol *saved_name = e->current_module_name;
+    const DefModule *saved_mod = e->current_module;
+    bool saved_imported = e->in_imported_module;
+    const Form *saved_tl = e->toplevel_stmt;
+    bool ok = true;
+    /* Until no parked defn makes progress: one may be the callee another
+     * waits on. */
+    bool progress = true;
+    while (progress) {
+        progress = false;
+        for (uint32_t i = 0; i < e->n_noinst_pending; i++) {
+            NoInstPending *p = &e->noinst_pending[i];
+            if (p->done) continue;
+            e->has_defmodule = true;
+            e->current_module = p->mod;
+            e->current_module_name = p->mod->name;
+            e->in_imported_module = p->in_imported_module;
+            e->toplevel_stmt = p->form;
+            uint32_t mark = e->n_file_scope_defs;
+            if (!final) diag_push_capture();
+            Expr *x = elab_form(e, p->form);
+            uint32_t cerr = final ? 0 : diag_pop_capture();
+            if (x && cerr == 0 && module_body_form_is_definition(x)) {
+                noinst_append_body(e, p->mod, x);
+                p->done = true;
+                progress = true;
+            } else if (final) {
+                p->done = true;
+                ok = false;
+            } else {
+                e->n_file_scope_defs = mark;
+            }
+        }
+        if (final) break;
+    }
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < e->n_noinst_pending; i++)
+        if (!e->noinst_pending[i].done) e->noinst_pending[k++] = e->noinst_pending[i];
+    e->n_noinst_pending = k;
+    if (k == 0) {
+        free(e->noinst_pending);
+        e->noinst_pending = NULL;
+        e->cap_noinst_pending = 0;
+    }
+    e->has_defmodule = saved_has_defmodule;
+    e->current_module_name = saved_name;
+    e->current_module = saved_mod;
+    e->in_imported_module = saved_imported;
+    e->toplevel_stmt = saved_tl;
+    e->noinst_retrying = false;
+    return ok;
+}
+
 /* The defmodule body loop's state for elaborating one body form out of the
  * loop's own position: a flushed defn, or a deferred one's second chance. */
 typedef struct MdRetryCtx {
@@ -304,6 +406,9 @@ typedef struct MdRetryCtx {
 static void md_elab_slot(MdRetryCtx *c, uint32_t s, uint32_t pos) {
     Elab *e = c->e;
     Form *f = c->forms[s];
+    /* A statement boundary: a defn an imported module parked may resolve now
+     * that this body has registered an instance. */
+    elab_noinst_retry(e, false);
     bool md_may_defer = false;
     uint32_t md_fsd_mark = e->n_file_scope_defs;
     if (c->deferred && f->tag == F_LIST && f->as.list.len > 0) {
@@ -320,7 +425,17 @@ static void md_elab_slot(MdRetryCtx *c, uint32_t s, uint32_t pos) {
             }
         }
     }
-    if (md_may_defer) diag_push_capture();
+    /* class-and-generic-in-an-instance-less-module: in an imported module a
+     * defn that is not already speculative is attempted under a capture
+     * frame, so a failure that is ONLY "no instance at all" can be parked.
+     * Any other failure is elaborated again, uncaptured, to report it. */
+    bool md_may_park = !md_may_defer && e->in_imported_module &&
+        !e->separate_compilation && !e->noinst_retrying &&
+        f->tag == F_LIST && f->as.list.len > 0 &&
+        f->as.list.items[0]->tag == F_SYM &&
+        f->as.list.items[0]->as.sym == e->sym_defn;
+    uint32_t md_noinst_mark = e->noinst_failures;
+    if (md_may_defer || md_may_park) diag_push_capture();
     e->toplevel_stmt = f;
     Expr *be = elab_form(e, f);
     e->toplevel_stmt = c->saved_tl_stmt;
@@ -331,6 +446,19 @@ static void md_elab_slot(MdRetryCtx *c, uint32_t s, uint32_t pos) {
             c->deferred[s] = true;
             *c->any_deferred = true;
             return;
+        }
+    } else if (md_may_park) {
+        uint32_t md_cerr = diag_pop_capture();
+        if (md_cerr > 0 || !be) {
+            e->n_file_scope_defs = md_fsd_mark;
+            if (e->noinst_failures > md_noinst_mark) {
+                noinst_park(e, f, (DefModule *)c->mod);
+                fwd_gen_order_done(c->fgo, s);
+                return;
+            }
+            e->toplevel_stmt = f;
+            be = elab_form(e, f);
+            e->toplevel_stmt = c->saved_tl_stmt;
         }
     }
     fwd_gen_order_done(c->fgo, s);
@@ -371,6 +499,7 @@ static void md_flush(MdRetryCtx *c, const Form *f, uint32_t pos) {
 static bool md_probe_slot(void *vctx, uint32_t s) {
     MdRetryCtx *c = (MdRetryCtx *)vctx;
     Form *f = c->forms[s];
+    elab_noinst_retry(c->e, false);
     uint32_t mark = c->e->n_file_scope_defs;
     diag_push_capture();
     c->e->toplevel_stmt = f;
@@ -390,6 +519,29 @@ static bool md_probe_slot(void *vctx, uint32_t s) {
 static void md_retry_slot(void *vctx, uint32_t s) {
     MdRetryCtx *c = (MdRetryCtx *)vctx;
     Form *f = c->forms[s];
+    elab_noinst_retry(c->e, false);
+    /* class-and-generic-in-an-instance-less-module: the second chance of a
+     * deferred defn in an imported module may still be waiting on the
+     * importer's instances -- park it rather than report. */
+    if (c->e->in_imported_module && !c->e->separate_compilation &&
+        !c->e->noinst_retrying) {
+        uint32_t mark = c->e->n_file_scope_defs;
+        uint32_t nmark = c->e->noinst_failures;
+        diag_push_capture();
+        c->e->toplevel_stmt = f;
+        Expr *pe = elab_form(c->e, f);
+        c->e->toplevel_stmt = c->saved_tl_stmt;
+        uint32_t cerr = diag_pop_capture();
+        if (cerr == 0 && pe && module_body_form_is_definition(pe)) {
+            c->slot[s] = pe;
+            return;
+        }
+        c->e->n_file_scope_defs = mark;
+        if (c->e->noinst_failures > nmark) {
+            noinst_park(c->e, f, (DefModule *)c->mod);
+            return;
+        }
+    }
     c->e->toplevel_stmt = f;
     Expr *be = elab_form(c->e, f);
     c->e->toplevel_stmt = c->saved_tl_stmt;

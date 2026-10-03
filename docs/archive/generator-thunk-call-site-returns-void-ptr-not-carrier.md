@@ -1,4 +1,48 @@
+---
+title: A generator's thunk call site returns void * where the closure returns int64_t
+category: Archive
+description: A closure literal applied inside a generic's generator body is lifted into the generator state and dispatched fat; the call site, and at a narrow type the slot-0 widen wrapper, called the carrier-returning base thunk at a spec-resolved return type. Return-type-only, so only -fsanitize=function saw it. Both sites now follow the thunk's recorded return spelling.
+---
+
 # A generator's thunk call site returns `void *` where the closure returns `int64_t`
+
+> **RESOLVED 2026-10-03.** Fix direction 1, and a second site the reduction
+> had not reached.  The ingredient table below is narrower than the defect:
+> the generic `thunk` is not load-bearing -- `(gen-unwrap (gen-next (gen []
+> (yield ((fn [] x))))))` in a generic traps on its own at A := cstr or
+> bool.  What matters is that the head temp `__call_head_N` is lifted into
+> the generator's STATE STRUCT, which sends the call down the fat-dispatch
+> path (`emit_expr.c`, the `TY_FN` non-global branch) instead of the direct
+> thunk call an ordinary `let` gets.  The lambda is emitted once, at the
+> generic's int64 carrier; two sites then disagreed with it:
+>
+> 1. **The call site.**  The closure-head block
+>    (`closure-head-dispatch-follows-emitted-signature`) already read the
+>    thunk's recorded return spelling, `int64_t`, and set the result to
+>    `int`.  The later `word_back` block (from
+>    `fnsan-parametric-fn-field-read-by-spec`) then saw an `int` result and a
+>    pointer-resolving declared type, and re-derived the pointer -- casting
+>    slot 0 to `const char *(*)(void *)` / `void *(*)(void *)`.  It now
+>    stands down when the head's signature is known (`head_sig_known`).
+> 2. **The construction site**, at A := bool / int8 / uint8 (not in the
+>    filing; found widening the probe).  `narrow-closure-result-read-through-
+>    int64-carrier` wraps slot 0 in `__tur_widen_<thunk>`, which called the
+>    BASE thunk as `bool (*)(void *)` because the result type was resolved
+>    through the spec.  With no inner-closure clone, slot 0 is the base thunk,
+>    so the wrapper now follows its recorded spelling: a thunk that returns
+>    `int64_t` needs no widening.
+>
+> Pinned by `tests/fixtures/generator-thunk-call-site-carrier` (16 lines: the
+> fuzzer's case, cstr, bool, int, int8, uint8, float32, a by-value struct, an
+> Option, a fn value, and a one-argument lambda; it traps under the fnsan gate
+> on the pre-fix compiler and matches `--interpret` after).  `tests/run-fnsan.sh`
+> armed with clang 18: 3534 passed, 0 failed; `bash tests/run.sh` 3534/0.
+> `type-fuzz-src.py --seed 20261003 --n 400` armed: ok 370, SEAM_REJECT 29,
+> GEN_REJECT 1, 0 BUG -- case 376 is `ok` rather than `KNOWN`, every other
+> bucket as filed; `--known-probes` reports the row FIXED.  The `known_bug_slug` row in
+> `tests/type-fuzz-src.py` is retired, so a regression is a `BUG_fnptr_trap`
+> again; the pinned probe stays as a FIXED row.
+
 
 **Severity: low-medium.** Undefined behavior, not a wrong answer. The mismatch
 is ABI-benign on LP64 -- both types are 8 bytes returned in the same register

@@ -235,14 +235,19 @@ per-native handle-signature column it reads (`src/turi/native_caps.c`), and the
 one dispatch hook are described in
 [the S-5 report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md).
 
+Continuation resume is closed the same way, although it never passes through
+the native dispatch: every continuation a capture or a copy hands out is
+registered as a continuation handle, and `resume-cont!`, `save-cont!` and the
+`tur_*_cont_resume` / clone / serialize forms -- as builtins and as the CEK
+driver's work-stack fold -- refuse one that is not.
+
 What is **not** yet closed is the narrower *value-model* channel: an erasing
-ascription on a type variable, and continuation resume, still launder a caller
-integer into a pointer WITHOUT passing through the native dispatch (the retag
-happens in the interpreter's own value model, e.g. `(:: x A)` in a generic body
-followed by a call or field read, and the CEK driver's continuation fold). The
-registry does not see those, because a bare `:int` in the value model carries no
-kind to check against. Closing them is the "tagged handles" route (direction 2
-in the report).
+ascription on a type variable still launders a caller integer into a pointer
+WITHOUT passing through any of those checks (the retag happens in the
+interpreter's own value model, e.g. `(:: x A)` in a generic body followed by a
+call or field read). The registry does not see it, because a bare `:int` in the
+value model carries no kind to check against. Closing it is the "tagged
+handles" route (direction 2 in the report).
 
 A panic, by contrast, no longer ends the host. In an environment without
 `TURI_CAP_PROC`, a panic that nothing catches, and the error exits of natives

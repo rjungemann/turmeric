@@ -3697,6 +3697,23 @@ static bool ts_arith_op(const char *op) {
            (op[0] == '+' || op[0] == '-' || op[0] == '*' || op[0] == '/');
 }
 
+/* security-audit-plan S-5, the continuation channel: a continuation handle is
+ * the int64 boxing of a TuriCont*, and the resume / clone / serialize paths
+ * cast it straight back.  They are folded by the driver or dispatched as
+ * builtins, NOT through the native dispatch the provenance guard sits on, so
+ * `(resume-cont! 4096 0)` walked address 4096 as a frame array even in a
+ * sandbox.  Every handle a capture or a copy hands out is registered as
+ * TURI_HK_CONT; in a provenance-tracked env one that is not is a forgery.
+ * NULL (0) stays the documented no-op. */
+static bool cont_handle_forged(TuriEnv *env, int64_t h, TuriValue *err) {
+    if (h == 0 || !env || !env->provenance_on) return false;
+    if (turi_prov_check(env, TURI_HK_CONT, (const void *)(intptr_t)h)) return false;
+    *err = turi_errorf(
+        "eval: continuation handle %lld is not a live handle of the expected kind -- a "
+        "sandboxed handle cannot be forged from an integer (S-5)", (long long)h);
+    return true;
+}
+
 static TuriCont *ts_cont_copy(TuriEnv *env, const TuriCont *c) {
     /* Escaping payload: the copy is boxed as an int continuation handle and
      * returned (multi-shot); pool-owned, never freed. */
@@ -3705,6 +3722,7 @@ static TuriCont *ts_cont_copy(TuriEnv *env, const TuriCont *c) {
     d->serial = c->serial;
     d->frames = (TsFrame *)turi_val_alloc(env, sizeof(TsFrame) * (c->n ? c->n : 1));
     if (c->n) memcpy(d->frames, c->frames, sizeof(TsFrame) * c->n);
+    turi_prov_register(env, TURI_HK_CONT, d);   /* S-5: a minted handle */
     return d;
 }
 
@@ -3848,6 +3866,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
     if (strcmp(name, "tur_cloneable_cont_resume") == 0 ||
         strcmp(name, "tur_serial_cont_resume") == 0) {
         if (n < 2 || args[0].as_int == 0) { *out = turi_int(0); return true; }
+        if (cont_handle_forged(env, args[0].as_int, out)) return true;
         TuriCont *c = (TuriCont *)(intptr_t)args[0].as_int;
         *out = ts_cont_resume(env, c, args[1].as_int);
         return true;
@@ -3857,6 +3876,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
         strcmp(name, "tur_serial_cont_serialize") == 0 ||
         strcmp(name, "tur_serial_cont_deserialize") == 0) {
         if (n < 1 || args[0].as_int == 0) { *out = turi_int(0); return true; }
+        if (cont_handle_forged(env, args[0].as_int, out)) return true;
         TuriCont *c = (TuriCont *)(intptr_t)args[0].as_int;
         *out = turi_int((int64_t)(intptr_t)ts_cont_copy(env, c));
         return true;
@@ -4175,6 +4195,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             cont->serial = serial;
             cont->frames = (TsFrame *)turi_val_alloc(env, sizeof(TsFrame) * (n ? n : 1));
             if (n) memcpy(cont->frames, frames, sizeof(TsFrame) * n);
+            turi_prov_register(env, TURI_HK_CONT, cont);   /* S-5: handed out */
             const Expr *kfn = (shift_kind == EX_SERIAL_SHIFT)
                 ? shift->as.serial_shift_.k_fn
                 : shift->as.cloneable_shift_.k_fn;
@@ -4250,6 +4271,8 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
 static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || args[0].as_int == 0) return turi_int(0);
+    TuriValue forged;
+    if (cont_handle_forged(env, args[0].as_int, &forged)) return forged;
     return turi_int((int64_t)(intptr_t)ts_cont_copy(env, (TuriCont *)(intptr_t)args[0].as_int));
 }
 
@@ -4257,6 +4280,8 @@ static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, voi
 static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2 || args[0].as_int == 0) return turi_int(0);
+    TuriValue forged;
+    if (cont_handle_forged(env, args[0].as_int, &forged)) return forged;
     return ts_cont_resume(env, (TuriCont *)(intptr_t)args[0].as_int, args[1].as_int);
 }
 
@@ -8417,7 +8442,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     TuriCont *c = (n >= 1 && acc[0].as_int)
                                 ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                    TuriValue forged;
+                    bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
                     TURI_DRIVE_FREE(acc);
+                    if (bad) { cur = forged; descending = false; continue; }
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                     if (rc != 1) { cur = val; descending = false; continue; }
@@ -9790,7 +9818,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriCont *c = (n >= 1 && acc[0].as_int)
                                     ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                         int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                        TuriValue forged;
+                        bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
                         TURI_DRIVE_FREE(acc);
+                        if (bad) { cur = forged; len--; break; }
                         ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                         int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                         if (rc != 1) { cur = val; len--; break; }
@@ -10124,7 +10155,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     TuriCont *c = (n >= 1 && acc[0].as_int)
                                 ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                    TuriValue forged;
+                    bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
                     TURI_DRIVE_FREE(acc);
+                    if (bad) { cur = forged; len--; break; }
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                     if (rc != 1) { cur = val; len--; break; }   /* done / error */

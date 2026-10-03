@@ -84,6 +84,8 @@
   ```c
   /* __tur_autolink__: -lturi -pthread */
   /* __tur_include__: #include <stdint.h> */
+  /* __tur_include__: #include <string.h> */
+  /* __tur_include__: #include <strings.h> */
   /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: static int64_t httpd_max_body = 8388608; */
@@ -92,6 +94,8 @@
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
   /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; } HttpdConn; */
+  /* __tur_include__: static const char *httpd_mp_find(const char *h, const char *e, const char *n, size_t nl) { if (!h || !e || nl == 0) return 0; for (; h + nl <= e; h++) if (memcmp(h, n, nl) == 0) return h; return 0; } */
+  /* __tur_include__: static int httpd_hdr_param(const char *v, const char *ve, const char *key, char *out, int cap) { size_t kl = strlen(key); const char *q = (const char *)memchr(v, ';', (size_t)(ve - v)); while (q && q < ve) { q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; const char *ks = q; while (q < ve && *q != '=' && *q != ';') q++; const char *ke = q; while (ke > ks && (ke[-1] == ' ' || ke[-1] == '\t')) ke--; if (q >= ve || *q == ';') continue; q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; int hit = (size_t)(ke - ks) == kl && strncasecmp(ks, key, kl) == 0; int n = 0; if (q < ve && *q == '"') { q++; while (q < ve && *q != '"') { if (*q == '\\' && q + 1 < ve) q++; if (hit && n + 1 < cap) out[n++] = *q; q++; } if (q < ve) q++; } else { while (q < ve && *q != ';' && *q != ' ' && *q != '\t') { if (hit && n + 1 < cap) out[n++] = *q; q++; } } if (hit) { out[n] = '\0'; return n; } q = (const char *)memchr(q, ';', (size_t)(ve - q)); } return -1; } */
   /* __tur_include__: static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
   return 0;
   ```)
@@ -2323,79 +2327,74 @@
   HttpdConn *c = (HttpdConn *)conn;
   if (c->req_multipart_parts) return 1;
   if (!c->body || c->body_len <= 0) return 0;
-  /* Extract boundary from Content-Type. */
+  /* httpd-residual-request-hardening item 10.  Only a multipart media type
+   * carries parts (RFC 7578), and `boundary` is a PARAMETER of it, matched by
+   * name in any case (httpd_hdr_param) -- not the first "boundary=" anywhere
+   * in the value, which a quoted `charset="boundary=x"` could supply.
+   * RFC 2046 caps a boundary at 70 characters. */
   const char *ct = httpd_hyreq_hyheader((void *)conn, "Content-Type");
   if (!ct || !*ct) return 0;
-  const char *bk = strstr(ct, "boundary=");
-  if (!bk) return 0;
-  bk += 9;
-  /* Boundary may be quoted; strip if so. */
+  while (*ct == ' ' || *ct == '\t') ct++;
+  if (strncasecmp(ct, "multipart/", 10) != 0) return 0;
   char boundary[128];
-  size_t bi = 0;
-  if (*bk == '"') {
-      bk++;
-      while (*bk && *bk != '"' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
-  } else {
-      while (*bk && *bk != ';' && *bk != ' ' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
-  }
-  boundary[bi] = '\0';
-  if (bi == 0) return 0;
-  /* Build the full delimiter "--<boundary>". */
+  int bi = httpd_hdr_param(ct, ct + strlen(ct), "boundary", boundary,
+                           (int)sizeof(boundary));
+  if (bi <= 0 || bi > 70) return 0;
   char delim[140];
   int dlen = snprintf(delim, sizeof(delim), "--%s", boundary);
-  if (dlen <= 0) return 0;
+  char crlf_delim[144];
+  int cdlen = snprintf(crlf_delim, sizeof(crlf_delim), "\r\n%s", delim);
+  if (dlen <= 0 || cdlen <= 0) return 0;
   HttpdPart *head = NULL;
   HttpdPart *tail = NULL;
   int n_parts = 0;
-  /* Find the first "--<boundary>" in the body. */
-  const char *p   = c->body;
+  /* Every search is bounded by the body's LENGTH (httpd_mp_find), never by a
+   * NUL: an uploaded file may hold NUL bytes, and strstr stopped at the first
+   * one -- truncating the part or losing every part after it. */
   const char *end = c->body + c->body_len;
-  const char *pos = strstr(p, delim);
+  const char *pos = httpd_mp_find(c->body, end, delim, (size_t)dlen);
   if (!pos) return 0;
   pos += dlen;
   while (pos < end && n_parts < 64) {
-      /* Skip optional CRLF; "--" suffix means terminating delimiter. */
+      /* "--" right after the delimiter closes the body. */
       if (pos + 1 < end && pos[0] == '-' && pos[1] == '-') break;
-      while (pos < end && (*pos == '\r' || *pos == '\n')) pos++;
-      /* Parse part headers until blank line. */
+      /* Transport padding, then the CRLF that ends the delimiter line. */
+      while (pos < end && (*pos == ' ' || *pos == '\t')) pos++;
+      if (pos + 1 < end && pos[0] == '\r' && pos[1] == '\n') pos += 2;
+      else break;
+      /* Part headers, up to the blank line.  A header is matched by its
+       * whole field name (up to the colon), and its parameters by name, so
+       * `name=` is never read out of `filename=` and a field called
+       * `Content-Dispositionx` is not Content-Disposition. */
       char *p_name = NULL, *p_filename = NULL, *p_ctype = NULL;
+      int headers_ok = 0;
       while (pos < end) {
-          const char *eol = strstr(pos, "\r\n");
-          if (!eol || eol == pos) {
-              /* Blank line terminates headers. */
-              if (eol == pos) pos += 2;
-              break;
-          }
+          const char *eol = httpd_mp_find(pos, end, "\r\n", 2);
+          if (!eol) break;
+          if (eol == pos) { pos += 2; headers_ok = 1; break; }
           size_t llen = (size_t)(eol - pos);
-          if (llen >= 19 && strncasecmp(pos, "Content-Disposition", 19) == 0) {
-              /* Look for name="..." and filename="..." within this line. */
-              const char *nk = strstr(pos, "name=\"");
-              if (nk && nk < eol) {
-                  nk += 6;
-                  const char *nend = (const char *)memchr(nk, '"', (size_t)(eol - nk));
-                  if (nend) {
-                      size_t nl = (size_t)(nend - nk);
+          const char *colon = (const char *)memchr(pos, ':', llen);
+          if (colon) {
+              size_t fl = (size_t)(colon - pos);
+              while (fl && (pos[fl - 1] == ' ' || pos[fl - 1] == '\t')) fl--;
+              const char *vs = colon + 1;
+              while (vs < eol && (*vs == ' ' || *vs == '\t')) vs++;
+              if (fl == 19 && strncasecmp(pos, "Content-Disposition", 19) == 0) {
+                  char *tmp = (char *)malloc(llen + 1);
+                  if (tmp && httpd_hdr_param(vs, eol, "name", tmp, (int)llen + 1) >= 0) {
                       free(p_name);   /* a repeated header replaces, not leaks */
-                      p_name = (char *)malloc(nl + 1);
-                      if (p_name) { memcpy(p_name, nk, nl); p_name[nl] = '\0'; }
+                      p_name = tmp;
+                  } else {
+                      free(tmp);
                   }
-              }
-              const char *fk = strstr(pos, "filename=\"");
-              if (fk && fk < eol) {
-                  fk += 10;
-                  const char *fend = (const char *)memchr(fk, '"', (size_t)(eol - fk));
-                  if (fend) {
-                      size_t fl = (size_t)(fend - fk);
+                  tmp = (char *)malloc(llen + 1);
+                  if (tmp && httpd_hdr_param(vs, eol, "filename", tmp, (int)llen + 1) >= 0) {
                       free(p_filename);
-                      p_filename = (char *)malloc(fl + 1);
-                      if (p_filename) { memcpy(p_filename, fk, fl); p_filename[fl] = '\0'; }
+                      p_filename = tmp;
+                  } else {
+                      free(tmp);
                   }
-              }
-          } else if (llen >= 12 && strncasecmp(pos, "Content-Type", 12) == 0) {
-              const char *colon = (const char *)memchr(pos, ':', llen);
-              if (colon) {
-                  const char *vs = colon + 1;
-                  while (vs < eol && (*vs == ' ' || *vs == '\t')) vs++;
+              } else if (fl == 12 && strncasecmp(pos, "Content-Type", 12) == 0) {
                   size_t vl = (size_t)(eol - vs);
                   free(p_ctype);
                   p_ctype = (char *)malloc(vl + 1);
@@ -2404,29 +2403,27 @@
           }
           pos = eol + 2;
       }
-      /* Now `pos` points at the part body. Find the next "--<boundary>"
-       * preceded by CRLF (multipart boundaries are always on their own
-       * line within the body). */
-      char crlf_delim[144];
-      snprintf(crlf_delim, sizeof(crlf_delim), "\r\n%s", delim);
-      const char *bend = strstr(pos, crlf_delim);
+      /* Now `pos` points at the part body: it runs to the next CRLF-prefixed
+       * delimiter.  Unterminated headers or body end the walk. */
+      const char *bend = headers_ok
+          ? httpd_mp_find(pos, end, crlf_delim, (size_t)cdlen) : NULL;
       if (!bend) {
-          if (p_name) free(p_name);
-          if (p_filename) free(p_filename);
-          if (p_ctype) free(p_ctype);
+          free(p_name);
+          free(p_filename);
+          free(p_ctype);
           break;
       }
       size_t blen = (size_t)(bend - pos);
       HttpdPart *part = (HttpdPart *)calloc(1, sizeof(HttpdPart));
       if (!part) {
-          if (p_name) free(p_name);
-          if (p_filename) free(p_filename);
-          if (p_ctype) free(p_ctype);
+          free(p_name);
+          free(p_filename);
+          free(p_ctype);
           break;
       }
-      part->name         = p_name     ? p_name     : NULL;
-      part->filename     = p_filename ? p_filename : NULL;
-      part->content_type = p_ctype    ? p_ctype    : NULL;
+      part->name         = p_name;
+      part->filename     = p_filename;
+      part->content_type = p_ctype;
       part->data         = (char *)malloc(blen + 1);
       if (part->data) {
           if (blen > 0) memcpy(part->data, pos, blen);
@@ -2437,7 +2434,7 @@
       if (tail)  tail->next = part;
       tail = part;
       n_parts++;
-      pos = bend + 2 + (size_t)dlen;  /* skip "\r\n" + "--<boundary>" */
+      pos = bend + (size_t)cdlen;  /* skip "\r\n--<boundary>" */
   }
   c->req_multipart_parts = head;
   return head ? 1 : 0;

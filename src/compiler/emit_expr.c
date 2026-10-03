@@ -10007,6 +10007,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                 }
+                bool thunk_is_clone = thunk_name != NULL;
                 if (!thunk_name) thunk_name = raw_name_for_binding(thunk_binding);
                 if (!thunk_name) { fprintf(stderr, "tur: oom\n"); abort(); }
 
@@ -10046,7 +10047,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 
                 /* Rest of the args */
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    /* arrow-instance-closure-erased-to-words (direct call of a
+                     * generic's returned closure): the arguments were
+                     * elaborated against the producing lambda's OWN parameter
+                     * types -- `(fn [x : A] : C ...)` -- so a float argument
+                     * arrives wrapped in a reinterpret to the carrier `A`.  When
+                     * the thunk resolved above is a spec CLONE whose recorded
+                     * slot is the reinterpret's source type (`double`), that
+                     * bit pattern was then value-converted into the double
+                     * slot: `((compose f g) 7.1)` printed 9.23936e+18.  Pass the
+                     * unconverted value the clone declares. */
+                    const Expr *arg_x = e->as.call_.args[i];
+                    if (thunk_is_clone && arg_x && arg_x->kind == EX_REINTERPRET &&
+                        arg_x->as.reinterpret_.expr) {
+                        const char *pct = emit_sig_lookup_param_ctype(thunk_name, i + 1);
+                        Type src_t = type_simple(arg_x->as.reinterpret_.source_kind, CK_COPY);
+                        if (pct && strcmp(pct, type_c_name(src_t)) == 0 &&
+                            strcmp(pct, "int64_t") != 0)
+                            arg_x = arg_x->as.reinterpret_.expr;
+                    }
+                    char *raw = emit_value(ctx, body, (Expr *)arg_x);
                     /* CC2 (curried-call-cast-rough-edges-plan): a let-bound
                      * closure thunk has C parameter slots typed by the thunk's
                      * declared kinds.  When the formal is int64_t (TY_INT or
@@ -10393,6 +10413,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * call typed `int` cast a clone returning
                      * `tur_adt_Option__float` by value to `int64_t (*)(void*)`
                      * and dereferenced the result as a box (segfault). */
+                    bool head_sig_known = false;
                     if (fn_binding->closure_head_init &&
                         fn_binding->type.kind == TY_FN &&
                         fn_binding->type.as.fn.result_full_type) {
@@ -10416,10 +10437,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 Type rr = emit_resolve_type(ctx,
                                     *fn_binding->type.as.fn.result_full_type);
                                 const char *rrc = emit_type_c_name(ctx, rr);
-                                if (rrc && strcmp(lrct, rrc) == 0)
+                                if (rrc && strcmp(lrct, rrc) == 0) {
                                     disp_result = rr;
-                                else if (strcmp(lrct, "int64_t") == 0)
+                                    head_sig_known = true;
+                                } else if (strcmp(lrct, "int64_t") == 0) {
                                     disp_result = emit_type_from_kind(TY_INT);
+                                    head_sig_known = true;
+                                }
                             }
                             free(lown);
                         }
@@ -10437,9 +10461,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * was: a box built erased returns its bits in rax, and
                      * reading xmm0 instead would turn a type mismatch into a
                      * wrong answer. */
+                    /* generator-thunk-call-site-returns-void-ptr-not-carrier:
+                     * NOT when the closure-head block above already read the
+                     * thunk's own recorded return spelling.  There the `int` is
+                     * the callee's emitted `int64_t`, not an erased stand-in,
+                     * and re-deriving a pointer from the declared type cast a
+                     * carrier-returning lambda to `const char *(*)(void *)` --
+                     * the shape a generator body takes, where the head temp is
+                     * lifted into the state struct and dispatched fat. */
                     Type decl_ptr_res;
                     bool word_back = false;
-                    if (disp_result.kind == TY_INT && fn_binding->type.kind == TY_FN &&
+                    if (!head_sig_known &&
+                        disp_result.kind == TY_INT && fn_binding->type.kind == TY_FN &&
                         fn_binding->type.as.fn.result_full_type) {
                         decl_ptr_res = emit_resolve_type(ctx,
                             *fn_binding->type.as.fn.result_full_type);
@@ -14631,10 +14664,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * result leaves slot 0 widened, through a wrapper that names
                  * the thunk -- so it needs the file-scope buffer that lands
                  * after the forward declarations.  Without one, the thunk is
-                 * stored as before. */
+                 * stored as before.
+                 *
+                 * generator-thunk-call-site-returns-void-ptr-not-carrier: the
+                 * wrapper calls the thunk at ITS definition's return type.  In
+                 * a spec with no inner-closure clone, slot 0 is the generic
+                 * BASE thunk, declared returning the int64 carrier, while
+                 * thunk_result is resolved through the spec -- `bool` at A :=
+                 * bool, so the wrapper called a carrier-returning thunk as
+                 * `bool (*)(void *)`.  Follow the recorded spelling. */
+                Type widen_result = thunk_result;
+                if (!thunk_sym_override) {
+                    const char *trc = emit_sig_lookup_ret_ctype(thunk_sym);
+                    if (trc && strcmp(trc, "int64_t") == 0)
+                        widen_result = emit_type_from_kind(TY_INT);
+                }
                 char *slot0_widen = ctx->pending_handler_fns
                     ? ensure_closure_slot0_widen(ctx, ctx->pending_handler_fns,
-                                                 thunk_sym, thunk_result,
+                                                 thunk_sym, widen_result,
                                                  thunk_params, (uint8_t)thunk_arity)
                     : NULL;
                 const char *slot0 = slot0_widen ? slot0_widen : thunk_sym;

@@ -1,4 +1,27 @@
+---
+title: A fenced code block inside a blockquote renders as prose, not code
+category: Archive
+description: python-markdown's fenced_code only knows a column-0 fence, so a quoted fence rendered as prose -- shell comments became h1 headings and placeholders raw tags. Fixed by fix direction 2, a preprocessor in tools/genguides.py, plus a render-time check that no fence survives as text.
+---
+
 # A fenced code block inside a blockquote renders as prose, not code
+
+> **RESOLVED 2026-10-03** (archived; the fix landed the same day in
+> f8535a9a, "genguides: render fences inside blockquotes and list items as
+> code", without moving this report).  Fix direction 2, wider than filed:
+> `unquote_blockquote_fences` (`tools/genguides.py`) rewrites a quoted fence
+> as a quoted INDENTED code block, which the blockquote processor does handle;
+> `dedent_indented_fences` does the same for a fence at a list item's content
+> column, the same blind spot, which had flattened snippets in sixteen more
+> guides silently; and `unrendered_fences` fails the render when a fence
+> survives into the HTML as text, so the class is caught at its cause rather
+> than only when the stray text happens to look like an unclosed tag -- the
+> quiet case this report said nothing could see.  Re-verified against the
+> repro below: the body renders as `<pre><code>`, the `# a comment` line stays
+> a comment, and `<placeholder>` is escaped.  Fix direction 1 landed beside it
+> on `main` (#1043): `tools/check-guide-pairs.py` also rejects a blockquoted
+> fence in a guide, pointing at the indented-block form -- see item 1 below.
+
 
 **Severity: medium.** Content is silently mangled in the rendered guide, and
 the failure mode escalates to a hard `tur run docs` error (exit 1) only when

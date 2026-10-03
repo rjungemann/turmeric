@@ -60,7 +60,8 @@
 ;;;   g -- second arrow (B -> C)
 ;;;
 ;;; Returns:
-;;;   A ptr<void> closure (A -> C) that applies f then g.
+;;;   A closure (fn [A] C) that applies f then g.  Typed as a function, not
+;;;   ptr<void>, so the result can be called directly at its element types.
 ;;;
 ;;; Example:
 ;;;   ((>>> (fn [x : float] : float (+ x 1.0))
@@ -68,7 +69,9 @@
 ;;;
 ;;; Since: Phase CA1
 
-(defn >>> [A B C] [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)] : ptr<void>
+(defn >>> [A B C] [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)] : (fn [A]
+                                                                            #fx{}
+                                                                            C)
   (let [fv f
         gv g]
     (fn [x : A] : C (gv (fv x)))))

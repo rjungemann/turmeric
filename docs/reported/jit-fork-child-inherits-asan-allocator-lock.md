@@ -90,6 +90,25 @@ evidence that the skip worked. Until then this is a fix in flight, not a fixed
 bug, and the leg's `continue-on-error` should stay as it is -- flipping it on
 an unconfirmed fix is how an unverified change becomes everyone's problem.
 
+**Reproduced locally, 2026-10-03 (rjungemann/turmeric#1049).** On a Linux
+`-DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON` build, the same prelude define plus
+fixture skip measured `(fork-failures 1)` in 3 of 8 runs of the Debug
+`tur jit` before and 0 of 8 after, and `tests/run-jit.sh` passed the fixture
+three times out of three. That is the local half of the verification above;
+the CI closure condition still stands. Two notes from that work:
+
+- **Why a skip and not a narrower change.** Pausing the burner around each
+  fork, or giving the child a non-allocating body, does not help: on an ASan
+  host even the child's first LAZILY GENERATED function takes the allocator
+  lock, because MIR's generator runs in the host and allocates through it.
+- **Coverage traded.** This check was the only one exercising the
+  `g_gen_lock` `pthread_atfork` fix
+  ([jit-fork-child-hangs-with-threads](../archive/jit-fork-child-hangs-with-threads.md))
+  under the JIT, and every CI JIT leg that can fork is a Debug (ASan) build,
+  so that fix now runs unexercised in CI. A Release `tur jit` leg, or fix
+  direction 2 below, would restore it -- delete the `#ifdef` in `life-forks`
+  then.
+
 ## Fix directions
 
 - **In the fixture:** skip the fork check when the program runs on a sanitizer

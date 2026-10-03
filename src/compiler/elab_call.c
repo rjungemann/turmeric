@@ -7967,6 +7967,22 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * box.  A *capturing* closure's value is TY_PTR_VOID (already a fat
              * box) and a boxed TY_FN is left untouched; only a bare, unboxed
              * TY_FN is shimmed.  Mirrors the ^fat auto-shim arity bound (<=5). */
+            /* arrow-instance-closure-erased-to-words (`pipe` over ^fat arrows):
+             * a `^fat` binding, or a fat-normalized parameter, already HOLDS a
+             * { thunk, env } box despite its unboxed static type -- the same
+             * already-fat test the ^fat sink branch makes, asked of the
+             * representation decision (repr_of_binding).  Shimming it here
+             * boxed the box: slot 0's `__tur_fatshim_double_double` then
+             * called the inner box's address as code (SIGSEGV).  Mark the
+             * use boxed instead, keeping its precise signature for M7. */
+            if (args[i]->kind == EX_VAR && args[i]->as.var.binding &&
+                args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed &&
+                (args[i]->as.var.binding->is_fat ||
+                 args[i]->as.var.binding->is_param) &&
+                repr_of_binding(args[i]->as.var.binding, REPR_POS_PARAM) ==
+                    REPR_FAT_HANDLE) {
+                args[i]->type.as.fn.boxed = true;
+            }
             if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed) {
                 uint32_t inner_arity = args[i]->type.as.fn.arity;
                 if (inner_arity >= 1 && inner_arity <= TUR_FAT_SHIM_MAX_ARITY) {

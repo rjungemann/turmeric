@@ -5600,10 +5600,133 @@ static bool abi_type_is_int_collapse_of(const Type *c, const Type *t, int depth)
     return type_eq(*c, *t) != 0;
 }
 
+/* arrow-instance-closure-erased-to-words, the per-spec half: bind one class
+ * method parameter's element variables from a spec-resolved argument.  `decl`
+ * is the class's spelling -- `(a X Y)` for an arrow, or a bare variable -- and
+ * `act` the argument's type under the active spec.  Mirrors the elaborator's
+ * m7_collect_tyvar_bindings arrow arm: X binds to a one-argument function's
+ * parameter, Y to its result; the first binding of a name wins. */
+static void emit_abi_arrow_collect(const Type *decl, const Type *act,
+                                   AbiTypeBinding *b, uint8_t *n) {
+    if (!decl || !act) return;
+    if (decl->kind == TY_TYVAR) {
+        if (!decl->as.tyvar_.name || act->kind == TY_TYVAR ||
+            act->kind == TY_UNKNOWN)
+            return;
+        for (uint8_t i = 0; i < *n; i++)
+            if (b[i].name && strcmp(b[i].name, decl->as.tyvar_.name) == 0)
+                return;
+        if (*n < ABI_TYPE_BINDINGS_MAX) {
+            b[*n].name = decl->as.tyvar_.name;
+            b[*n].type = *act;
+            (*n)++;
+        }
+        return;
+    }
+    if (decl->kind == TY_APP && act->kind == TY_FN && act->as.fn.arity == 1 &&
+        decl->as.app.fn && decl->as.app.arg &&
+        decl->as.app.fn->kind == TY_APP && decl->as.app.fn->as.app.arg &&
+        decl->as.app.fn->as.app.fn &&
+        decl->as.app.fn->as.app.fn->kind == TY_TYVAR) {
+        Type aa = (act->as.fn.arg_full_types && act->as.fn.arg_full_types[0])
+                  ? *act->as.fn.arg_full_types[0]
+                  : emit_type_from_kind(act->as.fn.arg_kinds[0]);
+        Type ar = act->as.fn.result_full_type
+                  ? *act->as.fn.result_full_type
+                  : emit_type_from_kind(act->as.fn.result_kind);
+        emit_abi_arrow_collect(decl->as.app.fn->as.app.arg, &aa, b, n);
+        emit_abi_arrow_collect(decl->as.app.arg, &ar, b, n);
+    }
+}
+
+/* arrow-instance-closure-erased-to-words, the per-spec half.  A method of the
+ * `(->)`-headed instance called inside a generic -- `(.>>> f g)` in
+ * `(defn pipe [^Arrow A] [f : A g : A] : A ...)` -- was elaborated against the
+ * type variable `A`, so the elaborator's ground-binding step (the
+ * arrow-instance arm at the end of elab_method_call) had nothing to bind `b c
+ * d` from, and every spec of `pipe` called the instance's erased base: a
+ * closure of `int64_t (*)(void *, int64_t)` read back at `(fn [float] float)`
+ * -- right by register luck, a -fsanitize=function trap.  Under the active
+ * spec the arguments ARE concrete functions, so bind the class method's
+ * element variables from them exactly as the elaborator does for a direct
+ * call: `{a := (->), b, c, d}` in collection order.  Returns false unless
+ * every variable the method mentions grounds. */
+static bool emit_abi_arrow_spec_bindings(EmitCtx *ctx, const Expr *call,
+                                         AbiTypeBinding *out, uint8_t *n_out) {
+    *n_out = 0;
+    if (!ctx || !ctx->current_abi_specialization || !call ||
+        call->kind != EX_CALL || !call->as.call_.fn_binding)
+        return false;
+    const Expr *da = call->as.call_.dict_arg;
+    if (!da || da->kind != EX_DICT || !da->as.dict_.instance ||
+        da->as.dict_.method_name[0] == '\0')
+        return false;
+    const TypeClassInstance *inst = da->as.dict_.instance;
+    const TypeClass *tc = inst->typeclass;
+    if (!tc || tc->n_type_params != 1 || !tc->type_params ||
+        !tc->type_params[0] || inst->n_type_args < 1)
+        return false;
+    const Type *head = &inst->type_args[0];
+    if (!(head->kind == TY_FN && head->as.fn.arity == 0 &&
+          head->hkt_kind == KIND_ARROW2))
+        return false;
+    /* The class method behind the call, through the instance's parallel
+     * method_impls (the dict's method_name is the C-mangled spelling --
+     * `_gt_gt_gt` for `>>>` -- so a name compare would miss every operator). */
+    const TypeClassMethod *m = NULL;
+    for (uint8_t k = 0; k < tc->n_methods && k < inst->n_method_impls; k++)
+        if (inst->method_impls[k] && inst->method_impls[k]->binding ==
+                                         call->as.call_.fn_binding) {
+            m = &tc->methods[k];
+            break;
+        }
+    if (!m || m->n_params != call->as.call_.n_args) return false;
+    /* A call the elaborator grounded already carries `{a := (->), ...}`; one
+     * it could not ground carries at most the class variable, bound to the
+     * receiver's type variable. */
+    for (uint8_t k = 0; k < call->as.call_.n_abi_bindings; k++)
+        if (!emit_abi_type_has_any_tyvar(&call->as.call_.abi_bindings[k].type))
+            return false;
+    AbiTypeBinding eb[ABI_TYPE_BINDINGS_MAX];
+    uint8_t enb = 0;
+    for (uint32_t i = 0; i < m->n_params; i++) {
+        /* The argument reaches the instance's erased base wrapped for its
+         * `tur_poly_fn_t` parameter (EX_POLY_WRAP over `f : A`, typed
+         * `ptr<void>`); the type that says what the spec passes is the one
+         * under it. */
+        const Expr *ax = call->as.call_.args[i];
+        for (int d = 0; ax && d < 8; d++) {
+            if (ax->type.kind == TY_FN || ax->type.kind == TY_TYVAR) break;
+            if (ax->kind == EX_POLY_WRAP) ax = ax->as.poly_wrap_.inner;
+            else if (ax->kind == EX_FN_TO_FAT) ax = ax->as.fn_to_fat_.inner;
+            else if (ax->kind == EX_ASCRIBE) ax = ax->as.ascribe_.inner;
+            else break;
+        }
+        if (!ax) return false;
+        Type act = emit_resolve_type(ctx, ax->type);
+        if (act.kind != TY_FN) return false;
+        emit_abi_arrow_collect(&m->param_types[i], &act, eb, &enb);
+    }
+    if (enb == 0 || enb + 1 > ABI_TYPE_BINDINGS_MAX) return false;
+    for (uint8_t k = 0; k < enb; k++)
+        if (emit_abi_type_has_any_tyvar(&eb[k].type) ||
+            eb[k].type.kind == TY_UNKNOWN)
+            return false;
+    out[0].name = tc->type_params[0]->name;
+    out[0].type = *head;
+    for (uint8_t k = 0; k < enb; k++) out[1 + k] = eb[k];
+    *n_out = (uint8_t)(1 + enb);
+    return true;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
     if (!call || call->kind != EX_CALL || !call->as.call_.fn_binding) return;
+    AbiTypeBinding arrow_bindings[ABI_TYPE_BINDINGS_MAX];
+    uint8_t n_arrow_bindings = 0;
+    bool arrow_spec = !result_type_override &&
+        emit_abi_arrow_spec_bindings(ctx, call, arrow_bindings, &n_arrow_bindings);
     /* MB2.5 (constrained-hkt-forall-mode-b-plan): a class-method call on a
      * HIGHER-KINDED constrained variable inside a constrained rank-2 poly-fn (or
      * its dict-clone) is dispatched through the runtime dict param at emit
@@ -5650,7 +5773,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * box elimination Path B exists for. */
             bool vl_wide_mono_body = ctx->current_abi_specialization &&
                 ctx->current_abi_specialization->is_vl_wide_mono;
-            if (cls_is_hkt && enclosing_dispatches_cls && !vl_wide_mono_body)
+            if (cls_is_hkt && enclosing_dispatches_cls && !vl_wide_mono_body &&
+                !arrow_spec)
                 return;
         }
     }
@@ -5660,7 +5784,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * Mark that instance live now -- its method binding gets a noted carrier call
      * -- so emit_instance_is_live keeps it and the emitted spec body's reference
      * to the re-dispatched callee resolves at link time. */
-    if (ctx->current_abi_specialization && call->as.call_.dict_arg) {
+    if (ctx->current_abi_specialization && call->as.call_.dict_arg && !arrow_spec) {
         Type rresolved = {0}; const Expr *rdict = NULL;
         FnDef *redisp = NULL;
         bool redisp_is_hkt = false;
@@ -5755,6 +5879,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * matters; absence of bindings means there is nothing to specialize. */
     const AbiTypeBinding *bindings = call->as.call_.abi_bindings;
     uint8_t n_bindings = call->as.call_.n_abi_bindings;
+    if (arrow_spec) {
+        bindings = arrow_bindings;
+        n_bindings = n_arrow_bindings;
+    }
 
     /* constrained-defn-monomorphize: a constrained generic defn whose RETURN type
      * is a parametric container -- `(defn rec [A] [(C A)] ... : (Cons A) ...

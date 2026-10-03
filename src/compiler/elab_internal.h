@@ -773,6 +773,26 @@ typedef struct Elab {
      * emission-registration sites consult this flag (together with
      * separate_compilation) to skip re-registering imported defs. */
     bool             in_imported_module;
+    /* class-and-generic-in-an-instance-less-module: a defn of an IMPORTED
+     * module whose body failed only because a class it dispatches through
+     * has no instance yet -- the class and a constrained generic over it
+     * live in a module that holds none, the instances beside the types in
+     * the importer.  Such a defn is parked (not reported) and retried at the
+     * importer's next statement boundary after a new instance registers
+     * (elab_noinst_retry), with its module context restored; the retried
+     * definition is appended to that module's body.  Whatever is still
+     * parked when the program ends is elaborated once more for real, so its
+     * diagnostics still reach the user. */
+    struct NoInstPending *noinst_pending;
+    uint32_t         n_noinst_pending;
+    uint32_t         cap_noinst_pending;
+    /* The instance-list head at the last retry: an unchanged head means no
+     * instance registered since, so a retry could not succeed. */
+    const struct TypeClassInstance *noinst_seen_head;
+    /* Bumped by the "declares no '<Class>' instance at all" diagnostic, so a
+     * speculative attempt can tell that failure from any other. */
+    uint32_t         noinst_failures;
+    bool             noinst_retrying;
     /* SB2: When true, (import ...) is forbidden (sandboxed environment). */
     bool             sandboxed;
     /* MF3: true while elaborating the auto-loaded stdlib prefix; new global
@@ -2234,6 +2254,11 @@ Expr *elab_definstance(Elab *e, const Form *call);
  * obligation (Half B).  Runs after every form in the unit is registered, from
  * elaborate_program_session.  Returns false when it reported an error. */
 bool elab_typeclass_superclasses_finish(Elab *e);
+/* class-and-generic-in-an-instance-less-module: retry the parked defns (see
+ * Elab.noinst_pending).  `final` elaborates whatever is left for real and
+ * returns false when any still fails; otherwise a retry happens only when an
+ * instance registered since the last one, and always returns true. */
+bool elab_noinst_retry(Elab *e, bool final);
 Expr *elab_method_call(Elab *e, const Form *call);
 /* Phase RT: if `name` is a typeclass method whose dispatch type variable
  * appears only in the return type (a return-only-dispatch method, e.g.

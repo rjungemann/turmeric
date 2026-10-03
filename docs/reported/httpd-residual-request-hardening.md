@@ -5,8 +5,24 @@ denial of service, a policy gap or a misleading surface).
 **Filed:** 2026-09-30, by security-audit-plan WP4 (M-4).
 **Tag:** security-
 
+**Narrowed 2026-10-03: item 10 is fixed too; 3, 4 and 9 remain** (3 and 4
+need a default chosen, 9 is an enhancement).
+
+- **10** -- `httpd-req-multipart-parse` refuses a non-`multipart/` media type;
+  reads `boundary` as a parameter of it, matched by name in any case (so a
+  quoted `charset="boundary=YY"` cannot supply it), and caps it at RFC 2046's
+  70; reads `name` and `filename` as parameters of `Content-Disposition` (so
+  `filename="a.bin"; name="up"` names the part `up`, not `a.bin`); matches a
+  part header by its whole field name; and requires the CRLF after each
+  delimiter.  Worse than the filing said: every search was `strstr`, so a NUL
+  byte in an uploaded file ended the scan -- the part was never terminated and
+  EVERY part was lost.  All searches are now bounded by the body's length
+  (`httpd_mp_find`, beside `httpd_hdr_param` in the file-scope include block).
+  Against the old parser, five of the six new `mp` cases in
+  `tests/fixtures/httpd-request-hardening` came out wrong.
+
 **Narrowed 2026-10-01: items 1, 2, 5, 6, 7 and 8 are fixed; 3, 4, 9 and 10
-remain** (each needs a default chosen, or is an enhancement).
+remained** (each needs a default chosen, or is an enhancement).
 
 - **1** -- both header read loops resume the terminator search 3 bytes (1 for
   `\n\n`) before where the previous one stopped, instead of rescanning the
