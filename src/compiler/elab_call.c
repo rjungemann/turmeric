@@ -7970,15 +7970,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             /* arrow-instance-closure-erased-to-words (`pipe` over ^fat arrows):
              * a `^fat` binding, or a fat-normalized parameter, already HOLDS a
              * { thunk, env } box despite its unboxed static type -- the same
-             * already-fat test the ^fat sink branch makes.  Shimming it here
+             * already-fat test the ^fat sink branch makes, asked of the
+             * representation decision (repr_of_binding).  Shimming it here
              * boxed the box: slot 0's `__tur_fatshim_double_double` then
              * called the inner box's address as code (SIGSEGV).  Mark the
              * use boxed instead, keeping its precise signature for M7. */
             if (args[i]->kind == EX_VAR && args[i]->as.var.binding &&
                 args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed &&
                 (args[i]->as.var.binding->is_fat ||
-                 (args[i]->as.var.binding->is_param &&
-                  fn_param_type_is_fat_normalized(&args[i]->as.var.binding->type)))) {
+                 args[i]->as.var.binding->is_param) &&
+                repr_of_binding(args[i]->as.var.binding, REPR_POS_PARAM) ==
+                    REPR_FAT_HANDLE) {
                 args[i]->type.as.fn.boxed = true;
             }
             if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed) {
