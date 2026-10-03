@@ -616,8 +616,10 @@ CI going green proves almost nothing here. Check by hand:
    200, so this is no longer the cliff the plan was written around.
 3. **Homebrew:** `brew untap rjungemann/turmeric` then
    `brew install --HEAD turmeric-lang/turmeric/turmeric`.
-4. **Attestation:** `gh attestation verify <asset> --repo turmeric-lang/turmeric`
-   on a release cut *after* the move -- and see 6.2.
+4. **Attestation:** DONE 2026-10-02, and it found a real documentation bug --
+   see 6.2. Still outstanding: the same check on a release cut *after* the
+   move, to confirm `--repo turmeric-lang/turmeric` is the right form going
+   forward.
 
 ## 6. Two traps worth naming
 
@@ -630,20 +632,55 @@ transfer, confirm the first PR actually produces checks. A PR with no checks
 reports "no checks reported on the branch" rather than anything that looks
 like a failure, so it is easy to read as green.
 
-### 6.2 Old releases' attestations name the old owner forever
+### 6.2 Old releases' attestations name the old OWNER -- and the flag changes
 
-Build provenance binds each asset to the repo via the release job's OIDC
-token. Assets built before the move are signed as `rjungemann/turmeric`; that
-is a cryptographic fact and no redirect changes it. So:
+The premise was right and **both prescriptions were wrong.** Measured
+2026-10-02 on v0.59.0's `macos-arm64` asset, downloaded after the transfer:
 
-- `gh attestation verify <old-asset> --repo turmeric-lang/turmeric` **fails**,
-  correctly.
-- Verifying a pre-move release requires `--repo rjungemann/turmeric`.
+| Command | Result |
+| --- | --- |
+| `gh attestation verify <asset> --repo rjungemann/turmeric` | **HTTP 404** |
+| `gh attestation verify <asset> --repo turmeric-lang/turmeric` | **HTTP 404** |
+| `gh attestation verify <asset> --owner turmeric-lang` | **HTTP 404** |
+| `gh attestation verify <asset> --owner rjungemann` | **exit 0** |
 
-The three `cut-*-release.md` files should therefore not simply have the owner
-swapped -- they should say which owner applies to which vintage, so that a
-user verifying v0.x after the move is not told their download is compromised.
-This is the one item in O4 that needs prose, not a string replacement.
+So this plan's original advice -- "verifying a pre-move release requires
+`--repo rjungemann/turmeric`" -- would have sent a user to a 404 and left them
+unable to verify a download at all.
+
+**Why.** The certificate records
+`sourceRepositoryOwnerURI: https://github.com/rjungemann` and
+`buildSignerURI: .../rjungemann/turmeric/.github/workflows/release.yml@refs/tags/v0.59.0`.
+The attestation itself is stored in the owning **account's** index --
+`GET users/rjungemann/attestations/<digest>` returns it, while
+`GET repos/<either owner>/turmeric/attestations/<digest>` and
+`GET orgs/turmeric-lang/attestations/<digest>` both 404. A transfer does not
+move that index, and the repo-scoped endpoint resolves through the *current*
+owner, which is why it fails under both names. **The flag changes, not just
+its value.**
+
+Guidance now carried in `README.md`, `docs/guides/security-guide.md`,
+`docs/guides/releases-and-installation-guide.md`, the comment in
+`release.yml`, and all three `cut-*-release.md` files:
+
+```sh
+# built before the 2026-10-02 move (v0.59.0 and earlier)
+gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
+# built after it
+gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
+```
+
+`CHANGELOG.md:149` also names the old form but is **left alone** as Class C --
+it records what was true at that release.
+
+Two consequences worth keeping in view:
+
+- A user reporting a 404 here has used the wrong flag. Say so explicitly;
+  "verification failed" on a release binary is exactly the message that makes
+  someone assume compromise.
+- The post-move form is still **unverified** -- it cannot be tested until a
+  release is cut under the org. Treat `--repo turmeric-lang/turmeric` as the
+  expectation, not a measurement, until then (O6 item 4).
 
 ## 7. What this plan does not do
 

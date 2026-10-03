@@ -61,8 +61,20 @@ version under `~/.tvm/versions/<v>/`.
 > that produced the bytes:
 >
 > ```sh
-> gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+> # Releases built before the 2026-10-02 move to the turmeric-lang org
+> # (v0.59.0 and earlier) -- note `--owner`, not `--repo`:
+> gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
+> # Releases built after it:
+> gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
 > ```
+>
+> The owner is bound into the signature, so the right flag follows the
+> release's **vintage**, not where the repo lives now. A pre-move asset is
+> recorded under the account that owned the repo when it was built, and a
+> transfer does not move that record -- so `--repo` fails for those assets
+> under *either* owner name and `--owner rjungemann` is the form that works.
+> A failure here means you used the wrong one, not that the download is
+> compromised.
 >
 > When no prebuilt
 asset exists for a tag (older than the prebuild matrix, or an

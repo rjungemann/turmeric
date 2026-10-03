@@ -28,16 +28,19 @@ cannot be made. Release assets also carry
 so you can confirm which workflow run built the bytes you have:
 
 ```sh
-# Releases cut before the 2026-10-02 move to the turmeric-lang org
-# (v0.59.0 and earlier) are signed against the old owner:
-gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
-# Releases cut after it:
+# Releases built before the 2026-10-02 move to the turmeric-lang org
+# (v0.59.0 and earlier) -- note `--owner`, not `--repo`:
+gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
+# Releases built after it:
 gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
 ```
 
-The owner is part of what the signature covers, so it follows the release's
-vintage rather than where the repo lives now. Using the wrong one reports a
-verification failure, not a compromised download.
+The owner is bound into the signature, so the right flag follows the release's
+**vintage**, not where the repo lives now. A pre-move asset stays recorded
+under the account that owned the repo when it was built, and a transfer does
+not move that record -- so `--repo` fails for those assets under *either* owner
+name. Using the wrong flag reports a verification failure, not a compromised
+download.
 
 On a platform with no prebuilt binary, the installer builds that same release
 tag from source instead (needs `cmake` and a C compiler).

@@ -329,8 +329,19 @@ signed through Sigstore with a short-lived certificate minted from the release
 job's OIDC token, so there is no long-lived key to lose:
 
 ```sh
-gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+# Releases built before the 2026-10-02 move to the turmeric-lang org
+# (v0.59.0 and earlier) -- note `--owner`, not `--repo`:
+gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
+# Releases built after it:
+gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
 ```
+
+The owner is bound into the signature, so the right flag follows the release's
+**vintage**, not where the repo lives now. A pre-move asset stays recorded
+under the account that owned the repo when it was built, and a transfer does
+not move that record -- so `--repo` fails for those assets under *either* owner
+name, and `--owner rjungemann` is the form that works. A failure here means the
+wrong flag, not a compromised download.
 
 That is the check worth running, because `sha256sums.txt` is served from the
 same origin as the assets: on its own it proves the bytes did not change in
