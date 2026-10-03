@@ -90,15 +90,39 @@ satisfy glibc and break both macOS constraints.
 `sys/user.h` declares its register structs with plain integer types rather than
 `__uint128_t` -- *not verified*, and worth checking before relying on it.
 
-## What is NOT established
+## Established by reading (2026-10-03): c2mir has no `__uint128_t` on Linux aarch64
 
-That `__uint128_t` is specifically why c2mir fails on that header. It is the
-only unusual token in the struct at the named line, and c2mir does reject the
-token elsewhere ([c2mir-rejects-uint128](c2mir-rejects-uint128.md)), but the
-probe arm that would have isolated it was confounded: the `sys/user.h:30` error
-is present in *every* `tur jit` run on this platform, including a plain hello,
-so "including the header reproduced it" proved nothing. It does not change the
-fix -- if `sys/procfs.h` never arrives, neither does `sys/user.h`.
+glibc 2.39's `aarch64-linux-gnu/sys/user.h` (read from Ubuntu's
+`libc6-dev-arm64-cross` 2.39-0ubuntu8cross1, the runner's version):
+
+```c
+30  struct user_fpsimd_struct
+31  {
+32    __uint128_t  vregs[32];
+33    unsigned int fpsr;
+34    unsigned int fpcr;
+35  };
+```
+
+`__uint128_t` is a compiler builtin type name, so it is only a type in c2mir if
+the target's predefined header declares it.  `external/mir/c2mir/aarch64/mirc_aarch64_linux.h`
+does -- `typedef struct {_Alignas(16) unsigned long hi; unsigned long lo;} __uint128_t;`,
+the layout-only stand-in fork commit `90633091` aligned to 16 -- but **only in
+its `#elif defined(__APPLE__)` branch**.  On Linux aarch64 the name is
+undeclared, line 32 is `<identifier> <identifier>[32];`, and c2mir reports the
+failure at the start of the enclosing declaration: line 30, column 1, "syntax
+error on struct (expected '<declarator>')" -- exactly the message every `tur
+jit` run on that platform prints.  x86-64 never reaches it: no x86-64 glibc
+header on the `<ucontext.h>` path names the type.
+
+So the fix is one line in the fork: declare the same stand-in on Linux
+aarch64 (outside the Apple branch).  `struct user_fpsimd_struct` then parses
+with glibc's layout (512 + 8 bytes, 16-aligned), `<ucontext.h>` compiles, and
+nothing in the unit does arithmetic on the type.  It is *not* measured here --
+this container is x86-64 and no CI job runs the engine on aarch64 -- so the
+release workflow's archive JIT step (or an `ubuntu-24.04-arm` probe run) is the
+check.  User inline C that does arithmetic on `__uint128_t` stays a separate,
+larger gap ([c2mir-rejects-uint128](c2mir-rejects-uint128.md)).
 
 ## Fix directions
 
@@ -129,7 +153,10 @@ it.
 
 That leaves:
 
-1. **Teach c2mir `__uint128_t`** in the vendored fork -- now the primary route.
+1. **Declare c2mir's `__uint128_t` stand-in on Linux aarch64** in the vendored
+   fork (see "Established by reading" above) -- now the primary route, and a
+   one-line change; full 128-bit arithmetic is not needed for the headers.
+   Originally: **teach c2mir `__uint128_t`**.
    It fixes this *and* user inline C on arm64, and it disturbs none of the
    carefully-ordered include dance. See
    [c2mir-rejects-uint128](c2mir-rejects-uint128.md),

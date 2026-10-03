@@ -51,16 +51,25 @@ these are the only errors.
 
 ## Root cause
 
-Not pinpointed inside c2mir. What is established is the behaviour: the token is
-rejected at parse time, in a position where a type name is expected, and the
-generated unit itself never writes `__uint128_t` anywhere -- so nothing else in
-the JIT path depends on support existing today.
+`__uint128_t` is a builtin type name, so c2mir knows it only where a target's
+predefined header (`external/mir/c2mir/<arch>/mirc_<arch>_linux.h`) declares
+it.  Read 2026-10-03:
 
-Prior art says support may be partial rather than absent:
-[`docs/archive/history/jit-arm64-uint128-align-struct-layout-skew.md`](../archive/history/jit-arm64-uint128-align-struct-layout-skew.md)
-records a fix in the fork for `__uint128_t` *alignment and struct layout* on
-arm64, which implies the type is modelled somewhere downstream of the parser.
-Worth reading before assuming the frontend has to learn it from scratch.
+- **x86-64:** not declared at all -- the repro's `__uint128_t v = ...` is
+  `<identifier> <identifier>`, the "expected ';'" above.
+- **aarch64, Apple:** declared as a LAYOUT-ONLY stand-in,
+  `typedef struct {_Alignas(16) unsigned long hi; unsigned long lo;}
+  __uint128_t;` (fork commit `90633091` fixed its alignment), so SDK headers
+  that embed it in structs parse with the right size -- but it is a struct,
+  so `(__uint128_t)x` and `v * 3u` still fail.
+- **aarch64, Linux:** the stand-in sits inside the `#elif defined(__APPLE__)`
+  branch, so the name is undeclared -- which is the whole of
+  [jit-xopen-source-guard-inert-on-glibc](jit-xopen-source-guard-inert-on-glibc.md).
+
+MIR itself has no 128-bit integer type, so ARITHMETIC on `__uint128_t` in
+inline C is a real frontend-plus-backend feature (lowering to pairs of 64-bit
+operations), not a parser fix.  Declaring the stand-in for Linux aarch64 is the
+cheap, separate fix the header problem needs.
 
 ## Fix directions
 
