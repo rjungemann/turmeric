@@ -16,8 +16,9 @@
  * whole-archive question), tur_collect_symbols is the real one, and the C text
  * arrives as an in-memory buffer rather than a file.
  *
- * Compiled into `tur` only under -DTUR_JIT=ON (which vendors MIR via
- * cmake/mir.cmake and sets ENABLE_EXPORTS so dlsym can see the runtime).
+ * Compiled into `tur` only under TUR_JIT (ON by default on 64-bit x86-64 and
+ * arm64; it builds the vendored MIR in external/mir via cmake/mir.cmake and
+ * sets ENABLE_EXPORTS so dlsym can see the runtime).
  * Without it, cmd_jit in main.c reports the missing capability.
  */
 
@@ -75,6 +76,13 @@ static double jit_now_ms (void) {
 
 static double g_jit_t0, g_jit_t_prev;
 static int g_jit_timing;   /* TUR_JIT_TIMING=1 */
+static bool g_jit_quiet_warnings;  /* tur_jit_set_quiet_warnings */
+
+bool tur_jit_set_quiet_warnings (bool quiet) {
+  bool was = g_jit_quiet_warnings;
+  g_jit_quiet_warnings = quiet;
+  return was;
+}
 
 static void jit_timing_begin (void) {
   const char *t = getenv ("TUR_JIT_TIMING");
@@ -897,6 +905,7 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   struct c2mir_options ops;
   memset (&ops, 0, sizeof ops);
   ops.message_file = stderr;
+  ops.ignore_warnings_p = g_jit_quiet_warnings;
 
   ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
   ops.include_dirs = include_dirs;
@@ -1080,7 +1089,20 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 /* ------------------------------------------------------------------ */
 struct TurJitImage {
   MIR_context_t ctx;
+  int c2mir_live;   /* c2mir_finish still owed (TUR_JIT_KEEP_C2MIR=1) */
 };
+
+/* aot-compiled-repl-plan C1: an image no longer needs the C front end once its
+ * module is loaded, linked and initialized -- generation (lazy or eager) reads
+ * MIR's own IR, and MIR copied every name and literal it kept.  The front end
+ * is the bulk of an image's resident memory (the parsed system headers and the
+ * runtime declarations), and the REPL keeps images for the life of the
+ * session, so it is released here rather than in tur_jit_image_free.
+ * TUR_JIT_KEEP_C2MIR=1 restores the old lifetime, for bisecting. */
+static int jit_image_keeps_c2mir (void) {
+  const char *v = getenv ("TUR_JIT_KEEP_C2MIR");
+  return v != NULL && strcmp (v, "1") == 0;
+}
 
 int tur_jit_compile_image (const char *csrc, size_t csrc_len,
                            const char *autolink,
@@ -1106,15 +1128,19 @@ int tur_jit_compile_image (const char *csrc, size_t csrc_len,
   MIR_item_t init = jit_find_func (ctx, "__tur_static_init");
   if (init != NULL && init->addr != NULL) ((void (*) (void)) init->addr) ();
 
+  int keep_c2mir = jit_image_keeps_c2mir ();
+  if (!keep_c2mir) c2mir_finish (ctx);
+
   TurJitImage *img = (TurJitImage *) malloc (sizeof *img);
   if (!img) {
     jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
-    c2mir_finish (ctx);
+    if (keep_c2mir) c2mir_finish (ctx);
     MIR_finish (ctx);
     return TUR_JIT_ERR_RUN;
   }
   img->ctx = ctx;
+  img->c2mir_live = keep_c2mir;
   *out = img;
   return TUR_JIT_OK;
 }
@@ -1133,7 +1159,7 @@ void tur_jit_image_free (TurJitImage *img) {
   jit_atexit_drain ();
   jit_forget_lazy_ctx (img->ctx);
   MIR_gen_finish (img->ctx);
-  c2mir_finish (img->ctx);
+  if (img->c2mir_live) c2mir_finish (img->ctx);
   MIR_finish (img->ctx);
   free (img);
 }

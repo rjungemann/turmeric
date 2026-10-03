@@ -87,6 +87,12 @@ jobs:
           # failed at the C compile step.  Verified broken on macOS and Windows
           # before this; docs/archive/release-archive-cannot-compile.md.
           cp build/src/libturt_runtime.a dist/lib/
+          # TUR_JIT defaults ON (vendored MIR), so libturi.a carries the JIT
+          # engine's image API and links PUBLIC against MIR: a C host that
+          # embeds libturi and calls that API needs libtur_mir.a beside it.
+          # A plain `-lturi` link never pulls the engine's object in.  A hard
+          # cp, so a build that lost the engine fails here rather than shipping.
+          cp build/libtur_mir.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
           cp -R stdlib dist/share/turmeric/
 
@@ -115,6 +121,25 @@ jobs:
           case "$out" in
             *"hello from the archive"*) echo "Archive compiles and runs." ;;
             *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
+          esac
+
+      # TUR_JIT defaults ON, so the shipped binary carries the MIR engine, and
+      # linux-aarch64 is a leg no CI job runs the engine on.  Run the same
+      # program through `tur jit` from the extracted archive.  TUR-W0070 is the
+      # engine falling back to cc, which still prints the right answer -- so it
+      # fails this check rather than passing it vacuously.
+      - name: Run a program through the JIT from the extracted archive
+        run: |
+          out=$(cd verify && ./bin/tur jit hello.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::tur jit failed from the extracted archive"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          case "$out" in
+            *TUR-W0070*) echo "::error::the JIT fell back to cc -- the engine did not run"; exit 1 ;;
+            *"hello from the archive"*) echo "The shipped JIT engine runs." ;;
+            *) echo "::error::unexpected output from tur jit"; exit 1 ;;
           esac
 
       - name: Upload artifact
@@ -233,6 +258,8 @@ jobs:
           cp build/tur.exe dist/bin/
           cp build/src/libturt_runtime.a dist/lib/
           cp build/src/libturi.a dist/lib/
+          # See the `build` legs: the JIT engine's MIR, for libturi embedders.
+          cp build/libtur_mir.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
           cp -R stdlib dist/share/turmeric/
 
@@ -263,6 +290,22 @@ jobs:
           case "$out" in
             *"hello from the archive"*) echo "Archive compiles and runs." ;;
             *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
+          esac
+
+      # As on the `build` legs: the shipped engine, from the extracted archive,
+      # with a cc fallback (TUR-W0070) counted as a failure.
+      - name: Run a program through the JIT from the extracted archive
+        run: |
+          out=$(cd verify && ./bin/tur.exe jit hello.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::tur jit failed from the extracted archive"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          case "$out" in
+            *TUR-W0070*) echo "::error::the JIT fell back to cc -- the engine did not run"; exit 1 ;;
+            *"hello from the archive"*) echo "The shipped JIT engine runs." ;;
+            *) echo "::error::unexpected output from tur jit"; exit 1 ;;
           esac
 
       - name: Upload artifact

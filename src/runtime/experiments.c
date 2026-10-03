@@ -197,8 +197,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * surfaced (three latent product bugs, all fixed), the harness denylist is
      * empty, and tests/run-jit.sh runs the whole corpus through the engine on
      * both hosts.  The remaining gate is the BUILD-TIME one and it stays:
-     * `-DTUR_JIT=ON` vendors MIR, a default build carries no fetch and no
-     * dependency, and `tur jit` in such a build still says so.  Engine
+     * TUR_JIT (ON by default since 2026-10-02, MIR vendored under
+     * external/mir), and `tur jit` in a build without it still says so.  Engine
      * SELECTION is likewise unchanged and is not a default flip -- `cc` is
      * still what you get unless `--engine jit` / `TUR_ENGINE=jit` /
      * `:engine "jit"` says otherwise, and the REPL's in-process JIT loader now
@@ -446,6 +446,21 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.58.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_loop_invariants },
+    /* repl-jit-inline-c (aot-compiled-repl-plan C1) -- the interpreter
+     * compiles an inline-C defn it cannot run, through the real emitter and
+     * the in-process MIR engine, on that defn's first call; `tur repl` and
+     * `tur --interpret` alike.  Needs a TUR_JIT build (the default on 64-bit
+     * x86-64/arm64); without one the hook is absent and today's "inline-C not
+     * supported" error stands.  A prototype: what a compiled defn may reach
+     * (only itself, scalar signatures) is the part expected to move, and C2
+     * (whole compiled turns) may subsume it. */
+    { "repl-jit-inline-c",
+      "the interpreter JIT-compiles an inline-C defn it cannot run, on its first call (needs a TUR_JIT build)",
+      "docs/upcoming/aot-compiled-repl-plan.md",
+      "0.59.0",                  /* introduced */
+      "0.62.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_repl_jit_inline_c },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
