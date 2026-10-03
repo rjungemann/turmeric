@@ -1,24 +1,26 @@
 name: aarch64 JIT include probe
 
-# THROWAWAY DIAGNOSTIC -- delete this file and its branch once the question is
-# answered.  It exists because v0.60.0's release failed on one leg:
+# THROWAWAY DIAGNOSTIC -- delete this file and its branch once answered.
+#
+# v0.60.0's release failed on linux-aarch64:
 #
 #   /usr/include/aarch64-linux-gnu/sys/user.h:30:1: syntax error on struct
 #   TUR-W0070: jit engine could not compile this program; falling back to cc
 #
-# Nothing under src/ or stdlib/ includes sys/user.h, sys/ptrace.h or
-# sys/procfs.h, so it arrives transitively -- and the chain can only be seen on
-# an aarch64 Linux host.  This prints:
+# Run 1 established the JIT unit's include set (build tree and extracted
+# archive agree, byte for byte) and that the unit never writes __uint128_t
+# itself -- so the token appears only inside that header, in
+# `struct user_fpsimd_struct { __uint128_t vregs[32]; ... }`, which sits at the
+# line c2mir names.  Run 1's `gcc -H` arm was useless: it ran without the JIT's
+# -I flags and died on `hamt.h: No such file or directory`.
 #
-#   1. the exact text c2mir is handed (TUR_JIT_DUMP_C), as an artifact
-#   2. that text's own #include lines
-#   3. gcc -H's include TREE, which names whichever header pulls sys/user.h
-#   4. the construct at the line c2mir rejects, plus the glibc version
+# This run answers the two questions that choose the fix, and needs no -I at
+# all because it tests the SYSTEM headers directly:
 #
-# Run from the BUILD TREE and again from an EXTRACTED RELEASE ARCHIVE, because
-# the failing step ran from the archive and the two resolve the runtime
-# differently -- if the chains disagree, a build-tree-only answer would be the
-# wrong answer.
+#   chain   -- which of the unit's includes reaches sys/user.h, named rather
+#              than guessed.  If it is incidental, dropping it is the whole fix.
+#   uint128 -- whether c2mir rejects __uint128_t on its own, which says whether
+#              the header is merely the messenger.
 
 on:
   # A new workflow file is NOT dispatchable until it is on the default branch,
@@ -31,118 +33,130 @@ permissions:
   contents: read
 
 jobs:
-  probe:
-    name: Probe (linux-aarch64)
+  # ---------------------------------------------------------------- the chain
+  chain:
+    name: Which include reaches sys/user.h
     runs-on: ubuntu-24.04-arm
+    steps:
+      - name: libc version
+        run: ldd --version | head -1
 
+      - name: Every /usr/include header that mentions sys/user.h
+        run: grep -rln 'sys/user\.h' /usr/include 2>/dev/null | head -40 || echo "(none)"
+
+      - name: Which of the JIT unit's own includes reaches it
+        run: |
+          # The unit's include set, from run 1's dump. Tested one at a time, as
+          # the system headers alone -- no turmeric, no -I, nothing to go wrong.
+          hdrs="sys/select.h sys/socket.h netinet/in.h arpa/inet.h ucontext.h
+                setjmp.h stdio.h stdint.h stdbool.h pthread.h stdlib.h stddef.h
+                string.h stdarg.h regex.h time.h unistd.h fcntl.h errno.h"
+          for h in $hdrs; do
+            printf '%-16s ' "$h"
+            if printf '#include <%s>\n' "$h" \
+                 | gcc -H -fsyntax-only -xc - 2>&1 | grep -q 'sys/user\.h'; then
+              echo "REACHES sys/user.h"
+            else
+              echo "-"
+            fi
+          done
+
+      - name: The same, under the macro the unit actually defines for ucontext.h
+        run: |
+          # The unit wraps that one include in `#define _XOPEN_SOURCE 700` /
+          # `#undef`, and glibc's header content is feature-macro dependent, so
+          # a bare test of ucontext.h is not the same question.
+          printf '#define _XOPEN_SOURCE 700\n#include <ucontext.h>\n' \
+            | gcc -H -fsyntax-only -xc - 2>&1 | grep -q 'sys/user\.h' \
+            && echo "ucontext.h under _XOPEN_SOURCE 700: REACHES sys/user.h" \
+            || echo "ucontext.h under _XOPEN_SOURCE 700: -"
+
+      - name: The full chain, with each includer named
+        run: |
+          # -H indents one dot per nesting level, so the nearest preceding line
+          # with one fewer dot is the includer. Print the whole tree for any
+          # header that reached it, so the path is readable end to end.
+          hdrs="sys/select.h sys/socket.h netinet/in.h arpa/inet.h ucontext.h
+                setjmp.h pthread.h regex.h time.h unistd.h fcntl.h errno.h"
+          for h in $hdrs; do
+            printf '#include <%s>\n' "$h" \
+              | gcc -H -fsyntax-only -xc - > /dev/null 2> tree.txt || true
+            if grep -q 'sys/user\.h' tree.txt; then
+              echo "##### <$h> -- full tree up to and including sys/user.h"
+              sed -n '1,/sys\/user\.h/p' tree.txt
+              echo ""
+            fi
+          done
+
+  # -------------------------------------------------------------- the mechanism
+  uint128:
+    name: Does c2mir reject __uint128_t on its own
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libedit-dev
 
-      - name: Toolchain and libc versions
-        run: |
-          cc --version | head -1
-          ldd --version | head -1
-          uname -m
-
       - name: Configure and build (Release)
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build build -j
 
-      - name: The same two-line program the release leg used
+      - name: A program whose inline C writes __uint128_t
         run: |
-          cat > hello.tur <<'EOF'
+          cat > u128.tur <<'EOF'
+          (defn widen [x : int] : int
+            ```c
+            __uint128_t v = (__uint128_t)x;
+            v = v * 3u;
+            return (int64_t)v;
+            ```)
+
           (defn main [] : int
-            (println "hello from the archive")
+            (println (widen 14))
             0)
           EOF
-
-      # ---------------------------------------------------------------- build tree
-      - name: Reproduce from the build tree, dumping the text c2mir is handed
-        run: |
           set +e
-          TUR_JIT_DUMP_C=jit-build.c ./build/tur jit hello.tur 2>&1 | tee jit-build.log
-          echo "---- tur jit exit: ${PIPESTATUS[0]} ----"
-          if [ -f jit-build.c ]; then
-            echo "dump: $(wc -l < jit-build.c) lines"
+          TUR_JIT_DUMP_C=u128-jit.c ./build/tur jit u128.tur 2>&1 | tee u128.log
+          echo "---- exit: ${PIPESTATUS[0]} ----"
+          if grep -q "TUR-W0070" u128.log; then
+            echo "VERDICT: the JIT declined this program (see diagnostics above)"
           else
-            echo "::warning::no dump produced -- TUR_JIT_DUMP_C did not fire from the build tree"
+            echo "VERDICT: c2mir compiled __uint128_t fine -- the header is NOT"
+            echo "         failing merely because of that token"
           fi
 
-      # ------------------------------------------------------------------ archive
-      # Packaged and extracted exactly as release.yml does, so this arm is the
-      # faithful reproduction of the leg that failed.
-      - name: Package and extract, as the release workflow does
+      - name: A program whose inline C includes sys/user.h directly
         run: |
-          mkdir -p dist/bin dist/lib dist/include/turi dist/share/turmeric
-          cp build/tur dist/bin/
-          cp build/src/libturi.a dist/lib/
-          cp build/src/libturt_runtime.a dist/lib/
-          cp build/src/libturt_preamble.a dist/lib/
-          cp build/libtur_mir.a dist/lib/
-          cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
-          cp -R stdlib dist/share/turmeric/
-          tar -czf probe.tar.gz -C dist .
-          rm -rf verify && mkdir verify && tar -xzf probe.tar.gz -C verify
-          cp hello.tur verify/
+          # Isolates the header from whatever transitively pulls it: if this
+          # alone reproduces the same sys/user.h:30 error, the chain only
+          # determines WHERE it enters, not whether it breaks.
+          cat > suser.tur <<'EOF'
+          (defn regs-size [] : int
+            ```c
+            #include <sys/user.h>
+            return (int64_t)sizeof(struct user_regs_struct);
+            ```)
 
-      - name: Reproduce from the extracted archive (the authoritative arm)
-        run: |
+          (defn main [] : int
+            (println (regs-size))
+            0)
+          EOF
           set +e
-          (cd verify && TUR_JIT_DUMP_C=../jit-archive.c ./bin/tur jit hello.tur 2>&1) | tee jit-archive.log
-          echo "---- tur jit exit: ${PIPESTATUS[0]} ----"
-          if [ -f jit-archive.c ]; then
-            echo "dump: $(wc -l < jit-archive.c) lines"
-          else
-            echo "::warning::no dump produced from the archive"
-          fi
+          ./build/tur jit suser.tur 2>&1 | tee suser.log
+          echo "---- exit: ${PIPESTATUS[0]} ----"
+          grep -q "sys/user.h" suser.log \
+            && echo "VERDICT: including sys/user.h alone reproduces it" \
+            || echo "VERDICT: sys/user.h alone did NOT reproduce it"
 
-      # -------------------------------------------------------------- the answer
-      - name: The include set of the dumped text
-        run: |
-          for f in jit-archive.c jit-build.c; do
-            [ -f "$f" ] || continue
-            echo "##### $f"
-            grep -n '#include' "$f" || echo "(no #include lines)"
-          done
-
-      - name: Which header pulls in sys/user.h
-        run: |
-          # gcc -H prints the include tree with one leading dot per nesting level,
-          # so the nearest preceding line with ONE FEWER dot is the includer.
-          # -fsyntax-only, and || true: the text is written for c2mir, so gcc may
-          # reject it later -- the tree is already printed by then.
-          for f in jit-archive.c jit-build.c; do
-            [ -f "$f" ] || continue
-            echo "##### $f"
-            gcc -H -fsyntax-only "$f" > /dev/null 2> "tree-$f.txt" || true
-            if grep -q "user\.h" "tree-$f.txt"; then
-              echo "--- context around every user.h entry ---"
-              grep -n -B6 "user\.h" "tree-$f.txt"
-            else
-              echo "(gcc -H never reached sys/user.h for $f)"
-              echo "--- first 40 tree lines, for comparison ---"
-              head -40 "tree-$f.txt"
-            fi
-          done
-
-      - name: The construct c2mir rejects
-        run: |
-          echo "--- sys/user.h lines 1-45 (c2mir reports line 30) ---"
-          sed -n '1,45p' /usr/include/aarch64-linux-gnu/sys/user.h
-
-      - name: Upload the dumps and include trees
+      - name: Upload the logs and dumps
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: aarch64-jit-probe
+          name: aarch64-uint128-probe
           path: |
-            jit-build.c
-            jit-archive.c
-            jit-build.log
-            jit-archive.log
-            tree-*.txt
+            u128.log
+            u128-jit.c
+            suser.log
           if-no-files-found: warn
