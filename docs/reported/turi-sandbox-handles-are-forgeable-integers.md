@@ -16,6 +16,10 @@ required capability and the native dispatch checks it. What it can still do is
 read or write an arbitrary address in the host's process, with no capability
 at all.
 
+**Narrowed a third time 2026-10-03: continuation resume is closed** (see
+*Resolved: continuation resume*).  What is open is the erasing ascription on a
+type variable.
+
 **Narrowed again 2026-09-30 (direction 1 landed).** The native channel -- the
 whole of the Repro below -- is now closed by a per-restricted-env handle
 provenance registry (see *Resolved: native handle forgery* below). What remains
@@ -149,12 +153,28 @@ A genuinely-minted handle still round-trips: a sandbox builds and reads vectors,
 maps, HAMTs and strings exactly as before. Pinned by the `forgery/*`,
 `handles-ok/*` and `handle-table` cases in `tests/turi/sandbox-eval.c`.
 
+## Resolved: continuation resume (2026-10-03)
+
+The second value-model forgery below is closed without direction 2, because a
+continuation handle has exactly one producer: every `TuriCont *` the
+interpreter hands out as an integer comes from a capture (the shift receiver's
+argument) or a copy (`ts_cont_copy`: clone, snapshot, serialize,
+`save-cont!`).  Both now register it as `TURI_HK_CONT`, and every consumer
+checks that kind before casting (`cont_handle_forged`, `src/turi/eval.c`):
+the `tur_*_cont_resume` / clone / serialize builtins, the `resume-cont!` and
+`save-cont!` natives, and the three work-stack folds that start a resume
+without going through either.  `0` stays the documented no-op.  Pinned by the
+`forgery/resume-cont`, `forgery/save-cont`, `forgery/cloneable-cont-resume`,
+`forgery/serial-cont-resume`, `forgery/cloneable-cont-clone` and
+`handles-ok/continuation` cases in `tests/turi/sandbox-eval.c`.
+
 ## Still open: the value-model channel -- direction 2
 
-Direction 1 guards *the native dispatch*. Two forgeries reach a pointer WITHOUT
-going through it, so the registry does not see them; both are the "erasing
-ascription launders an integer into a handle type" case the *Root cause* section
-already flagged, and both are what direction 2 (tagged handles) closes:
+Direction 1 guards *the native dispatch*. The forgery below reaches a pointer
+WITHOUT going through it, so the registry does not see it; it is the "erasing
+ascription launders an integer into a handle type" case the *Root cause*
+section already flagged, and it is what direction 2 (tagged handles) closes.
+(The second bullet, continuation resume, is closed -- see above.)
 
 - **An erasing ascription on a type variable.** A generic body that ascribes a
   caller integer to its type parameter re-tags it in the interpreter's own value

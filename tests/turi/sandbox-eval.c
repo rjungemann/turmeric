@@ -322,6 +322,17 @@ static void check_handle_forgery_refused(void) {
     /* Use-after-free: the freed vec's pointer is forgotten. */
     expect_forgery_refused(env, "forgery/use-after-free",
                            "(let [v (vec-new)] (vec-free v) (vec-len v))");
+    /* The continuation channel: resume / clone / serialize are folded by the
+     * driver or dispatched as builtins, not through the native dispatch the
+     * guard above sits on, so they carry a check of their own (TURI_HK_CONT). */
+    expect_forgery_refused(env, "forgery/resume-cont",  "(resume-cont! 4096 0)");
+    expect_forgery_refused(env, "forgery/save-cont",    "(save-cont! 4096)");
+    expect_forgery_refused(env, "forgery/cloneable-cont-resume",
+                           "(tur_cloneable_cont_resume 4096 0)");
+    expect_forgery_refused(env, "forgery/serial-cont-resume",
+                           "(tur_serial_cont_resume 4096 0)");
+    expect_forgery_refused(env, "forgery/cloneable-cont-clone",
+                           "(tur_cloneable_cont_clone 4096)");
     turi_env_free(env);
 }
 
@@ -344,6 +355,16 @@ static void check_handles_still_round_trip(void) {
                      r.tag, r.tag == TURI_ERROR && r.as_error ? r.as_error : "-");
             fail(cases[i].what, msg);
         }
+    }
+    /* A continuation a capture handed out is minted, so it still resumes. */
+    turi_eval(env, "(defn k-resume [k] : int (tur_cloneable_cont_resume k 10))");
+    TuriValue kr = turi_eval(env, "(cloneable-reset (+ 1 (cloneable-shift k-resume 0)))");
+    if (kr.tag == TURI_INT && kr.as_int == 11) pass("handles-ok/continuation", NULL);
+    else {
+        char msg[256];
+        snprintf(msg, sizeof msg, "a live continuation was wrongly refused (tag %d: %s)",
+                 kr.tag, kr.tag == TURI_ERROR && kr.as_error ? kr.as_error : "-");
+        fail("handles-ok/continuation", msg);
     }
     /* A cstr literal is a trusted reader pointer, not a forgeable integer. */
     TuriValue s = turi_eval(env, "(str-concat \"a\" \"b\")");
