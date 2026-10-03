@@ -1,5 +1,49 @@
 # `:invariant` declines two shapes more broadly than soundness requires
 
+**RESOLVED 2026-10-03.** Both halves, each narrowed to what its reason
+actually covers:
+
+- **Half 1 (nested loop).** `li_compose` no longer declines on reaching a
+  nested `while`. `li_compose_nested_loop` collects the names the nested loop
+  assigns and sets each one's image to a havoc sentinel on every path. A later
+  READ of a havocked name -- by a statement after it, or by the invariant at
+  the end of the body -- is caught in `li_subst`, which declines naming it
+  ("'j' is assigned by a nested loop and read after it"). In the invariant,
+  only that conjunct's preservation goes unproved. So the inner-counter shape
+  proves all four obligations. An outer name the nested loop assigns costs only
+  the conjuncts that mention it. A nested loop that can `return`, mutates a
+  cell, or writes through a place still declines, as does a name it assigns
+  that is neither an outer local nor bound inside it.
+- **Half 2 (early `return`).** `return` is now the one exit the composer
+  models. `li_early_exit` takes a mode, so `?`, continuations and the rest still
+  decline as before. A `(return v)` statement empties the path set: the paths
+  through it leave the function and owe no re-establishment. Initiation and
+  preservation are decided on what remains. The site records
+  `early_return`, and the post-loop fact is withheld from everything after the
+  loop: `li_proven` now requires `!early_return`, while the in-loop use goes
+  through the new `li_inductive`. Pruning matters for correctness, not only
+  precision. `early-bound` in the new fixture would be refuted if the
+  `return` path fell through (i = 100, then i + 1 > 100).
+
+Pinned by:
+
+- `tests/fixtures/loop-invariant-nested-and-early-return`: 10 of 10 proved,
+  no loop check emitted, under `--strict-refine`.
+- `tests/fixtures/errors/loop-invariant-early-return-refuted`: a body that
+  really breaks the invariant beside an early `return` is now `TUR-E0371`
+  rather than a silent decline.
+- `tests/fixtures/loop-invariant-declines`: its `early` case moved to a
+  `return` inside a nested loop, which still declines. It gained the
+  nested-loop decline path the filing noted had no test (`nested-read`).
+
+While testing half 2, an unrelated and more serious gap turned up: an early
+`return` bypasses a function's return refinement and `:post` entirely, both
+statically and at runtime. It is not loop-specific. Filed as
+[early-return-bypasses-return-refinement](early-return-bypasses-return-refinement.md).
+
+The original filing follows.
+
+
 **Severity: low (completeness, not soundness -- both runtime checks are kept,
 so the program is correct, just unverified).** The `loop-invariants`
 experiment's decline list is deliberately conservative, and the posture is a

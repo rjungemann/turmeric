@@ -831,9 +831,24 @@ variables the analysis cannot see is reported (`TUR-W0372`, `is not analysed sta
 both checks:
 
 - an assignment through a place (`(set! (.f s) v)`) or to an atom;
-- an early exit (`return`, `?`, a captured continuation) -- `(not c)` would
-  not hold on that path;
-- a nested loop that assigns, or a body `let` that rebinds a name in scope;
+- an early exit other than `return` (`?`, a captured continuation), a
+  `return` in a nested loop, or one the body composer cannot place (inside a
+  call's argument, a `match` arm);
+- a body `let` that rebinds a name in scope, or a nested loop whose assigned
+  name is read after it (its value there is unknown).
+
+Two shapes look like they should decline and do not:
+
+- **A nested loop is havocked, not declined.** Nothing it assigns has a
+  known value afterwards, but that only matters to code that reads one of
+  those names again. An inner counter (`(let [^mut j 0] (while ...))`) costs
+  nothing. An outer name it assigns leaves only the conjuncts that mention
+  that name unproved.
+- **A `return` in the body is pruned.** The paths through it leave the
+  function, so they owe no re-establishment, and initiation and preservation
+  are still proved. Only the post-loop fact `p AND (not c)` is withheld from
+  the code after the loop, because the condition may still hold where the
+  body returned.
 - a variable the loop depends on that is **borrowed** anywhere in the function
   (`(& x)`, `&mut x` -- a callee can write through it), or **assigned inside a
   lambda or an effect-handler clause** (a call can then change it with no

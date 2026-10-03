@@ -4407,8 +4407,15 @@ typedef struct LiWalk {
     bool         shadowed;
 } LiWalk;
 
-static bool li_proven(const LoopInvSite *s) {
+/* `p` holds at the top of every iteration: initiation and preservation. */
+static bool li_inductive(const LoopInvSite *s) {
     return s && s->analyzed && s->entry_proven && s->pres_proven;
+}
+
+/* ...and `p AND (not c)` holds after the loop, which also needs every exit to
+ * be the condition going false. */
+static bool li_proven(const LoopInvSite *s) {
+    return li_inductive(s) && !s->early_return;
 }
 
 /* The latest site recorded for `f`, following a macro call to its expansion
@@ -4746,9 +4753,10 @@ static bool li_walk(LiWalk *W, const Form *node, uint32_t depth) {
         uint32_t bs = (len > 3 && it[2]->tag == F_KEYWORD &&
                        it[2]->as.sym == e->kw_invariant) ? 4 : 2;
         if (s) W->touched = true;
-        /* Any number of iterations may already have run. */
+        /* Any number of iterations may already have run.  Inside the loop
+         * only the inductive half is needed: how the loop exits is moot. */
         li_havoc(W, node);
-        bool pv = li_proven(s);
+        bool pv = li_inductive(s);
         if (pv) li_admit(W, s->inv, NULL, NULL);
         if (k < bs) return li_walk(W, it[k], depth + 1);
         if (!rt_form_mentions_set(e, it[1], 0)) li_admit(W, it[1], NULL, NULL);
@@ -4893,12 +4901,20 @@ static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn
 
 /* A head that leaves the loop by a path other than the condition going false,
  * or re-enters it from a captured continuation.  `panic` is absent on
- * purpose: it diverges rather than exits. */
-static const char *li_early_exit(Elab *e, const Form *f, uint32_t depth) {
+ * purpose: it diverges rather than exits.
+ *
+ * `return` is the one exit the analysis models: it leaves the whole function,
+ * so the body composer can prune the paths through it (li_compose) and keep
+ * initiation and preservation.  LI_EXIT_ANY finds every exit, LI_EXIT_OTHER
+ * every exit but `return` (whose operands are still searched), and
+ * LI_EXIT_RETURN only `return`. */
+typedef enum { LI_EXIT_ANY, LI_EXIT_OTHER, LI_EXIT_RETURN } LiExitMode;
+
+static const char *li_early_exit(Elab *e, const Form *f, uint32_t depth, LiExitMode mode) {
     if (!f || depth >= RT_SET_SCAN_MAX_DEPTH) return f ? "<too deep>" : NULL;
     if (f->tag != F_LIST && f->tag != F_VEC) return NULL;
     const Form *mx = rt_macro_expansion(e, f);
-    if (mx) return li_early_exit(e, mx, depth);
+    if (mx) return li_early_exit(e, mx, depth, mode);
     if (f->tag == F_LIST && f->as.list.len > 0) {
         static const char *const EXITS[] = {
             "return", "?", "call/cc", "call/cc*", "escape", "shift", "shift0",
@@ -4906,16 +4922,24 @@ static const char *li_early_exit(Elab *e, const Form *f, uint32_t depth) {
         };
         const Form *h = f->as.list.items[0];
         if (h->tag == F_SYM && h->as.sym)
-            for (size_t i = 0; i < sizeof(EXITS) / sizeof(EXITS[0]); i++)
-                if (strcmp(h->as.sym->name, EXITS[i]) == 0) return EXITS[i];
+            for (size_t i = 0; i < sizeof(EXITS) / sizeof(EXITS[0]); i++) {
+                if (strcmp(h->as.sym->name, EXITS[i]) != 0) continue;
+                bool is_return = i == 0;
+                if (mode == LI_EXIT_ANY || (mode == LI_EXIT_OTHER) != is_return)
+                    return EXITS[i];
+            }
         /* A lambda's `return` leaves the lambda, not this loop. */
         if (rt_head_is(f, "fn") || rt_head_is(f, "lambda")) return NULL;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++) {
-        const char *r = li_early_exit(e, f->as.list.items[i], depth + 1);
+        const char *r = li_early_exit(e, f->as.list.items[i], depth + 1, mode);
         if (r) return r;
     }
     return NULL;
+}
+
+static bool li_mentions_return(Elab *e, const Form *f) {
+    return li_early_exit(e, f, 0, LI_EXIT_RETURN) != NULL;
 }
 
 /* ---- the body composer ------------------------------------------------- */
@@ -4946,6 +4970,11 @@ typedef struct LiComp {
     uint32_t           n_inner;
     const char        *why;                   /* decline reason, or NULL */
     char               whybuf[192];
+    /* The image of a name a nested loop assigned: its value after the loop is
+     * unknown, so a later READ of it declines (li_subst).  A sentinel rather
+     * than a fresh symbol, because an unconstrained symbol would be given the
+     * Int sort whatever the local's type. */
+    const Form        *havoc;
 } LiComp;
 
 static const Form *li_decline(LiComp *C, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
@@ -4986,6 +5015,9 @@ static const Form *li_subst(LiComp *C, const LiPath *P, const Form *f, uint32_t 
     if (depth > 64) return li_decline(C, "an assigned expression is nested too deeply%s", "");
     if (f->tag == F_SYM && f->as.sym) {
         const Form *im = li_image(P, f->as.sym->name);
+        if (im && im == C->havoc)
+            return li_decline(C, "'%s' is assigned by a nested loop and read "
+                                 "after it", f->as.sym->name);
         return im ? im : f;
     }
     if (f->tag != F_LIST && f->tag != F_VEC) return f;
@@ -5066,6 +5098,71 @@ static bool li_path_assume(LiComp *C, LiPath *P, const Form *c) {
     return true;
 }
 
+/* Is `nm` bound by a `let` somewhere inside `f`?  Lambdas are not entered:
+ * a name bound there cannot be assigned by the code around it. */
+static bool li_binds_name(Elab *e, const Form *f, const char *nm, uint32_t depth) {
+    if (!f || depth >= RT_SET_SCAN_MAX_DEPTH) return false;
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    const Form *mx = rt_macro_expansion(e, f);
+    if (mx) return li_binds_name(e, mx, nm, depth);
+    if (rt_head_is(f, "fn") || rt_head_is(f, "lambda")) return false;
+    if (rt_head_is(f, "let") && f->as.list.len >= 2) {
+        LiBind b[LI_MAX_BINDS];
+        uint32_t nb = 0;
+        if (li_parse_bvec(f->as.list.items[1], b, LI_MAX_BINDS, &nb))
+            for (uint32_t j = 0; j < nb; j++)
+                if (b[j].name->tag == F_SYM && b[j].name->as.sym &&
+                    strcmp(b[j].name->as.sym->name, nm) == 0)
+                    return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (li_binds_name(e, f->as.list.items[i], nm, depth + 1)) return true;
+    return false;
+}
+
+/* A loop nested in the body.  It runs an unknown number of times, so nothing
+ * it assigns has a known value after it -- but that only matters to code that
+ * READS one of those names afterwards.  So rather than declining the outer
+ * loop, every name it assigns is havocked on every path: a later statement or
+ * the invariant reading one declines then, naming it (li_subst), while the
+ * common shape -- an inner counter nobody reads again -- costs nothing.
+ *
+ * A name it assigns must be an outer local or one a body `let` bound (havocked;
+ * when a `let` inside the nested loop shadows one of those, the havoc covers
+ * the outer one too, which only loses facts), or bound by a `let` inside the
+ * nested loop itself (out of scope after it: nothing to do).  Anything else is
+ * declined, as an outer `set!` of it would be.  A nested loop that can
+ * `return`, or that mutates a cell or writes through a place, is declined. */
+static bool li_compose_nested_loop(LiComp *C, const Form *st, LiPaths *ps, bool ret) {
+    Elab *e = C->e;
+    if (ret) {
+        li_decline(C, "a nested loop in the body can `return`%s", "");
+        return false;
+    }
+    if (rt_form_mentions_name(e, st, "swap!", 0) || rt_form_mentions_name(e, st, "reset!", 0)) {
+        li_decline(C, "a nested loop in the body mutates a cell%s", "");
+        return false;
+    }
+    const char *tg[RT_WF3_MAX_TARGETS];
+    uint32_t nt = 0;
+    if (!rt_collect_set_targets(e, st, 0, tg, &nt)) {
+        li_decline(C, "a nested loop in the body assigns in a way this analysis "
+                      "cannot attribute%s", "");
+        return false;
+    }
+    for (uint32_t k = 0; k < nt; k++) {
+        bool outer = li_is_site_local(C, tg[k]) || li_name_in(tg[k], C->inner, C->n_inner);
+        if (!outer) {
+            if (li_binds_name(e, st, tg[k], 0)) continue;
+            li_decline(C, "a nested loop assigns '%s', which is not a local variable", tg[k]);
+            return false;
+        }
+        for (uint32_t i = 0; i < ps->n; i++)
+            if (!li_set_image(C, ps->p[i], tg[k], C->havoc)) return false;
+    }
+    return true;
+}
+
 static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
     Elab *e = C->e;
     if (!st || C->why) return !C->why;
@@ -5073,11 +5170,25 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
     const Form *mx = rt_macro_expansion(e, st);
     if (mx) return li_compose(C, mx, ps, depth + 1);
     /* No assignment anywhere in it: whatever it does, it cannot rebind a
-     * local (by-value; borrows and lambda cells are declined up front). */
-    if (!rt_form_mentions_set(e, st, 0)) return true;
+     * local (by-value; borrows and lambda cells are declined up front).  A
+     * `return` in it must still be seen -- the paths through it end there. */
+    bool ret = li_mentions_return(e, st);
+    if (!ret && !rt_form_mentions_set(e, st, 0)) return true;
     if (st->tag != F_LIST || st->as.list.len == 0) {
         li_decline(C, "an assignment operator is used as a value in the loop body%s", "");
         return false;
+    }
+    if (rt_head_is(st, "return")) {
+        for (uint32_t i = 1; i < st->as.list.len; i++)
+            if (rt_form_mentions_set(e, st->as.list.items[i], 0) ||
+                li_mentions_return(e, st->as.list.items[i])) {
+                li_decline(C, "the value the loop body returns assigns%s", "");
+                return false;
+            }
+        /* Every path that reaches here leaves the function: it never gets to
+         * the end of the body, so it owes no re-establishment. */
+        ps->n = 0;
+        return true;
     }
     if (rt_head_is(st, "set!") && st->as.list.len == 3) {
         const Form *t   = st->as.list.items[1];
@@ -5089,6 +5200,10 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         const char *tn = t->as.sym->name;
         if (rt_form_mentions_set(e, rhs, 0)) {
             li_decline(C, "the value assigned to '%s' itself assigns", tn);
+            return false;
+        }
+        if (li_mentions_return(e, rhs)) {
+            li_decline(C, "the value assigned to '%s' can `return`", tn);
             return false;
         }
         if (!li_is_site_local(C, tn) && !li_name_in(tn, C->inner, C->n_inner)) {
@@ -5132,6 +5247,10 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
                 li_decline(C, "the initializer of '%s' assigns", bn);
                 return false;
             }
+            if (li_mentions_return(e, b[j].init)) {
+                li_decline(C, "the initializer of '%s' can `return`", bn);
+                return false;
+            }
             if (li_is_site_local(C, bn) || li_name_in(bn, C->inner, C->n_inner)) {
                 li_decline(C, "the loop body's `let` rebinds '%s'", bn);
                 return false;
@@ -5158,6 +5277,10 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         const Form *c2 = st->as.list.items[1];
         if (rt_form_mentions_set(e, c2, 0)) {
             li_decline(C, "a branch condition in the loop body assigns%s", "");
+            return false;
+        }
+        if (li_mentions_return(e, c2)) {
+            li_decline(C, "a branch condition in the loop body can `return`%s", "");
             return false;
         }
         if (ps->n * 2 > LI_MAX_PATHS) {
@@ -5188,14 +5311,16 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         for (uint32_t i = 0; i < ep.n; i++) ps->p[ps->n++] = ep.p[i];
         return true;
     }
-    if (rt_head_is(st, "while")) {
-        li_decline(C, "the loop body contains a nested loop that assigns%s", "");
-        return false;
-    }
-    li_decline(C, "the loop body assigns in a position this analysis does not "
-                  "model (inside `%s`)",
-               (st->as.list.items[0]->tag == F_SYM && st->as.list.items[0]->as.sym)
-                   ? st->as.list.items[0]->as.sym->name : "a call");
+    if (rt_head_is(st, "while"))
+        return li_compose_nested_loop(C, st, ps, ret);
+    const char *in = (st->as.list.items[0]->tag == F_SYM && st->as.list.items[0]->as.sym)
+                   ? st->as.list.items[0]->as.sym->name : "a call";
+    if (ret && !rt_form_mentions_set(e, st, 0))
+        li_decline(C, "the loop can leave early through `return` in a position "
+                      "this analysis does not model (inside `%s`)", in);
+    else
+        li_decline(C, "the loop body assigns in a position this analysis does not "
+                      "model (inside `%s`)", in);
     return false;
 }
 
@@ -5429,12 +5554,18 @@ static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     const char *A[RT_WF3_MAX_TARGETS];
     uint32_t nA = 0;
     if (!why) {
-        const char *x = li_early_exit(e, loop_do, 0);
+        const char *x = li_early_exit(e, loop_do, 0, LI_EXIT_OTHER);
         if (x) {
             snprintf(whybuf, sizeof(whybuf), "the loop can leave early through `%s`", x);
             why = whybuf;
         }
     }
+    /* A `return` leaves the function, so initiation and preservation still
+     * stand (li_compose prunes the paths through it); only the post-loop fact
+     * is lost, since the condition may still hold where the body returned. */
+    s->early_return = !why && li_mentions_return(e, loop_do);
+    if (s->early_return && li_mentions_return(e, s->cond))
+        why = "the loop condition can `return`";
     if (!why && rt_form_mentions_set(e, s->cond, 0))
         why = "the loop condition assigns";
     if (!why) {
@@ -5451,6 +5582,7 @@ static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     memset(&C, 0, sizeof(C));
     C.e = e;
     C.site = s;
+    C.havoc = form_sym(e->arena, wf->span, symtab_intern(e->st, strslice("~nested-loop~", 13)));
     LiPaths ps;
     ps.n = 1;
     ps.p[0] = (LiPath *)arena_alloc(e->arena, sizeof(LiPath));
@@ -5568,6 +5700,7 @@ static bool li_reuse_prior(Elab *e, uint32_t i) {
     if (!prior) return false;
     s->entry_proven = prior->entry_proven;
     s->pres_proven  = prior->pres_proven;
+    s->early_return = prior->early_return;
     s->assigned     = prior->assigned;
     s->n_assigned   = prior->n_assigned;
     if (!rt_pred_is_impure(e, s->inv)) {

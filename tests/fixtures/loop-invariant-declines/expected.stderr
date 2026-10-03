@@ -1,5 +1,6 @@
 the invariant of the while loop in 'field-write' is not analysed statically: the loop body assigns through a place expression; both runtime checks kept
-the invariant of the while loop in 'early' is not analysed statically: the loop can leave early through `return`; both runtime checks kept
+the invariant of the while loop in 'early' is not analysed statically: a nested loop in the body can `return`; both runtime checks kept
+the invariant of the while loop in 'nested-read' is not analysed statically: 'j' is assigned by a nested loop and read after it; both runtime checks kept
 the invariant of the while loop in 'borrowed' is not analysed statically: the loop borrows 'acc'
 the invariant of the while loop in 'via-lambda' is not analysed statically: 'i' is borrowed, or assigned inside a lambda or handler clause
 the invariant of the while loop in 'via-handler' is not analysed statically: 'acc' is borrowed, or assigned inside a lambda or handler clause

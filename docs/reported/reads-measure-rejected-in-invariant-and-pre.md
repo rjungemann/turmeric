@@ -107,5 +107,6 @@ stopgap.
 The bounded-index walk can now be **written** against a real container and is
 runtime-checked. Before this fix, `loop-invariants-plan` and
 `ecs-refinement-typed-apis-plan` could not express it at all. Proving it is the
-remaining gap, alongside
-[loop-invariant-declines-more-than-soundness-requires](loop-invariant-declines-more-than-soundness-requires.md).
+remaining gap. The companion completeness report,
+[loop-invariant-declines-more-than-soundness-requires](../archive/loop-invariant-declines-more-than-soundness-requires.md),
+was resolved the same day.

@@ -441,7 +441,9 @@ bet and elaboration confirmed it.
   decision 3. Macros that expand to `while` compose for free.
 - **Preservation through arbitrary body control flow** (branching bodies,
   nested loops). Declined conservatively in the first cut; the
-  branching-`let` split is the template if demand appears.
+  branching-`let` split is the template if demand appears. (Since landed for
+  branching bodies, nested loops -- havocked -- and an early `return` -- its
+  paths pruned; see "Left open".)
 
 ---
 
@@ -593,14 +595,16 @@ harness's documented report-only class.
 
 - Graduation, on the experiment lifecycle (the row's `expires_at` forces the
   review, not the date it happens).
-- A nested loop that assigns still declines the outer loop; a `when` guarding
-  an early `return` still declines the whole loop. Both measured and filed
-  2026-10-02 as
-  [loop-invariant-declines-more-than-soundness-requires](../reported/loop-invariant-declines-more-than-soundness-requires.md),
-  which shows each decline is broader than its own reason (an inner-local
-  counter cannot affect the outer invariant; initiation and preservation do
-  not depend on how the loop exits) and that the nested-loop decline path has
-  no fixture.
+- ~~A nested loop that assigns still declines the outer loop; a `when` guarding
+  an early `return` still declines the whole loop.~~ **Resolved 2026-10-03**
+  ([archived report](../archive/loop-invariant-declines-more-than-soundness-requires.md)).
+  A nested loop's assigned names are havocked on every path, so the outer loop
+  declines only if one of them is read after it. A `return`'s paths are pruned
+  from the body composition, so initiation and preservation are still proved,
+  and only the post-loop fact is withheld (`LoopInvSite.early_return`).
+  Pinned by `loop-invariant-nested-and-early-return`,
+  `errors/loop-invariant-early-return-refuted`, and the two new cases in
+  `loop-invariant-declines`.
 - ~~A loop outside a `defn` -- in a `definstance` method or a top-level lambda --
   is registered and given both runtime checks but never analysed, and says
   nothing at any strictness level.~~ **Resolved 2026-10-03**

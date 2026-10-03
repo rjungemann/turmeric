@@ -16,11 +16,29 @@
       (set! i (+ i 1)))
     i))
 
-;; An early exit: `(not c)` does not hold on the `return` path.
+;; An early exit the body composer cannot place: a `return` inside a nested
+;; loop.  (A `return` in the body itself is analysed -- its paths are pruned --
+;; see loop-invariant-nested-and-early-return.)
 (defn early [n : int] : int
   (let [^mut i 0]
     (while (< i n) :invariant (>= i 0)
-      (when (> i 100) (return -1))
+      (let [^mut j 0]
+        (while (< j 2)
+          (when (> i 100) (return -1))
+          (set! j (+ j 1))))
+      (set! i (+ i 1)))
+    i))
+
+;; A nested loop's counter READ after it: its value there is unknown.  (One
+;; nobody reads again is no obstacle -- loop-invariant-nested-and-early-return.)
+(defn nested-read [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+      (let [^mut j 0]
+        (while (< j 2)
+          (set! j (+ j 1)))
+        (set! acc (+ acc j)))
       (set! i (+ i 1)))
     i))
 
@@ -65,6 +83,7 @@
 (defn main [] : int
   (println (field-write 3))
   (println (early 3))
+  (println (nested-read 3))
   (println (borrowed 3))
   (println (via-lambda 3))
   (println (via-handler 3))

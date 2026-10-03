@@ -1111,6 +1111,11 @@ typedef struct LoopInvSite {
     bool                analyzed;
     bool                entry_proven;
     bool                pres_proven;
+    /* The body can leave through `return`.  Initiation and preservation do
+     * not depend on how the loop exits, so they are still decided (the paths
+     * through a `return` are pruned); only the post-loop fact `p AND (not c)`
+     * is withheld from what follows the loop. */
+    bool                early_return;
     const char        **assigned;     /* names the loop assigns (valid when proven) */
     uint32_t            n_assigned;
 } LoopInvSite;
