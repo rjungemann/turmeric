@@ -53,10 +53,37 @@ This is the same shape as the archived
 (the JIT's `g_gen_lock`, fixed with `pthread_atfork` in `src/jit_engine.c`).
 That fix is in place and holds. This lock is ASan's, which `tur` cannot take.
 
+## Direction 1 implemented 2026-10-03 -- OPEN until CI confirms
+
+The host now tells the program: `src/jit_engine.c`'s `JIT_PRELUDE` carries
+`#define TUR_JIT_HOST_ASAN 1` when, and only when, `tur` itself was built with
+ASan (`__SANITIZE_ADDRESS__`, or `__has_feature(address_sanitizer)` on clang),
+and `life-forks` returns 0 without forking under it. The skip is narrower than
+the pre-`g_gen_lock` one it replaces: that was on `TUR_JIT_ENGINE` and so
+covered every JIT run, where this leaves the Release JIT and the compiled path
+still exercising the real fork path. No product coverage is lost -- the
+scenario the skip removes is a sanitizer artifact, not a property `tur` claims.
+
+**Not verified here, and that is why this stays open.** The deadlock is a
+Linux/GCC-libsanitizer phenomenon and reproducing it needs a
+`-DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON` build plus the ~1-in-3 flake; neither
+is available on this host. What *was* verified: the conditional define appears
+in the prelude string under `-fsanitize=address` and is absent without it (a
+standalone compile of the same `#if`/`#elif`/`__has_feature` structure, both
+arms), and `life-forks`'s body compiles warning-clean on both arms of the new
+`#ifdef` with the skip arm returning 0 without forking.
+
+**Closure condition.** `JIT engine (ubuntu-latest)` failed 55 of 306 commits
+(18%) before this. At that rate the chance of 15 consecutive clean commits by
+luck is 0.82^15, about 5%, so **~15 consecutive green Linux JIT legs** is the
+evidence that the skip worked. Until then this is a fix in flight, not a fixed
+bug, and the leg's `continue-on-error` should stay as it is -- flipping it on
+an unconfirmed fix is how an unverified change becomes everyone's problem.
+
 ## Fix directions
 
 - **In the fixture:** skip the fork check when the program runs on a sanitizer
-  allocator. That means under `TUR_JIT_ENGINE` in a `__SANITIZE_ADDRESS__` /
+  allocator. **(Implemented -- see above.)** That means under `TUR_JIT_ENGINE` in a `__SANITIZE_ADDRESS__` /
   `__has_feature(address_sanitizer)` host. It was skipped under
   `TUR_JIT_ENGINE` before the `g_gen_lock` fix, so this narrows that skip
   rather than restoring it. The inline-C body sees the program's macros, not
