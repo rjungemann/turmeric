@@ -10007,6 +10007,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                 }
+                bool thunk_is_clone = thunk_name != NULL;
                 if (!thunk_name) thunk_name = raw_name_for_binding(thunk_binding);
                 if (!thunk_name) { fprintf(stderr, "tur: oom\n"); abort(); }
 
@@ -10046,7 +10047,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 
                 /* Rest of the args */
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    /* arrow-instance-closure-erased-to-words (direct call of a
+                     * generic's returned closure): the arguments were
+                     * elaborated against the producing lambda's OWN parameter
+                     * types -- `(fn [x : A] : C ...)` -- so a float argument
+                     * arrives wrapped in a reinterpret to the carrier `A`.  When
+                     * the thunk resolved above is a spec CLONE whose recorded
+                     * slot is the reinterpret's source type (`double`), that
+                     * bit pattern was then value-converted into the double
+                     * slot: `((compose f g) 7.1)` printed 9.23936e+18.  Pass the
+                     * unconverted value the clone declares. */
+                    const Expr *arg_x = e->as.call_.args[i];
+                    if (thunk_is_clone && arg_x && arg_x->kind == EX_REINTERPRET &&
+                        arg_x->as.reinterpret_.expr) {
+                        const char *pct = emit_sig_lookup_param_ctype(thunk_name, i + 1);
+                        Type src_t = type_simple(arg_x->as.reinterpret_.source_kind, CK_COPY);
+                        if (pct && strcmp(pct, type_c_name(src_t)) == 0 &&
+                            strcmp(pct, "int64_t") != 0)
+                            arg_x = arg_x->as.reinterpret_.expr;
+                    }
+                    char *raw = emit_value(ctx, body, (Expr *)arg_x);
                     /* CC2 (curried-call-cast-rough-edges-plan): a let-bound
                      * closure thunk has C parameter slots typed by the thunk's
                      * declared kinds.  When the formal is int64_t (TY_INT or

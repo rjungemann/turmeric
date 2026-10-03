@@ -1,10 +1,64 @@
 # The `Arrow [(->)]` instance builds its closure at erased words
 
-**Narrowed 2026-10-02: a direct `.>>>` / `.<<<` at concrete types is fixed
-(fix direction 2), and the corpus has no `known.fnsan` left.  Still open: the
-same call inside an `[^Arrow A]` generic (a SIGSEGV on `main` for float
-arrows, not register luck), and `((>>> f g) 7.1)` through the bare generic
-defn.**
+**Narrowed 2026-10-03: the wrong answer and the SIGSEGV are fixed; what is
+left is a `-fsanitize=function` trap (UB, right answer by register luck)
+for a non-`int` arrow through an `[^Arrow A]` generic.**  Narrowed
+2026-10-02 before that: a direct `.>>>` / `.<<<` at concrete types is fixed
+(fix direction 2), and the corpus has no `known.fnsan` left.
+
+## What was fixed (2026-10-03)
+
+- **`((>>> f g) 7.1)` through the bare generic defn** (old open item 2) no
+  longer prints `-9223372036854775808`.  Two halves:
+  - `stdlib/arrow.tur`'s `>>>` returned `ptr<void>`, so a direct call was
+    typed off the producing lambda's carrier.  It returns `(fn [A] #fx{} C)`
+    now (three snapshots moved: the binding holding it is the fn carrier,
+    not `void *`).
+  - Even fn-typed, the argument crossed wrong: the invoke targets the float
+    spec clone `__fn_N__spec__double_void___double`, but `7.1` had been
+    reinterpreted to the generic lambda's carrier `A`, and C VALUE-converted
+    those bits into the double slot (`9.23936e+18` for any generic
+    closure-returning defn, not only `>>>`).  The direct-thunk call site
+    (`emit_expr.c`, `thunk_is_clone`) drops a reinterpret whose source type
+    is the clone's recorded slot type.
+- **The SIGSEGV through `pipe`** (old open item 1's crash) was not the
+  erased instance at all: the `TY_TYVAR`-parameter escape shim
+  (`elab_call.c`, `captureless-closure-lost-through-untyped-vec`) boxed an
+  already-fat `^fat` binding a second time, and slot 0's
+  `__tur_fatshim_double_double` called the inner box's address as code.  It
+  crashed at every element type.  The shim now makes the same already-fat
+  test (`is_fat`, or a fat-normalized parameter) the `^fat`-sink branch
+  makes.
+
+Pinned by `tests/fixtures/arrow-generic-closure-direct-call` (passes the
+`fnsan` gate armed).
+
+## Still open
+
+1. **A non-`int` arrow through an `[^Arrow A]` generic.**  With the crash
+   gone, `(pipe f g)` over float arrows prints `16.7`, but `pipe__spec__...`
+   (A := `(fn [float] float)`) still calls the instance's erased base
+   `__inst_Arrow__gt_gt_gt_arrow`, so the closure it returns is an
+   `int64_t (*)(void *, int64_t)` read back as `double (*)(void *, double)`:
+   a trap under `-fsanitize=function` (float AND cstr -- a cstr arrow traps
+   at the caller's `const char *(*)(void *, const char *)`), right only by
+   register luck.  Int arrows are clean.  The receiver in `pipe`'s body is
+   the type variable `A`, so the elaborator's ground-binding step has
+   nothing to bind `b c d` from, and the emitter's per-spec scan returns
+   early on it: `Arrow`'s class variable is higher-kinded, so
+   `emit_abi_register_call`'s MB2.5 carve-out ("an HKT method dispatched in
+   a body constrained by its class is not monomorphized") fires before any
+   instance spec is minted.  The fix is the per-spec analogue of the
+   elaborator's `(->)` binding step: inside a spec, match the class method's
+   spelled arrows `(a b c)` against the spec-resolved argument types, mint
+   the instance spec, and route the call to it ahead of
+   `emit_reresolve_method_call` (which returns the base).
+2. **`first` / `second` / `arr`** were left untyped in the class: `arr` is
+   the identity, and `first`/`second` route through the heap-pair helpers
+   (`__ac_pair_first`), whose pairs hold words.  Not probed under the trap
+   flags.
+
+---
 
 ## What was fixed (2026-10-02)
 
@@ -41,40 +95,6 @@ now takes `tur_poly_fn_t`s, plus renumbering).  Pinned by
 `tests/fixtures/arrow-instance-typed-compose`: `.>>>`/`.<<<` over float
 arrows, a cstr -> cstr -> float composition beside it, int arrows, and both
 called straight off the dispatch with no annotation.
-
-## Still open
-
-1. **Inside an `[^Arrow A]` generic.**
-
-   ```turmeric
-   (load "stdlib/arrow.tur")
-   (defn pipe [^Arrow A] [f : A g : A] : A (.>>> f g))
-   (defn main [] : int
-     (let [^fat f : (fn [float] #fx{} float) (fn [x : float] : float (+ x 1.25))
-           ^fat g : (fn [float] #fx{} float) (fn [x : float] : float (* x 2.0))
-           ^fat h : (fn [float] #fx{} float) (pipe f g)]
-       (println (h 7.1)))
-     0)
-   ```
-
-   `tur run`: SIGSEGV (exit 139), before and after this change.  The
-   receiver in `pipe`'s body is the type variable `A`, so the dispatch has
-   nothing to ground `b c d` from, and `pipe__spec__...` (A := `(fn [float]
-   float)`) still calls the instance's erased base.  Int arrows through the
-   same generic answer correctly.  The fix is to re-derive the instance
-   call's bindings per monomorph -- the emitter already re-resolves element
-   dispatch inside a spec for constrained instances
-   (`emit_find_dispatch_spec_closure`); this needs the analogue keyed on the
-   class method's signature against the spec's resolved argument types.
-2. **`((>>> f g) 7.1)` through the bare generic defn** (unchanged, described
-   under "Found alongside, still open" below): prints
-   `-9223372036854775808`.  The `.>>>` spelling is fixed; the bare call
-   resolves to the free `>>>` defn, whose `ptr<void>` result is typed from
-   the generic lambda.
-3. **`first` / `second` / `arr`** were left untyped in the class: `arr` is
-   the identity, and `first`/`second` route through the heap-pair helpers
-   (`__ac_pair_first`), whose pairs hold words.  Not probed under the trap
-   flags in this change.
 
 ---
 
@@ -163,7 +183,10 @@ because the producer is erased.
   generic lambda's types (`(h 7.1)` printed -9223372036854775808).  Pinned by
   `tests/fixtures/fat-let-of-thin-fn`.
 
-## Found alongside, still open
+## Found alongside -- fixed 2026-10-03
+
+(Kept for the record: this is old open item 2, fixed above.)
+
 
 - Calling the result of a generic closure-returning call directly, with no
   annotation: `((>>> f g) 7.1)` with float lambdas prints

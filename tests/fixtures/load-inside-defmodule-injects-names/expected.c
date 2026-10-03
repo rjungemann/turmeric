@@ -10620,7 +10620,7 @@ int main(int argc, char **argv) {
             void *__t267 = __t265;
             void * __ps_268 = (_____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t264), (int64_t)(intptr_t)(__t267)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            void * h_303 = __ps_268;
+            int64_t h_303 = (int64_t)(intptr_t)(__ps_268);
             (void)h_303;
             double __ps_269 = (prog__call_hyf((int64_t)(intptr_t)(h_303), 3.0));
             /* panic-return-signal: ret ctype unknown; no propagation here */
