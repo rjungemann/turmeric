@@ -596,7 +596,12 @@ int fn_type_structurally_compatible(Type actual, Type expected) {
     /* Arity first: a nullary fn has no arg_kinds array at all, so testing that
      * array before the arity would let `(fn [] int)` satisfy `(fn [int] int)`. */
     if (actual.as.fn.arity != expected.as.fn.arity) return 0;
-    if (!actual.as.fn.arg_kinds || !expected.as.fn.arg_kinds) return 1;
+    /* A nullary fn has no arg_kinds array either, and that is not "nothing
+     * to compare": its result still is.  Returning early here let
+     * `(fn [] float)` satisfy `(fn [] int)` -- the result check below never
+     * ran for any nullary function. */
+    if (actual.as.fn.arity > 0 &&
+        (!actual.as.fn.arg_kinds || !expected.as.fn.arg_kinds)) return 1;
     for (uint32_t i = 0; i < actual.as.fn.arity; i++) {
         const Type *af = actual.as.fn.arg_full_types
             ? actual.as.fn.arg_full_types[i] : NULL;

@@ -443,6 +443,16 @@ closures (it reads slot 0 as the thunk) and is the one left that could be
 typed directly; its calling convention (`thunk(closure, 0)`) wants reading
 before choosing the signature.
 
+> **2026-10-03: `with-cancel-guard` typed.**  Read, its convention was
+> wrong as well as loose: each zero-argument closure was called as
+> `int64_t (*)(void *, int64_t)` with a stray `0`, while a `(fn [] nil)`
+> thunk is `void (*)(void *)` -- a `-fsanitize=function` trap on every call.
+> Both parameters are `^fat (fn [] nil)` now and slot 0 is called at exactly
+> that type (`tests/fixtures/cancel-guard-typed-closures`, clean armed).  A
+> word-returning body is still accepted into the `nil` slot -- a general
+> checker gap, filed as
+> [word-result-fn-into-nil-slot](word-result-fn-into-nil-slot.md).
+
 **S3, `either.tur` -- attempted, NOT landed, and why.**  Making the module
 generic in the `option.tur` / `result.tur` idiom (`left? [L R] [e : (Either
 L R)]`, `from-right [L R] [dflt : R e : (Either L R)] : R`, `either [L R C]`,
