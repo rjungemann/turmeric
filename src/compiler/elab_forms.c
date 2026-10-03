@@ -4963,6 +4963,9 @@ Expr *elab_return(Elab *e, const Form *call) {
         /* byvalue-recursive-shared-copies-leak: a result is owned by the
          * caller, so a shared view returned here is cloned. */
         value = elab_own_byval_copy(e, value, NULL);
+        /* The enclosing function's `:post` / refined return, which the
+         * whole-body wrap cannot see a `return` reach. */
+        value = rt_check_returned_value(e, value, call->span);
     }
     
     /* Create EX_RETURN expression */

@@ -2531,6 +2531,12 @@ compiler the only candidate. Bisected to the day: the spices CI re-pins turmeric
 | ~~[forward-call-to-generic-callee-typed-as-placeholder](../archive/forward-call-to-generic-callee-typed-as-placeholder.md)~~ | medium | **RESOLVED 2026-10-02** (archived): a caller above a GENERIC callee, or above a defn with a function-typed parameter, got a forward decl too lossy to call through -- TUR-E0709, "expected int, got float", invalid C for a lambda argument, and a SIGSEGV for a lambda handed to a later generic HOF.  Pass 2 now elaborates such a caller after its callee (fix direction 2); a `def`/`definstance` that names a waiting defn elaborates it first, and stdlib forms take no part.  Pinned by `tests/fixtures/forward-call-generic-callee` and `-in-module` |
 | ~~[mutually-recursive-generics-see-placeholder-result](../archive/mutually-recursive-generics-see-placeholder-result.md)~~ | low-medium | **RESOLVED 2026-10-02** (archived): a cycle of generics with an `(Option A)` result saw each other's forward decl and the call typed as the `int` placeholder ("then=(Option A) else=int").  A stuck cycle's members are now primed speculatively first -- `elab_defn`'s early signature update survives a rolled-back body -- so each sees the others' full signatures.  Pinned by the `ping-opt`/`pong-opt` cycle in `forward-call-generic-callee` and `-in-module` |
 
+## Found executing the open loop-invariant reports (filed 2026-10-03)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[early-return-bypasses-return-refinement](../archive/early-return-bypasses-return-refinement.md)~~ | high (soundness) | **RESOLVED 2026-10-03** (archived, found and fixed in one change): an early `return` left a function with a refined return or `:post` unchecked -- statically "proved" from the last body form alone (check elided), and at runtime the C `return` jumped past the whole-body wrap.  Now the obligation is reported unknown when the body can `return`, and `elab_return` wraps each returned value in the enclosing function's checks (`Elab.ret_contract`; lambdas and default methods clear it).  `?` was not audited |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

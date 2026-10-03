@@ -1082,7 +1082,27 @@ typedef struct Elab {
     struct LoopInvSite    *loop_inv_sites;
     uint32_t               n_loop_inv_sites;
     uint32_t               cap_loop_inv_sites;
+    /* The result checks of the function whose body is being elaborated, which
+     * elab_return applies to each `(return v)` -- an early return leaves
+     * before the whole-body wrap (rt_wrap_return_check) ever sees a value.
+     * NULL when there are none, when contracts are not emitted, and inside any
+     * nested function body (a lambda's `return` is the lambda's). */
+    const struct RetContract *ret_contract;
 } Elab;
+
+/* See Elab.ret_contract.  Each predicate is NULL when absent; they are applied
+ * in this order, the same order the whole-body wrap nests them. */
+typedef struct RetContract {
+    const struct Form *post;           /* `:post`, bound as `result` */
+    const struct Form *ret;            /* a refined return type */
+    const char        *ret_var;
+    const struct Form *class_ret;      /* an instance method: its class's promise */
+    const char        *class_ret_var;
+} RetContract;
+
+/* Wrap a returned value in the enclosing function's result checks (see
+ * Elab.ret_contract); `value` unchanged when there are none. */
+struct Expr *rt_check_returned_value(Elab *e, struct Expr *value, Span span);
 
 /* loop-invariants-plan: one `(while c :invariant p body...)`.
  *

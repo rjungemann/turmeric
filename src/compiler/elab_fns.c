@@ -513,6 +513,34 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     return let_e;
 }
 
+/* An early `(return v)` leaves before the whole-body wrap above sees a value,
+ * so `v` gets the same checks at the return itself (early-return-bypasses-
+ * return-refinement).  The predicate is elaborated afresh per site, in a scope
+ * of its own: the result binding must not leak into the code after the
+ * `return`, where it would shadow a user name spelled the same. */
+Expr *rt_check_returned_value(Elab *e, Expr *value, Span span) {
+    const RetContract *rc = e ? e->ret_contract : NULL;
+    if (!rc || !value) return value;
+    Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+    if (!check_fn) return value;
+    Scope s;
+    scope_init(&s, e->scope);
+    e->scope = &s;
+    if (rc->post)
+        value = rt_wrap_return_check(e, value, check_fn, rc->post, NULL,
+                                     "Postcondition failed", span);
+    if (rc->ret)
+        value = rt_wrap_return_check(e, value, check_fn, rc->ret, rc->ret_var,
+                                     "Return contract violated", span);
+    if (rc->class_ret)
+        value = rt_wrap_return_check(e, value, check_fn, rc->class_ret,
+                                     rc->class_ret_var,
+                                     "Class result contract violated", span);
+    e->scope = s.parent;
+    scope_free(&s);
+    return value;
+}
+
 /* True when contract checks are being emitted for this build.  `--no-contracts`
  * strips them, and a release build drops them unless --keep-contracts. */
 bool rt_contracts_emitted(void) {
@@ -10249,6 +10277,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
         memset(body_expected, 0, sizeof(Type));
         body_expected->kind = TY_ANY;
     }
+    /* early-return-bypasses-return-refinement: a `return` in this body gets
+     * the checks the whole-body wrap below gives the fall-through value. */
+    const RetContract *saved_ret_contract = e->ret_contract;
+    e->ret_contract = NULL;
+    if ((ct_post_form || ct_ret_pred) && rt_contracts_emitted()) {
+        RetContract *rc = (RetContract *)arena_alloc(e->arena, sizeof(RetContract));
+        memset(rc, 0, sizeof(*rc));
+        rc->post    = ct_post_form;
+        rc->ret     = ct_ret_pred;
+        rc->ret_var = ct_ret_var;
+        e->ret_contract = rc;
+    }
     if (body_expected) e->expected_type = body_expected;
     {
         /* Internal defines: splice (define name init) into nested let forms. */
@@ -10272,6 +10312,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                 e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
+                e->ret_contract = saved_ret_contract;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -10296,6 +10337,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                 e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
+                e->ret_contract = saved_ret_contract;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -10321,6 +10363,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                     e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
+                    e->ret_contract = saved_ret_contract;
                     e->scope = inner.parent;
                     scope_free(&inner);
                     return NULL;
@@ -10344,6 +10387,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    e->ret_contract = saved_ret_contract;
     /* nested-defn-accepted-outer-returns-zero: a body whose LAST form is a
      * definition leaves the function with no tail value, and codegen falls back
      * to `return 0;` -- it runs, exits 0, and returns the wrong answer with no
@@ -10858,21 +10902,39 @@ Expr *elab_defn(Elab *e, const Form *call) {
         li_analyze_loops(e, li_start, params, n_params, ct_param_preds,
                          ct_param_varnames, ct_param_param_idx, n_ct_param_preds,
                          ct_pre_form, rt_whole_body(e, call, body_start), rt_fn);
+        /* early-return-bypasses-return-refinement: an early `return` is a
+         * second exit.  Its value never reaches `rt_subject` (the LAST body
+         * form), and the per-path split reads a `do`'s earlier forms as
+         * statements, so a proof of the subject covers the fall-through path
+         * only -- `(when (> n 5) (return 0)) n` "proved" `(>= r n)` and lost its
+         * check.  Not attempted: the obligation is reported unknown and each
+         * `return` carries the runtime check itself (rt_check_returned_value). */
+        bool rt_early_ret = li_mentions_return(e, rt_whole_body(e, call, body_start));
         char rt_what[128];
-        if (ct_ret_pred) {
-            snprintf(rt_what, sizeof(rt_what), "the return value of '%s'", rt_fn);
-            rt_ret_proven = rt_return_obligation_proven(
-                e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
-                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
-                call->span);
-            rt_ret_guaranteed = rt_ret_proven || should_check;
-        }
-        if (ct_post_form) {
-            snprintf(rt_what, sizeof(rt_what), "the postcondition of '%s'", rt_fn);
-            rt_post_proven = rt_return_obligation_proven(
-                e, ct_post_form, "result", rt_subject, return_kind, rt_env,
-                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
-                call->span);
+        for (int ct_pass = 0; ct_pass < 2; ct_pass++) {
+            const Form *pf = ct_pass == 0 ? ct_ret_pred : ct_post_form;
+            if (!pf) continue;
+            snprintf(rt_what, sizeof(rt_what), ct_pass == 0 ? "the return value of '%s'"
+                                                            : "the postcondition of '%s'", rt_fn);
+            bool pv = false;
+            if (rt_early_ret)
+                diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING,
+                                    call->span, TUR_W0372_REFINE_UNKNOWN,
+                                    "refinement on %s could not be decided statically "
+                                    "(the body can leave early through `return`); "
+                                    "runtime check kept", rt_what);
+            else
+                pv = rt_return_obligation_proven(
+                    e, pf, ct_pass == 0 ? ct_ret_var : "result", rt_subject,
+                    return_kind, rt_env,
+                    arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
+                    call->span);
+            if (ct_pass == 0) {
+                rt_ret_proven = pv;
+                rt_ret_guaranteed = rt_ret_proven || should_check;
+            } else {
+                rt_post_proven = pv;
+            }
         }
         /* RT4: with no DECLARED return refinement, try to infer one from
          * the parameter refinements and the body.  Scope is deliberately
@@ -10881,7 +10943,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * need a path-sensitive join at the merge point, which is deferred.
          * Nothing is emitted for an inferred refinement -- it is extra
          * knowledge published to call sites, not a new runtime check. */
-        if (!ct_ret_pred && n_body == 1 && n_ct_param_preds > 0 &&
+        if (!ct_ret_pred && !rt_early_ret && n_body == 1 && n_ct_param_preds > 0 &&
             n_ct_param_preds <= 4 && rt_subject &&
             (return_kind == TY_INT || return_kind == TY_FLOAT ||
              return_kind == TY_FLOAT32 || return_kind == TY_FLOAT64)) {
@@ -12570,6 +12632,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
 
     e->fn_body_depth++;
+    /* A lambda's `return` leaves the lambda: the enclosing function's
+     * result checks do not apply to it. */
+    const RetContract *fn_saved_ret_contract = e->ret_contract;
+    e->ret_contract = NULL;
     if (fn_declared_unsafe) e->unsafe_depth++;
     /* Propagate the lambda's declared return type onto the expected-type
      * channel during body elaboration.  Mirrors what elab_defn already does
@@ -12592,6 +12658,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (!body) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
+                e->ret_contract = fn_saved_ret_contract;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
@@ -12603,6 +12670,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (!body) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
+                e->ret_contract = fn_saved_ret_contract;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
@@ -12616,6 +12684,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 if (!items[i]) {
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
+                    e->ret_contract = fn_saved_ret_contract;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
@@ -12631,6 +12700,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     e->expected_type = saved_fn_body_expected;
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
+    e->ret_contract = fn_saved_ret_contract;
     e->n_sig_tyvars = saved_n_sig_tyvars;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 

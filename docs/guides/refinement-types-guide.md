@@ -1226,6 +1226,13 @@ anyway.
   direct call to a `#reads` measure is not counted either: it only reads, so
   running it is not observable (see
   [stateful-refinements-guide](stateful-refinements-guide.md#codegen-and-enforcement)).
+- **[by design] A function that can `return` early is not proved.** Its
+  refined return and `:post` are reported unknown (`TUR-W0372`, "the body can
+  leave early through `return`") and checked at runtime on every exit, the
+  early `return`s included. Proving only the last body form would cover the
+  fall-through path and nothing else. Until 2026-10-03 that is exactly what
+  happened, and the early value went unchecked
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/early-return-bypasses-return-refinement.md)).
 - **[by design] Decisions are memoized within a compilation unit**, keyed by a fingerprint
   of the normalized VC under alpha-renaming, and every hit is confirmed by
   structural comparison before its verdict is reused. Repeating the same
