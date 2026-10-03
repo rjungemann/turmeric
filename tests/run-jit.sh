@@ -165,8 +165,26 @@ if command -v timeout >/dev/null 2>&1; then _tur_timeout_bin="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then _tur_timeout_bin="gtimeout"; fi
 _run_timed() {
     local secs="$1"; shift
-    if [ "$secs" -le 0 ] || [ -z "$_tur_timeout_bin" ]; then "$@"
-    else "$_tur_timeout_bin" "$secs" "$@"; fi
+    local _t0=$SECONDS _rc=0
+    if [ "$secs" -le 0 ] || [ -z "$_tur_timeout_bin" ]; then "$@" || _rc=$?
+    else "$_tur_timeout_bin" "$secs" "$@" || _rc=$?; fi
+    # Record elapsed-vs-budget for the summary's "closest to their timeout"
+    # block.  The point is to see a fixture CREEPING toward its own
+    # expected.timeout while it still passes, rather than finding out when a
+    # slow runner draw kills it: r7rs-tail-calls sat at ~32 s against a 60 s
+    # bound and died twice (docs/reported/macos-jit-leg-stall-unexplained.md)
+    # before anyone could see the margin was gone.
+    #
+    # `rkey` and `name` are run_jit_fixture's locals, reached by bash's
+    # dynamic scoping -- this function is only ever called from there and
+    # from the error pass, and `${rkey:-}` keeps it inert under `set -u`
+    # anywhere else.  SECONDS has 1 s granularity, which is the right size
+    # for budgets measured in tens of seconds.
+    if [ "$secs" -gt 0 ] && [ -n "${rkey:-}" ] && [ -n "${RESULTS_DIR:-}" ]; then
+        printf '%s %s %s\n' "$((SECONDS - _t0))" "$secs" "${name:-$rkey}" \
+            >> "$RESULTS_DIR/$rkey.time"
+    fi
+    return "$_rc"
 }
 
 export TUR_MTIME="$(_tur_mtime "$TUR")"
@@ -634,6 +652,21 @@ else
 fi
 if [ "$FALLBACK" -gt 0 ]; then
     echo "  (of which $FALLBACK passed via the cc fallback -- TUR-W0070)"
+fi
+
+# Fixtures closest to their own expected.timeout.  A per-fixture bound that a
+# slow runner draw can cross is invisible until it does, and this leg draws a
+# ~1.9x slower 3-core macos-latest ~97% of the time -- so "passed" is not the
+# same as "has margin".  Printed unconditionally and cheap: one awk pass over
+# files the run already wrote.
+if ls "$RESULTS_DIR"/*.time >/dev/null 2>&1; then
+    echo "  closest to their timeout budget (elapsed/budget, worst attempt):"
+    cat "$RESULTS_DIR"/*.time 2>/dev/null \
+      | awk '{ pct = ($2 > 0) ? (100 * $1 / $2) : 0
+               if (pct > best[$3]) { best[$3] = pct; el[$3] = $1; bud[$3] = $2 } }
+             END { for (n in best) printf "%6.0f%%  %9s  %s\n",
+                                         best[n], (el[n] "s/" bud[n] "s"), n }' \
+      | sort -rn | head -8 | sed 's/^/   /'
 fi
 
 # The fallback ratchet (see the header above RESULTS_DIR).  Only meaningful

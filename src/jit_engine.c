@@ -149,31 +149,34 @@ static int jit_getc (void *data) {
  * out of inline-C the emitter does not own, and shipping them would trade a
  * clean compile error for silent corruption under spawn.  Inline C that uses
  * them fails c2mir loudly and takes the step-6 fallback to cc instead. */
-/* jit-fork-child-inherits-asan-allocator-lock: a JIT'd program allocates
- * through THIS process's malloc, which on a sanitized host (the Debug build)
- * is ASan's allocator.  Its size-class locks are not fork-safe on every
- * toolchain (GCC 13's libsanitizer), so a child forked while another thread
- * is mid-malloc can inherit a held lock and hang on its first allocation --
- * or on its first lazily generated function, since MIR's generator allocates
- * too.  `tur` cannot take that lock, so it tells the program instead: inline
- * C that forks from a threaded program can test TUR_JIT_HOST_ASAN. */
-#if defined(__SANITIZE_ADDRESS__)
-#  define TUR_JIT_HOST_ASAN_DEFINE "#define TUR_JIT_HOST_ASAN 1\n"
-#elif defined(__has_feature)
-#  if __has_feature(address_sanitizer)
-#    define TUR_JIT_HOST_ASAN_DEFINE "#define TUR_JIT_HOST_ASAN 1\n"
-#  endif
-#endif
-#ifndef TUR_JIT_HOST_ASAN_DEFINE
-#  define TUR_JIT_HOST_ASAN_DEFINE ""
-#endif
-
 static const char JIT_PRELUDE[] =
   /* Tells runtime C it is being compiled by this engine: r7gc.c (the
    * r7rs-gc experiment) switches its collector off, since a JIT'd
    * program's globals are not in the data segment it scans. */
   "#define TUR_JIT_ENGINE 1\n"
-  TUR_JIT_HOST_ASAN_DEFINE
+  /* The HOST's sanitizer state, passed into the program because the program
+   * cannot see it: c2mir defines neither `__SANITIZE_ADDRESS__` nor
+   * `__has_feature`, so inline C compiled here has no way to tell that the
+   * process it is about to run in is on ASan's allocator.
+   *
+   * That distinction matters for fork().  A child forked while another thread
+   * holds ASan's allocator lock inherits it HELD, and deadlocks on its next
+   * malloc -- glibc's allocator is fork-safe, ASan's is not
+   * (docs/archive/jit-fork-child-inherits-asan-allocator-lock.md).  A
+   * fixture that forks and then allocates can only know to avoid that if we
+   * tell it, so this is the channel.
+   *
+   * Deliberately narrow: this says "the host is sanitized", NOT "skip hard
+   * things".  Only a program that forks and allocates should consult it; the
+   * Release JIT and the compiled path leave it undefined and keep testing
+   * the real fork path. */
+#if defined(__SANITIZE_ADDRESS__)
+  "#define TUR_JIT_HOST_ASAN 1\n"
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+  "#define TUR_JIT_HOST_ASAN 1\n"
+#  endif
+#endif
   /* MIR's Apple/aarch64 prelude spells `#define __arm64__` with NO
    * replacement list (c2mir/aarch64/mirc_aarch64_linux.h:135), where Apple
    * clang defines it as 1.  Every SDK `#if __arm64__` therefore expands to a

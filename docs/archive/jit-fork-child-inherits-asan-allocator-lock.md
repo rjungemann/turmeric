@@ -44,6 +44,16 @@ Found 2026-09-29 while validating the JIT prune
 it reproduces identically with `TUR_JIT_NO_PRUNE=1`, so it is not caused by
 that change.
 
+**Measured in CI, 2026-10-03.** This is the single largest contributor to
+`JIT engine (ubuntu-latest)`'s redness. That leg fails on 55 of 306 commits
+(18%) and 46 of those 55 runs report exactly one failing fixture; of the 18
+newest, 9 are this one and the other 9 are a since-fixed fixture. So the
+~1-in-3 local rate above shows up as ~18% of Linux commits, and because the
+leg is `continue-on-error` none of it is visible. That raises the value of the
+fixture-side skip below without changing this report's severity -- it is still
+a CI flake with no product impact. Details and method in
+[jit-linux-leg-failures-absorbed](../archive/jit-linux-leg-failures-absorbed.md).
+
 ## Repro
 
 ```sh
@@ -85,10 +95,37 @@ This is the same shape as the archived
 (the JIT's `g_gen_lock`, fixed with `pthread_atfork` in `src/jit_engine.c`).
 That fix is in place and holds. This lock is ASan's, which `tur` cannot take.
 
+## Direction 1 implemented 2026-10-03 -- OPEN until CI confirms
+
+The host now tells the program: `src/jit_engine.c`'s `JIT_PRELUDE` carries
+`#define TUR_JIT_HOST_ASAN 1` when, and only when, `tur` itself was built with
+ASan (`__SANITIZE_ADDRESS__`, or `__has_feature(address_sanitizer)` on clang),
+and `life-forks` returns 0 without forking under it. The skip is narrower than
+the pre-`g_gen_lock` one it replaces: that was on `TUR_JIT_ENGINE` and so
+covered every JIT run, where this leaves the Release JIT and the compiled path
+still exercising the real fork path. No product coverage is lost -- the
+scenario the skip removes is a sanitizer artifact, not a property `tur` claims.
+
+**Not verified here, and that is why this stays open.** The deadlock is a
+Linux/GCC-libsanitizer phenomenon and reproducing it needs a
+`-DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON` build plus the ~1-in-3 flake; neither
+is available on this host. What *was* verified: the conditional define appears
+in the prelude string under `-fsanitize=address` and is absent without it (a
+standalone compile of the same `#if`/`#elif`/`__has_feature` structure, both
+arms), and `life-forks`'s body compiles warning-clean on both arms of the new
+`#ifdef` with the skip arm returning 0 without forking.
+
+**Closure condition.** `JIT engine (ubuntu-latest)` failed 55 of 306 commits
+(18%) before this. At that rate the chance of 15 consecutive clean commits by
+luck is 0.82^15, about 5%, so **~15 consecutive green Linux JIT legs** is the
+evidence that the skip worked. Until then this is a fix in flight, not a fixed
+bug, and the leg's `continue-on-error` should stay as it is -- flipping it on
+an unconfirmed fix is how an unverified change becomes everyone's problem.
+
 ## Fix directions
 
 - **In the fixture:** skip the fork check when the program runs on a sanitizer
-  allocator. That means under `TUR_JIT_ENGINE` in a `__SANITIZE_ADDRESS__` /
+  allocator. **(Implemented -- see above.)** That means under `TUR_JIT_ENGINE` in a `__SANITIZE_ADDRESS__` /
   `__has_feature(address_sanitizer)` host. It was skipped under
   `TUR_JIT_ENGINE` before the `g_gen_lock` fix, so this narrows that skip
   rather than restoring it. The inline-C body sees the program's macros, not

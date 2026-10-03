@@ -67,13 +67,21 @@
     arg)
   (defn life-forks [n : int b : ptr<void> c : ptr<void>] : int
     ```c
-#if defined(TUR_JIT_HOST_ASAN)
-    /* jit-fork-child-inherits-asan-allocator-lock: under `tur jit` on a
-     * sanitized host the program allocates through ASan's allocator, whose
-     * size-class locks a child can inherit held from the burner -- a lock
-     * tur cannot take.  The check stands down there only; it still runs
-     * compiled, and under a non-sanitized `tur jit`. */
-    (void)n; (void)b; (void)c;
+#ifdef TUR_JIT_HOST_ASAN
+    /* The burner below holds ASan's allocator lock while these children
+     * fork, and a child that inherits it held deadlocks on its next malloc
+     * and dies of its own alarm(5) -- counted as a failure that is not one.
+     * ASan's allocator is not fork-safe; glibc's is, so the compiled path
+     * and a Release JIT still run the check below.
+     * docs/archive/jit-fork-child-inherits-asan-allocator-lock.md.
+     *
+     * Reported 55/306 of the ubuntu JIT leg's commits before this skip, all
+     * absorbed by that leg's continue-on-error
+     * (docs/archive/jit-linux-leg-failures-absorbed.md).
+     *
+     * Narrower than the skip this fixture carried before the g_gen_lock fix,
+     * which was on TUR_JIT_ENGINE and so covered every JIT run. */
+    (void)b; (void)c; (void)n;
     return 0;
 #else
     int fails = 0;
