@@ -1,10 +1,33 @@
+---
+title: The Arrow [(->)] instance builds its closure at erased words
+category: Archive
+description: The function-arrow instance's methods ran once at erased words, so composed float/cstr arrows were called through the wrong function type -- right by register luck, a -fsanitize=function trap -- and around them a direct call of a generic's returned closure printed garbage and a pipe over ^fat arrows SIGSEGV'd. Fixed across 2026-10-02/03: typed class signature, per-call and per-spec instance specialization, and three seam fixes.
+---
+
 # The `Arrow [(->)]` instance builds its closure at erased words
 
-**Narrowed 2026-10-03: the wrong answer and the SIGSEGV are fixed; what is
-left is a `-fsanitize=function` trap (UB, right answer by register luck)
-for a non-`int` arrow through an `[^Arrow A]` generic.**  Narrowed
-2026-10-02 before that: a direct `.>>>` / `.<<<` at concrete types is fixed
-(fix direction 2), and the corpus has no `known.fnsan` left.
+> **RESOLVED 2026-10-03** (archived).  Every defect this report filed is
+> fixed:
+>
+> - 2026-10-02: a direct `.>>>` / `.<<<` at concrete types (fix direction 2,
+>   "What was fixed (2026-10-02)" below).
+> - 2026-10-03: `((>>> f g) 7.1)` (wrong answer), `pipe` over `^fat`
+>   arrows (SIGSEGV), and -- the last item -- `.>>>` inside an
+>   `[^Arrow A]` generic at float/cstr arrows (fnsan trap): see "What was
+>   fixed (2026-10-03)".
+>
+> Measured with all of it: `bash tests/run.sh` 3536/0; `tests/run-fnsan.sh`
+> armed 3536/0 with no `known.fnsan`.  Pinned by
+> `tests/fixtures/arrow-instance-typed-compose`,
+> `arrow-generic-closure-direct-call` and
+> `arrow-instance-in-constrained-generic`.
+>
+> Not a defect, recorded so nobody re-files it: `first` / `second` stay
+> untyped in the class because they act on the heap two-slot WORD pairs of
+> `__ac_pair_first` / `__ac_pair_second` -- the pair holds words by
+> construction, so there are no element types to specialize.  Their int
+> shapes run in the armed gate (`arrow-instance-stdlib-basic`), and `arr`
+> (the identity) is clean armed at float as well.
 
 ## What was fixed (2026-10-03)
 
@@ -33,30 +56,27 @@ for a non-`int` arrow through an `[^Arrow A]` generic.**  Narrowed
 Pinned by `tests/fixtures/arrow-generic-closure-direct-call` (passes the
 `fnsan` gate armed).
 
-## Still open
-
-1. **A non-`int` arrow through an `[^Arrow A]` generic.**  With the crash
-   gone, `(pipe f g)` over float arrows prints `16.7`, but `pipe__spec__...`
-   (A := `(fn [float] float)`) still calls the instance's erased base
-   `__inst_Arrow__gt_gt_gt_arrow`, so the closure it returns is an
-   `int64_t (*)(void *, int64_t)` read back as `double (*)(void *, double)`:
-   a trap under `-fsanitize=function` (float AND cstr -- a cstr arrow traps
-   at the caller's `const char *(*)(void *, const char *)`), right only by
-   register luck.  Int arrows are clean.  The receiver in `pipe`'s body is
-   the type variable `A`, so the elaborator's ground-binding step has
-   nothing to bind `b c d` from, and the emitter's per-spec scan returns
-   early on it: `Arrow`'s class variable is higher-kinded, so
-   `emit_abi_register_call`'s MB2.5 carve-out ("an HKT method dispatched in
-   a body constrained by its class is not monomorphized") fires before any
-   instance spec is minted.  The fix is the per-spec analogue of the
-   elaborator's `(->)` binding step: inside a spec, match the class method's
-   spelled arrows `(a b c)` against the spec-resolved argument types, mint
-   the instance spec, and route the call to it ahead of
-   `emit_reresolve_method_call` (which returns the base).
-2. **`first` / `second` / `arr`** were left untyped in the class: `arr` is
-   the identity, and `first`/`second` route through the heap-pair helpers
-   (`__ac_pair_first`), whose pairs hold words.  Not probed under the trap
-   flags.
+- **`.>>>` inside an `[^Arrow A]` generic** at a non-`int` arrow (the old
+  open item 1).  With the crash gone, `(pipe f g)` over float arrows printed
+  `16.7` by register luck: every spec of `pipe` called the instance's
+  erased base, since the receiver is the type variable `A` and the
+  elaborator's ground-binding step had nothing to bind `b c d` from.  And
+  the emitter's per-spec scan returned before minting anything, because
+  `Arrow`'s class variable is higher-kinded and `emit_abi_register_call`'s
+  MB2.5 carve-out skips an HKT method dispatched in a body constrained by
+  its class.  `emit_abi_arrow_spec_bindings` (`emit_module.c`) is the
+  per-spec analogue of the elaborator's `(->)` step: inside a spec, for a
+  `(->)`-headed instance method whose call carries no ground bindings, it
+  finds the class method through the instance's `method_impls` (the dict's
+  name is C-mangled: `_gt_gt_gt`), sees through the `EX_POLY_WRAP` the
+  argument wears for the erased base's `tur_poly_fn_t` parameter, resolves
+  it through the spec, and binds `{a := (->), b, c, d}` in the same order
+  the elaborator does.  Those bindings feed the ordinary interning, which
+  mints `__inst_Arrow__gt_gt_gt_arrow__spec__...` and records the call, and
+  `emit_call_name` already prefers a recorded spec over
+  `emit_reresolve_method_call`.  Nested generics (`pipe3` over `pipe`),
+  `.<<<`, plain (non-`^fat`) lambdas, int, float and cstr arrows all run
+  clean armed.
 
 ---
 
