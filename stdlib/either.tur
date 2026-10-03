@@ -60,7 +60,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn left? [L R] [e : (Either L R)] : bool (match e (Left _) true (Right _) false))
+(defn left? [L R] [e : (Either L R)] : bool
+  (match e (Left _) true (Right _) false))
 ;;; right? -- is this Either a Right?
 ;;;
 ;;; Parameters:
@@ -75,7 +76,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn right? [L R] [e : (Either L R)] : bool (match e (Left _) false (Right _) true))
+(defn right? [L R] [e : (Either L R)] : bool
+  (match e (Left _) false (Right _) true))
 ;;; from-left -- extract the Left payload, or a default when e is a Right.
 ;;;
 ;;; Parameters:
@@ -173,7 +175,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn either-map-left [A B R] [^fat f : (fn [A] B) e : (Either A R)] : (Either B R)
+(defn either-map-left [A B R] [^fat f : (fn [A] B) e : (Either A R)] : (Either B
+                                                                         R)
   (match e (Left l) (Left (f l)) (Right r) (Right r)))
 ;; Functor instance for (Either E) -- right-biased: fmap runs f on the Right
 ;; payload and is the identity on Left.  Either owns this instance (it is its
