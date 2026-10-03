@@ -363,11 +363,31 @@ static char **parse_shell_array(const char *s, int *n_out) {
         if (*p == ']' || !*p) break;
         const char *end;
         char *val = parse_value(p, &end);
+        /* parse_value consumes nothing at a '#', '\n' or '\r', and neither
+         * guard above stops on any of them: the skip covers space/tab/comma
+         * and the break covers ']' and NUL.  So `p` stalled and this loop spun
+         * forever, appending one empty string and doubling `cap` per turn --
+         * observed as a 2 GB realloc (2^28 entries, so ~268M turns) and, with
+         * less headroom, as a 15 s watchdog timeout.  Same defect and same fix
+         * as the dependency-argument loop below; found by
+         * tests/fuzz/fuzz_justfile, pinned by
+         * tests/fuzz/seeds/fuzz_justfile/shell-array-comment-hang.bin. */
+        if (end == p) { free(val); break; }
         p = end;
         if (*n_out >= cap) {
             cap *= 2;
-            arr = (char **)realloc(arr, (size_t)cap * sizeof(char *));
-            if (!arr) return NULL;
+            char **grown = (char **)realloc(arr, (size_t)cap * sizeof(char *));
+            /* realloc failing used to `return NULL` having already dropped the
+             * only pointer to `arr`, leaking it and every string in it while
+             * leaving *n_out non-zero for the caller to index. */
+            if (!grown) {
+                free(val);
+                for (int i = 0; i < *n_out; i++) free(arr[i]);
+                free(arr);
+                *n_out = 0;
+                return NULL;
+            }
+            arr = grown;
         }
         arr[(*n_out)++] = val;
     }

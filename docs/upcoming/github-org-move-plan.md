@@ -399,13 +399,39 @@ what follows is what each one actually costs.
 ### 4.3 The Homebrew tap renames itself
 
 There is no `rjungemann/homebrew-turmeric` -- it 404s. The tap *is* this repo:
-`Formula/turmeric.rb` lives at the root. So `brew install --HEAD
-rjungemann/turmeric/turmeric` resolves against the repo directly, and after
-the move the documented command becomes:
+`Formula/turmeric.rb` lives at the root.
+
+**The conclusion originally drawn from that was wrong, and it had been wrong
+since before the move.** This section used to say `brew install --HEAD
+rjungemann/turmeric/turmeric` "resolves against the repo directly". It does
+not. Measured 2026-10-03 on Homebrew 4.x: `brew tap turmeric-lang/turmeric`
+clones `https://github.com/turmeric-lang/homebrew-turmeric` and fails, because
+the `homebrew-` prefix is the convention with no fallback -- `tap.rb:16` states
+it outright ("a GitHub repository with the name of `user/homebrew-repository`").
+A bare `brew install --HEAD turmeric-lang/turmeric/turmeric` refuses before it
+starts: "This command requires the tap turmeric-lang/turmeric."
+
+What works is spelling the URL out, which is what makes the tap point at the
+repo rather than at the `homebrew-`-prefixed name:
 
 ```sh
+brew tap turmeric-lang/turmeric https://github.com/turmeric-lang/turmeric
 brew install --HEAD turmeric-lang/turmeric/turmeric
 ```
+
+Verified by tapping: `brew info turmeric-lang/turmeric/turmeric` then reports
+`HEAD` with `From: .../turmeric-lang/turmeric/blob/HEAD/Formula/turmeric.rb`.
+`README.md` already had the two-line form; `web/index.html` carried the bare
+one-liner and has been corrected. **The same defect applies to Trowel** -- there
+is no `homebrew-trowel` repo either and `Casks/trowel.rb` lives in
+`turmeric-lang/trowel`, so `web/trowel/index.html`'s three bare
+`brew install --cask` lines were equally broken; the explicit-URL tap resolves
+the cask at 0.2.1.
+
+Creating real `homebrew-turmeric` / `homebrew-trowel` tap repos would make the
+bare one-liners work as published, and is the only way to get a short install
+command. That is an infrastructure decision, not a doc fix, and is deliberately
+left open here.
 
 Three places say the old form: `README.md:41`, `web/index.html:333`, and
 `web/worker.js:111` (which O1 changed to derive from the installer's own
@@ -707,8 +733,14 @@ CI going green proves almost nothing here. Check by hand:
 2. **`/ci` dashboard:** load it and confirm the NDJSON actually arrives.
    Downgraded to a routine smoke check by O2 -- raw serves old-owner paths at
    200, so this is no longer the cliff the plan was written around.
-3. **Homebrew:** `brew untap rjungemann/turmeric` then
-   `brew install --HEAD turmeric-lang/turmeric/turmeric`.
+3. **Homebrew:** DONE 2026-10-03, and it found a documentation bug that predates
+   the move -- see 4.3. The bare `brew install --HEAD
+   turmeric-lang/turmeric/turmeric` on the website could never have worked, for
+   turmeric or for Trowel; the tap needs its URL spelled out. The `brew untap
+   rjungemann/turmeric` half is a no-op on a machine that never tapped the old
+   name (measured: no turmeric tap present), and remains correct advice for one
+   that did. The remaining question is not verification but whether to create
+   real `homebrew-*` tap repos so the short form works.
 4. **Attestation:** DONE 2026-10-02, and it found a real documentation bug --
    see 6.2. Still outstanding: the same check on a release cut *after* the
    move, to confirm `--repo turmeric-lang/turmeric` is the right form going
