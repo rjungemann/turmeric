@@ -1,22 +1,126 @@
 # Compile the runtime preamble once on the cc path
 
-**Status: steps 1-4 LANDED 2026-09-06/07 (PR #838); step 5 half done -- the
-suite is green under the split, the default is NOT flipped** (re-verified
-2026-09-28). `tur build --runtime=split` / `TUR_RUNTIME=split` emits the decls
-region and links `libturt_preamble.a` (a3e63b9d7, 966f2157b). The 20 failures
-in "Where it actually got to" below were all fixed on 2026-09-07 -- 16 were
-duplicated thread-locals (c527e0494), plus the frame-helper inlining
-(1b8e71050) and the discarded project includes (9b72ae63e) -- and CI's `split`
-and `windows-split` jobs have asserted `0 failed` since (c1a04d0ec; paper trail
-in `docs/archive/cc-path-split-windows-and-hamt-findings.md`). **Remaining:**
-flip the default (not started, not declined), ideally after re-measuring the
-win on CI. The swap declines for `#lang r7rs` programs, which got their own
-prelude split on 2026-09-28. Step 1's `weak` fix was replaced by the
-`TUR_RT_SPLIT_HOSTED` guard (a weak definition broke the PE/COFF link).
+**Status: steps 1-5 done on Linux and Windows. The split is the DEFAULT there
+as of 2026-10-02. macOS is still opt-in, and that is the one step left.** See
+"Step 5: the flip" below for the re-measured win, a binary-size regression the
+flip would have shipped, and the preconditions a default build checks.
 
-**Expected win: ~17% of suite wall-clock.** Measured, and materially smaller
-than the ~45% first estimated -- that figure was compile-*only* and taken while
-the suite was running. Read the numbers below before deciding this is worth it.
+History: steps 1-4 landed 2026-09-06/07 (PR #838). `tur build --runtime=split` /
+`TUR_RUNTIME=split` emits the decls region and links `libturt_preamble.a`
+(a3e63b9d7, 966f2157b). The 20 failures in "Where it actually got to" below were
+all fixed on 2026-09-07 -- 16 were duplicated thread-locals (c527e0494), plus the
+frame-helper inlining (1b8e71050) and the discarded project includes
+(9b72ae63e). CI's `split` and `windows-split` jobs then asserted `0 failed` until
+the flip retired them (c1a04d0ec; paper trail in
+`docs/archive/cc-path-split-windows-and-hamt-findings.md`). The swap declines
+for `#lang r7rs` programs, which got their own prelude split on 2026-09-28.
+Step 1's `weak` fix was replaced by the `TUR_RT_SPLIT_HOSTED` guard (a weak
+definition broke the PE/COFF link).
+
+**Win: ~10-11% of suite wall-clock, measured.** The ~17% projected below did not
+survive measurement, and the ~45% first estimated before that was compile-*only*
+and taken while the suite was running.
+
+## Step 5: the flip (2026-10-02)
+
+### What the win actually is
+
+| where | whole preamble | split | |
+| --- | --- | --- | --- |
+| Linux, 4 cores, no ccache, `TUR_TEST_SHARD=1/10` (349 fixtures), 2 runs each | 81s, 86s | 73s, 73s | -10..-15% |
+| Windows CI, sum of the 3 suite shards, mean of 4 green runs | 41.1 min | 36.8 min | -10% |
+| one-line program, `tur build` end to end (Linux) | 0.50s | 0.37s | -26% |
+| the `cc` part of that build | ~0.23s | ~0.11s | -50% |
+
+The Windows CI rows come from runs 36974523476, 36969943779, 36978132289 and
+36969199979. Each pair ran the same commit on the `windows` and `windows-split`
+shards. They are noisy (one pair differed by 0.6 min, another by 7.6), which is
+why the table shows the mean. Linux CI cannot give a clean comparison: `test`
+and the old `split` job warm separate ccaches, and with a ccache hit the cc call
+costs nothing on either path.
+
+A full suite under the new default, run as two `TUR_TEST_SHARD` halves to stay
+inside the 12-minute cap, came back `1745 passed, 0 failed` and `1744 passed, 0
+failed`.
+
+The `cc` call really does halve. The suite moves much less because the rest of
+each fixture stays put: `tur` itself (~0.27s of emit for a one-line program on a
+Debug build), the run, and the harness.
+
+### The binary-size regression, and the fix
+
+A one-line program's executable grew from 23 KB to 93 KB stripped under the
+split (60 KB to 394 KB unstripped on a Debug toolchain). "Linked
+all-or-nothing" is literal. `tur_rt_split.c` is ONE object, so the first
+reference pulls in the whole preamble. The inline preamble had let `-O2` drop
+every `static` function the program never called.
+
+Fixed by building `libturt_preamble.a` with `-ffunction-sections
+-fdata-sections` and linking split programs with `-Wl,--gc-sections`. The same
+program is now 19 KB stripped, a little under the inline build. ELF only for
+now. MinGW's `ld` has the flag, but no Windows run has checked a PE link with
+it, so Windows split binaries still carry the whole preamble's code.
+
+### When a default build takes the split
+
+`preamble_split_auto_applies()` in `src/main.c`. Each condition is a case where
+the split would build something other than what was asked for. The whole
+preamble is the correct answer then, not a degraded one, so declining is quiet.
+`--runtime=split` still insists and says so when it declines.
+
+- `libturt_preamble.a` beside the lean `libturt_runtime.a`, and the program's
+  own preamble in archive posture (`emit_rcgc_from_archive()`). A
+  `--target tur` build has neither archive.
+- no `-fsanitize` in `TUR_CC_FLAGS`. The archive is not instrumented, so ASan
+  would stop seeing the preamble's heap traffic and TSan its atomics. This also
+  keeps `tests/run.sh` under `TUR_TSAN=1` on the whole preamble.
+- not `--debug`, not `--target wasm`, and not on top of an r7rs prelude split.
+- Linux or Windows. Elsewhere `TUR_PREAMBLE_SPLIT=1` opts in.
+- `TUR_PREAMBLE_SPLIT=0` turns it off everywhere.
+- and the hash guard in `jit_try_split_preamble` must pass, as before.
+
+How often it engages: 205 of a 227-fixture sample (every 12th) took the split.
+The 22 that did not are all correct declines. Most are `#lang r7rs` (its own
+prelude split) and saffron programs. Two embed the r7rs-gc collector
+(`map-get-miss-on-any-value-is-nil`, `list-helpers-wide-head-element`), which
+really is a different preamble. One, `jit-ffi-call-ptr`, adds a `<dlfcn.h>` gate
+the canonical emission does not force. Forcing that gate in
+`emit_rt_split_source` would win those programs back. It also moves the hash,
+so it needs a regenerate.
+
+`libturt_preamble.a` now installs (`cmake --install`) and ships in the release
+archives next to `libturt_runtime.a`. Without that, every released toolchain
+would have quietly kept the whole preamble.
+
+### CI after the flip
+
+- `test` (Linux) and every `windows` shard probe that a DEFAULT build links
+  `-lturt_preamble`, because the split fails closed. A tree that lost it would
+  otherwise go green having run the old path. Both suites now run the split.
+- `split` became `whole-preamble`: the suite under `TUR_PREAMBLE_SPLIT=0`, with
+  the mirror-image probe. That path is still live (`--target tur` builds,
+  sanitizer and `--debug` builds, installs without the archive), and nothing
+  else compiles it on Linux/gcc.
+- `windows-split` is gone. `windows` runs the same configuration by default.
+
+### Left
+
+- **macOS.** No CI leg has ever run the suite under the split there. Run
+  `TUR_PREAMBLE_SPLIT=1 bash tests/run.sh` once on a Mac. If it comes back
+  `0 failed`, widen the `#if` in `preamble_split_auto_applies` and the `test`
+  probe's `runner.os` condition. The preamble defines no constructors, so the
+  Mach-O initializer-order trap that held the r7rs prelude split back
+  (`docs/archive/r7rs-prelude-split-gc-seam-on-macos.md`) has nothing to bite
+  here. That is a reason to expect green, not a substitute for the run.
+  `-Wl,-dead_strip` is the macOS counterpart of `--gc-sections`.
+- **`--gc-sections` on MinGW**, to give Windows the size fix too.
+- **Version skew between `tur` and the archive.** The hash guard checks `tur`'s
+  own preamble against the artifact `tur` was built with. It does not check the
+  `libturt_preamble.a` it finds on disk. A stale archive beside a newer `tur`
+  would link or misbehave rather than decline. `libturt_runtime.a` has the same
+  exposure today. A symbol named after `tur_rt_split_hash`, defined in the
+  archive and referenced from the decls region, would turn that into a link
+  error.
 
 ## The waste
 
@@ -44,7 +148,8 @@ runtime sources*; the preamble is still inline in every program TU.
 
 **29% off the `cc` call.** A fixture costs ~2.2s end to end (`tur` 0.5s, `cc`
 1.3s, run + harness ~0.4s), so this is **~17% of the suite** -- roughly 30 min
-to 25 on the Windows CI leg, and proportionally everywhere else.
+to 25 on the Windows CI leg, and proportionally everywhere else. (A projection.
+Step 5 measured ~10%, on CI and on Linux.)
 
 That is worth having and is not a transformation. If the goal is a big cut, the
 next-largest item is `tur` itself at 0.5s per fixture for a one-line program,
