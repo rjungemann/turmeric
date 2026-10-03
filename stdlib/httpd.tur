@@ -770,6 +770,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   typedef int64_t (*httpd_tls_wrap_fn)(int64_t, int64_t);
   typedef int64_t (*httpd_tls_handshake_fn)(int64_t);
@@ -834,6 +835,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   int64_t *fat = (int64_t *)env;
   HttpdBlock *hb = (HttpdBlock *)(intptr_t)fat[1];
@@ -850,6 +852,26 @@
       }
       pthread_mutex_lock(&hb->fdq_mtx);
       if (hb->fdq_closed) { pthread_mutex_unlock(&hb->fdq_mtx); close(cfd); break; }
+      /* The pending-connection cap (httpd-new-pool-with-limit; 512 by
+       * default).  Every queued connection holds an fd until a worker frees
+       * up, so an unbounded queue let a flood of connections exhaust the
+       * process's descriptors.  Refuse past the cap with a 503, as the async
+       * server does past its in-flight cap. */
+      if (hb->fdq_max > 0 && hb->fdq_count >= hb->fdq_max) {
+          pthread_mutex_unlock(&hb->fdq_mtx);
+          const char *resp =
+              "HTTP/1.0 503 Service Unavailable\r\n"
+              "Content-Length: 19\r\n"
+              "Connection: close\r\n"
+              "\r\n"
+              "server at capacity\n";
+          (void)send(cfd, resp, strlen(resp), 0);
+          /* Linger rather than close(): closing over the unread request
+           * sends RST, and a client that has not read the 503 yet loses it
+           * (see httpd-async-accept-cb). */
+          (void)tur_reactor_linger_close(hb->reactor, cfd, 2000);
+          continue;
+      }
       /* Grow the queue if full (doubling). */
       if (hb->fdq_count == hb->fdq_cap) {
           int new_cap = hb->fdq_cap * 2;
@@ -875,6 +897,10 @@
   }
   ```)
 ;;; httpd-new-pool -- create an httpd instance with a configurable worker count.
+;;;
+;;; At most 512 accepted connections wait for a free worker; past that a
+;;; connection is answered 503 and closed.  httpd-new-pool-with-limit sets
+;;; another cap.
 ;;;
 ;;; Parameters:
 ;;;   port    -- TCP port to listen on (0 = kernel-assigned)
@@ -910,6 +936,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   /* `workers * sizeof(pthread_t)` wrapped for a huge count and the first
@@ -944,6 +971,10 @@
   hb->n_workers = (int)workers;
   /* Initialise the shared queue with a small capacity (will grow). */
   hb->fdq_cap = 16;
+  /* WP4 residual item 3: a default pending-connection cap, the same 512 as
+   * httpd-new-async's in-flight default; httpd-new-pool-with-limit sets
+   * another (0 = unlimited). */
+  hb->fdq_max = 512;
   hb->fdq     = (int *)malloc((size_t)hb->fdq_cap * sizeof(int));
   if (!hb->fdq) { close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   pthread_mutex_init(&hb->fdq_mtx, NULL);
@@ -982,6 +1013,60 @@
       pthread_create(&hb->workers[i], NULL,
                      (void *(*)(void *))httpd_hyworker, (void *)hb);
   }
+  return (void *)hb;
+  ```)
+;;; httpd-new-pool-with-limit -- httpd-new-pool with a pending-connection cap.
+;;;
+;;; Each worker serves one connection at a time; accepted connections wait
+;;; in a queue for a free worker, each holding a descriptor.  When
+;;; `max-pending` connections are already waiting, a new one is answered
+;;; `503 Service Unavailable` and closed instead of queued.
+;;;
+;;; Parameters:
+;;;   port        -- TCP port to listen on (0 = kernel-assigned)
+;;;   workers     -- number of worker threads in the pool (must be > 0)
+;;;   handler     -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   max-pending -- queued-connection cap (0 = unlimited; httpd-new-pool
+;;;                  uses 512)
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque Httpd handle, or nil on error
+;;;
+;;; Example:
+;;;   (let [h (httpd-new-pool-with-limit 0 4 handler 64)]
+;;;     (httpd-run h)
+;;;     (httpd-free h))
+;;;
+;;; Since: 2026-10-03 (security-audit-plan WP4 residual)
+
+(defn httpd-new-pool-with-limit [port : int
+                                 workers : int
+                                 ^fat handler : (fn [ptr<void>] nil)
+                                 max-pending : int]
+  #fx{Net}
+  : ptr<void>
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+  } HttpdBlock;
+  /* The handler's ownership passes to httpd-new-pool, which releases it on
+   * every refusal.  The reactor does not run until httpd-run, so no
+   * connection is accepted under the default cap before this one is set. */
+  HttpdBlock *hb = (HttpdBlock *)httpd_hynew_hypool((int64_t)port,
+                                                (int64_t)workers,
+                                                (int64_t)handler);
+  if (!hb) return NULL;
+  hb->fdq_max = max_pending <= 0 ? 0
+              : max_pending > INT32_MAX ? INT32_MAX : (int)max_pending;
   return (void *)hb;
   ```)
 ;;; httpd-new -- create a new httpd instance with the default worker pool size (4).
@@ -1058,6 +1143,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   /* handler is passed ^fat (this fn owns the heap box).  On an early refusal it
    * is never handed to httpd-new-pool, so release it here or it leaks -- via
@@ -1107,6 +1193,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   struct sockaddr_in addr;
@@ -1132,6 +1219,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   tur_reactor_run(hb->reactor);
@@ -1157,6 +1245,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
@@ -1195,6 +1284,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   if (hb->workers) {
@@ -2943,17 +3033,20 @@
   }
   return (void *)ha;
   ```)
-;;; httpd-new-async -- create an async server with no in-flight cap.
+;;; httpd-new-async -- create an async server capped at 512 in-flight requests.
 ;;;
-;;; Shortcut for `(httpd-new-async-with-limit port handler 0)`.  Use
-;;; the -with-limit variant in production to cap concurrent requests.
+;;; Shortcut for `(httpd-new-async-with-limit port handler 512)`: past 512
+;;; live request fibers a new connection is answered 503 and closed.  512
+;;; sits under the common 1024 open-file soft limit, so a flood is refused
+;;; before it exhausts the process's descriptors.  Use the -with-limit
+;;; variant to choose another cap (0 = unlimited).
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-new-async [port : int ^fat handler : (fn [ptr<void>] nil)]
   #fx{Net}
   : ptr<void>
-  (httpd-new-async-with-limit port handler 0))
+  (httpd-new-async-with-limit port handler 512))
 ;;; httpd-run-async -- drive the async server until stopped.
 ;;;
 ;;; Blocks the calling thread, running the fiber-per-request loop.

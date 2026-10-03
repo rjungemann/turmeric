@@ -88,10 +88,17 @@ Inside the handler:
 |-------------------------------------------|---------------------------------------------------------|
 | `(httpd-new port handler)`                | 4-worker plaintext server                               |
 | `(httpd-new-pool port workers handler)`   | Custom worker count                                     |
+| `(httpd-new-pool-with-limit port workers handler max-pending)` | Custom worker count and pending-connection cap |
 | `(httpd-new-tls port workers handler ctx)`| HTTPS termination -- see [httpd-tls-guide.md](httpd-tls-guide.md) |
 
 A `port` of `0` lets the kernel choose; read it back with
 `(httpd-port h)`. This is the recommended pattern for tests.
+
+Accepted connections wait in a queue for a free worker, each holding a
+descriptor. At most 512 wait (`max-pending` for
+`httpd-new-pool-with-limit`, `0` = unlimited); past that a connection is
+answered `503 Service Unavailable` and closed, as the async server does
+past its in-flight cap.
 
 ### Binding and request limits
 

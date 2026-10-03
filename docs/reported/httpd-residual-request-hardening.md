@@ -5,7 +5,22 @@ denial of service, a policy gap or a misleading surface).
 **Filed:** 2026-09-30, by security-audit-plan WP4 (M-4).
 **Tag:** security-
 
-**Narrowed again 2026-10-03: item 4 is fixed; 3 and 9 remain** (3 needs a
+**Narrowed a third time 2026-10-03: item 3 is fixed; only 9 remains** (an
+enhancement: IPv6 and a bind address beyond loopback / every interface).
+
+- **3** -- the default chosen is **512** for both servers.  `httpd-new-async`
+  is `(httpd-new-async-with-limit port handler 512)`; the blocking pool's
+  pending queue (accepted connections waiting for a worker, each an open
+  descriptor) stops at 512 too, answering `503` and lingering the close as
+  the async cap does.  512 sits under the common 1024 open-file soft limit,
+  so a flood is refused before it exhausts the process's descriptors.  `0`
+  still means unlimited, asked for by name:
+  `httpd-new-async-with-limit` as before, and the new
+  `httpd-new-pool-with-limit port workers handler max-pending`.  Pinned by
+  `tests/fixtures/httpd-pool-pending-limit` (one worker, cap 1: the third
+  connection is refused while the second waits; both defaults read back).
+
+**Narrowed again 2026-10-03: item 4 is fixed; 3 and 9 remained** (3 needed a
 default chosen, 9 is an enhancement).
 
 - **4** -- `mw-rate-limit`'s table is keyed by the IP string (first 47
