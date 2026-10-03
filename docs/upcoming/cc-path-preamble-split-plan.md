@@ -106,7 +106,7 @@ would have quietly kept the whole preamble.
 ### Left
 
 - **macOS. The run has now happened -- see "macOS, measured" below.** What is
-  left is the four edits that flip it, and one decision.
+  left is three edits and a comment.
 - **`--gc-sections` on MinGW**, to give Windows the size fix too.
 - **Version skew between `tur` and the archive.** The hash guard checks `tur`'s
   own preamble against the artifact `tur` was built with. It does not check the
@@ -190,7 +190,7 @@ no-op, both `3489 passed, 0 failed`. Use `TUR_FORCE=1`, or a per-mode
 
 ### What the macOS flip still needs
 
-Four edits and one decision:
+Three edits, a comment, and nothing else:
 
 1. `preamble_split_auto_applies` (`src/main.c:977`): add `__APPLE__` to the
    `#if`, and correct the "macOS never has" prose above it (`src/main.c:963`).
@@ -208,21 +208,44 @@ Four edits and one decision:
    the install path macOS users reach for. (Downloaded releases are fine:
    `macos-arm64` ships the archive and `__tvm_normalize_layout` globs `*.a`.)
 
-The decision: whether macOS also wants a `whole-preamble` counterpart leg.
+The comment: whether macOS also wants a `whole-preamble` counterpart leg.
 `ci.yml:947` says "Linux only: macOS still defaults to the whole preamble, so
-its `test` legs cover it there", and a flip retires that sentence. The residual
-exposure is small and worth stating rather than guessing at: the archive is
-compiled `-w`, so after a flip no macOS job compiles the preamble under
-`-Wall -Werror=implicit-function-declaration` *except* through the ~10% of
-fixtures that decline -- and those do carry a whole preamble (saffron 12,373
-lines emitted, r7rs 33,893, against 8,434 for a one-line inline build), sharing
-6,145 of the canonical emission's 6,337 distinct lines. So ~3% of the canonical
-preamble's distinct lines would stop being seen by AppleClang with warnings on.
-That is the whole cost, and it is the kind of thing AppleClang 21 has turned
-into a hard error three times (`-Wint-conversion`,
-`-Wunterminated-string-initialization`, implicit declarations) where Linux gcc
-only warns. A macOS `whole-preamble` leg closes it; accepting the 3% is also
-defensible. Decide it, do not inherit it by accident.
+its `test` legs cover it there", and a flip retires that sentence. **Measured:
+nothing is lost, so this is a note to write rather than a leg to add.** Three
+checks, because the plausible-sounding version of this concern is wrong:
+
+- **The preamble body stays fully covered.** The split removes 1,679 distinct
+  lines from what `cc` receives (8,434 -> 6,618 for a one-line program). ALL
+  1,679 are still compiled, under the suite's own
+  `-Wall -Wfloat-conversion -Werror=implicit-function-declaration`, by
+  `saffron-cons-list` alone -- 100%, not the ~3% an earlier pass here claimed.
+  That number came from diffing whole emissions, which counts a one-line
+  program's own `main` as preamble; diff the inline TU against the split TU
+  instead and the figure is exact.
+- **`-w` on the archive does not hide the dangerous class.** `-w` suppresses
+  warnings, not errors, and AppleClang 21 makes `-Wint-conversion` and
+  `-Wimplicit-function-declaration` errors by DEFAULT -- verified, both still
+  fail a `cc -std=c99 -w -c`, exit 1. So the `libturt_preamble.a` build itself
+  still catches them. Of `run.sh`'s four ratchet patterns, only
+  `-Wincompatible-pointer-types` and `-Wfloat-conversion` are warnings `-w`
+  silences, and those are the two the declining fixtures still cover.
+- **`tur emit-c` is byte-identical in both modes** (9,738 lines either way), so
+  `check-emitted-float-conversions.py` / `tur_emitted_float_conversions` reads
+  the whole preamble no matter what `tur build` links. That corpus is at zero
+  and stays load-bearing.
+
+There is also a structural reason not to expect trouble: the preamble is FIXED
+and byte-identical across every fixture, so it cannot be the source of a *new*
+per-fixture warning. What the ratchet actually hunts -- warnings in
+program-specific emitted code -- the split does not touch.
+
+The one thing worth recording: that coverage is **incidental, not designed.**
+It rests on r7rs and saffron continuing to decline the split. The plan already
+contemplates winning declining programs back (forcing `jit-ffi-call-ptr`'s
+`<dlfcn.h>` gate in `emit_rt_split_source`); doing the same for saffron would
+silently remove the last macOS job that compiles the preamble with warnings on.
+Note the dependency at `ci.yml:947` when the flip retires that comment, so a
+later change has to notice.
 
 ## The waste
 
