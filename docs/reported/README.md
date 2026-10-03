@@ -1558,6 +1558,7 @@ the class of bug is closed, not just the one instance.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [blockquoted-fenced-code-renders-as-prose](blockquoted-fenced-code-renders-as-prose.md) | medium | Filed 2026-10-03. A fence inside a `>` blockquote is invisible to python-markdown's `fenced_code` preprocessor, so the body renders as prose: `#` shell comments become `<h1>` headings and `<...>` placeholders become raw unclosed tags. Sibling class to the `widen_nested_fences` bug noted below -- same renderer, same "code rendered as prose" outcome. |
 `guide-cross-links-to-unrendered-docs` was resolved 2026-08-26 and moved to
 [docs/archive](../archive/guide-cross-links-to-unrendered-docs.md). It was
 **eight** links in five pages, not four in three: the report's list came from
