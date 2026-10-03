@@ -180,13 +180,15 @@ throughout. Two attempts produced 112s/216s for one arm and 142s/147s for the
 other on the same shard, which is noise, not a result. Take the suite number
 from the macOS `test` leg once the flip lands; do not quote a local A/B for it.
 
-**Watch out for the stamp cache when repeating any of this.**
-`tests/run.sh`'s `stamp_key` does not include `TUR_PREAMBLE_SPLIT`, so running
-one mode and then the other PASS-skips the entire corpus and reports a full
-green for a run that never happened -- 7:06 for the real run, 1:14 for the
-no-op, both `3489 passed, 0 failed`. Use `TUR_FORCE=1`, or a per-mode
-`TUR_STAMP_CACHE`.
-[run-sh-stamp-cache-ignores-the-preamble-split-mode](https://github.com/rjungemann/turmeric/blob/main/docs/reported/run-sh-stamp-cache-ignores-the-preamble-split-mode.md).
+**The stamp cache used to bite when repeating any of this** -- fixed
+2026-10-03. `tests/run.sh`'s `stamp_key` did not include `TUR_PREAMBLE_SPLIT`,
+so running one mode and then the other PASS-skipped the entire corpus and
+reported a full green for a run that never happened -- 7:06 for the real run,
+1:14 for the no-op, both `3489 passed, 0 failed`. The key now carries the
+resolved preamble mode (and `CC`, and every `TUR_*` knob), and the run's first
+line says which path it took: `run.sh: preamble=split ...`. Check that line on
+both halves of an A/B.
+[run-sh-stamp-cache-ignores-the-preamble-split-mode](https://github.com/rjungemann/turmeric/blob/main/docs/archive/run-sh-stamp-cache-ignores-the-preamble-split-mode.md).
 
 ### What the macOS flip still needs
 

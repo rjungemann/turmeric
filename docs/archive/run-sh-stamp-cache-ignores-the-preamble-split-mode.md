@@ -1,4 +1,47 @@
+---
+title: tests/run.sh's stamp cache ignores TUR_PREAMBLE_SPLIT, so an A/B of the two preamble paths reports green for a run that never happened
+category: Archive
+description: stamp_key hashed the fixture, expected.c, tur's mtime and stdlib/ -- not the build configuration -- so a second run under a different TUR_PREAMBLE_SPLIT, CC or TUR_CC_FLAGS PASS-skipped the corpus. Fixed by folding a per-run configuration hash (resolved preamble mode, CC identity, every TUR_* knob) into the key.
+---
+
 # `tests/run.sh`'s stamp cache ignores `TUR_PREAMBLE_SPLIT`, so an A/B of the two preamble paths reports green for a run that never happened
+
+> **RESOLVED 2026-10-03.** Fix directions 1 and 3, slightly wider than filed.
+> `tests/run.sh` computes `TUR_CONFIG_HASH` once per run and appends it to
+> `stamp_key`.  It covers the **resolved** preamble mode -- asked of `tur` by
+> one probe build whose `TUR_SHOW_CC` link line names `-lturt_preamble`
+> exactly when the split engaged, the same probe CI's `whole-preamble` job
+> uses -- so a missing `libturt_preamble.a` or a `-fsanitize` flag that
+> declines the split is seen too, not only the variable.  It also covers `CC`
+> and its `--version` banner, and **every** `TUR_*` variable in the
+> environment except the harness's own bookkeeping/selection ones and the
+> per-run `TUR_TEST_TMPDIR` -- so `TUR_CC_FLAGS`, `TUR_REGIONS`,
+> `TUR_OPTION_NICHE` and the next knob someone adds are in the key without a
+> list to keep current.  The run's first line now names the mode:
+> `run.sh: preamble=split cc=cc config=<hash>`.
+>
+> Measured with the fix: `TUR_PREAMBLE_SPLIT=1` then `=0` over the same stamp
+> cache prints `preamble=split` / `preamble=whole` with different config
+> hashes, and the second run rebuilds.
+>
+> **Found on the way, and worse on Linux than this report:** `_tur_mtime`
+> tried BSD's `stat -f '%m'` before GNU's `stat -c '%Y'`.  On GNU, `-f` means
+> "filesystem status", so it printed the volume's **free-block counts** for
+> `tur` into stdout (then failed on a file named `%m`, falling through to the
+> real mtime).  Every Linux stamp key carried a number that changes with every
+> disk write, so the cache almost never hit there -- which is also why this
+> report's A/B only reproduced on macOS.  All four stamp-keyed harnesses
+> (`tests/run.sh`, `tests/run-jit.sh`, `tests/run-turi.sh`,
+> `tools/run-doctests.sh`) now try GNU first and accept only an all-digit
+> answer.  Because that makes their caches actually hit on Linux, the three
+> that did not hash `stdlib/` now do (`TUR_STDLIB_HASH`, as `run.sh` has since
+> [run-sh-stamp-cache-ignores-the-stdlib](run-sh-stamp-cache-ignores-the-stdlib.md)) --
+> otherwise the broken mtime had been masking that gap on Linux, and fixing it
+> would have exposed it.  It also matters for `tests/run-fnsan.sh`, which
+> shares `run.sh`'s stamp cache under a different `CC`/`TUR_CC_FLAGS`: with
+> working stamps and no config term it would have PASS-skipped every fixture
+> a plain run had stamped.
+
 
 **Severity: medium.** No wrong answers in the compiler. The damage is that
 `TUR_PREAMBLE_SPLIT=<n> bash tests/run.sh` reports **`N passed, 0 failed` for a
