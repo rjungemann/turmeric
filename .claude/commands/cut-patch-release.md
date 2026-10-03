@@ -187,8 +187,16 @@ decision, not an oversight -- C-4 in
   as of WP7 -- signed through Sigstore with a short-lived certificate minted
   from the release job's OIDC token, binding each asset to the workflow, repo,
   commit and run that built it. `gh attestation verify <asset> --repo
-  rjungemann/turmeric` checks it. That is the signature that protects users,
-  and it needs no key anyone has to hold or rotate.
+  turmeric-lang/turmeric` checks it. That is the signature that protects
+  users, and it needs no key anyone has to hold or rotate.
+  - **The owner is part of what is signed, so it depends on the asset's
+    vintage.** Assets built before the 2026-10-02 org move were signed as
+    `rjungemann/turmeric`, and that is a cryptographic fact no redirect
+    changes. Verifying one of those needs
+    `--repo rjungemann/turmeric`; passing the new owner reports a
+    verification *failure*, which is correct and does not mean the download
+    is compromised. Releases cut from v0.60.0 on use
+    `--repo turmeric-lang/turmeric`.
 - A signed **tag** protects something narrower: it proves who cut the release,
   to someone reading the git history. It needs a long-lived GPG or SSH key on
   the release machine, and a key that is lost, leaked, or simply not present

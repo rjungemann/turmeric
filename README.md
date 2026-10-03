@@ -1,6 +1,6 @@
 # Turmeric
 
-[![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
+[![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
 **Latest release:** `v0.59.0` -- `#fx{...}` is honest: `println` declares `#fx{IO}`, an undeclared effect tag is an error instead of a silently empty row, and compiler attributes move off the row onto `^construct` / `^byval`; the generic-specialization sweep closes the open-argument axis and the forward-call ordering holes, and the fixture corpus reaches zero `-fsanitize=function` traps behind a new CI gate.
 
@@ -28,8 +28,16 @@ cannot be made. Release assets also carry
 so you can confirm which workflow run built the bytes you have:
 
 ```sh
+# Releases cut before the 2026-10-02 move to the turmeric-lang org
+# (v0.59.0 and earlier) are signed against the old owner:
 gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+# Releases cut after it:
+gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
 ```
+
+The owner is part of what the signature covers, so it follows the release's
+vintage rather than where the repo lives now. Using the wrong one reports a
+verification failure, not a compromised download.
 
 On a platform with no prebuilt binary, the installer builds that same release
 tag from source instead (needs `cmake` and a C compiler).
@@ -37,8 +45,12 @@ tag from source instead (needs `cmake` and a C compiler).
 **Building `main` instead (unverified, opt-in):**
 
 ```sh
-brew tap rjungemann/turmeric https://github.com/rjungemann/turmeric
-brew install --HEAD rjungemann/turmeric/turmeric
+# If you tapped this before the move, drop the old tap first -- brew keys its
+# tap cache by name and will otherwise keep serving the stale one:
+brew untap rjungemann/turmeric 2>/dev/null || true
+
+brew tap turmeric-lang/turmeric https://github.com/turmeric-lang/turmeric
+brew install --HEAD turmeric-lang/turmeric/turmeric
 ```
 
 The Homebrew formula is **`--HEAD`-only**: it builds whatever is on `main` at
@@ -85,7 +97,7 @@ See [`tvm/README.md`](tvm/README.md) for the full command set
 Prerequisites: a C99 compiler and CMake 3.20+.
 
 ```sh
-git clone https://github.com/rjungemann/turmeric.git
+git clone https://github.com/turmeric-lang/turmeric.git
 cd turmeric
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5  # debug + sanitizers
 cmake --build build -j
@@ -505,7 +517,7 @@ Two worth knowing before you use it:
   to catch accidents, not adversaries.
 
 To report a vulnerability, use the
-[private advisory form](https://github.com/rjungemann/turmeric/security/advisories/new)
+[private advisory form](https://github.com/turmeric-lang/turmeric/security/advisories/new)
 rather than a public issue. See [`SECURITY.md`](SECURITY.md).
 
 ## Scoped Features for v1

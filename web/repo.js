@@ -12,5 +12,5 @@
 // a static build and served to browsers, so a mistyped or unset variable would
 // ship a dead link rather than fail the build. One literal a grep can find
 // beats an indirection that hides.
-export const GH_REPO = 'rjungemann/turmeric';
+export const GH_REPO = 'turmeric-lang/turmeric';
 export const GITHUB_URL = `https://github.com/${GH_REPO}`;

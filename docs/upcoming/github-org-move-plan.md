@@ -1,10 +1,11 @@
 # Moving the Turmeric repos to a GitHub org
 
-> **Status: IN PROGRESS. O1 (reference consolidation) landed 2026-10-01.
-> O2 (redirect verification) is RESOLVED 2026-10-02 -- see section 5, O2.
-> Tier 1 (the four zero-coupling supplemental repos) and Tier 2 (`trowel`)
-> TRANSFERRED 2026-10-02, five repos in all. Org pre-staging (O3) is done.
-> `turmeric-spices` and `turmeric` have not moved yet.** Written in
+> **Status: ALL SEVEN REPOS TRANSFERRED 2026-10-02.** O1 landed 2026-10-01;
+> O2 (redirect verification) RESOLVED; O3 (org pre-staging) done; Tiers 1-3
+> transferred, spices before turmeric per 4.1; **O4 (the Class A owner
+> literals) landed in the same PR as this text.** What remains is **O5** (the
+> ~520-occurrence Class B doc sweep) and **O6** (the four paths no test
+> covers). Written in
 > answer to "what is a good option for moving turmeric repos out of my
 > rjungemann account -- a free-tier GH org?" The short answer is **yes, GitHub
 > Free for organizations is sufficient and costs nothing here**, and section 1
@@ -85,8 +86,8 @@ resolves a URL into it at build or install time.
 | 1 | `asdf-turmeric` | `turmeric-lang` | **2026-10-02** | `lib/utils.bash`, `README.md`, `bin/help.overview` |
 | 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | `build.yml:36,107`, `README.md` |
 | 2 | `trowel` | `turmeric-lang` | **2026-10-02** | cask name (4.3); `CMakeLists.txt:219`. **Its 7 secrets carried over** -- see 2.1 |
-| 3 | `turmeric-spices` | `rjungemann` | -- | must precede `turmeric`; own owner refs |
-| 3 | `turmeric` | `rjungemann` | -- | Class A one-liners (O4); O5 sweep; O6 verification. `SENTRY_DSN` already set org-wide |
+| 3 | `turmeric-spices` | `turmeric-lang` | **2026-10-02** | its 3 hardcoded `rjungemann/turmeric` refs (`ci.yml:36,373,404`) |
+| 3 | `turmeric` | `turmeric-lang` | **2026-10-02** | O5 sweep; O6 verification. Class A (O4) done; `SENTRY_DSN` org-wide |
 
 Every transfer was verified afterwards, not assumed: for all five, an
 old-path `git clone --depth 1` and `git ls-remote` still succeed, and the
@@ -470,7 +471,27 @@ Consequences for the rest of the plan:
   to involve GitHub at all (see 2.1). Nothing about the transfer is unmeasured
   now.
 
-### O3 -- create the org and pre-stage settings (**partially done**)
+### O2a -- what a transfer does to work in flight (measured 2026-10-02)
+
+Three things nobody had written down, all measured on the real transfers:
+
+- **An existing clone keeps working for `push`, not just `fetch`.** Pushing a
+  new branch to `https://github.com/rjungemann/turmeric` landed it in
+  `turmeric-lang/turmeric`, with an advisory
+  `remote: This repository moved. Please use the new location:`. So agents and
+  checkouts pointed at the old URL need no intervention; `git remote set-url`
+  is tidiness, not repair.
+- **In-progress Actions runs are cancelled by the transfer; queued runs are
+  not.** turmeric's live PR run came back 25 x `cancel` / 1 `pass`, while
+  spices' two *queued* runs survived the move still queued. One open PR's run
+  also survived in `in_progress`, so the cancellation is not uniform -- do not
+  infer anything about a PR from it.
+- **A cancelled run re-runs cleanly under the new owner**:
+  `gh run rerun <id> -R turmeric-lang/turmeric` took a
+  `completed/cancelled` run straight to `queued`. No re-push needed. This is
+  also the cheapest way to satisfy 6.1 -- it proves checks still attach.
+
+### O3 -- create the org and pre-stage settings (**DONE 2026-10-02**)
 
 1. ~~Create `turmeric-lang` (Free). Add the personal account as owner.~~
    **Done** -- created 2026-10-02, owner account is org `admin`.
@@ -511,46 +532,73 @@ verified moved, old paths still cloning, workflows intact.
 4. `CMakeLists.txt:219` pulls a turmeric release asset by URL -- redirect-safe
    (O2), so this is a Class B edit, not a blocker.
 
-### O4 -- Tier 3: spices, then turmeric
+### O4 -- Tier 3 and the Class A flip (**LANDED 2026-10-02**)
 
-Per 4.1 -- **spices first, turmeric second, never the reverse.** For each
-repo: Settings -> Transfer ownership, or
+Per 4.1 -- **spices first, turmeric second, never the reverse.** Done in that
+order, with the org path for spices confirmed resolvable before turmeric was
+touched.
 
-```sh
-gh api -X POST repos/rjungemann/<repo>/transfer -f new_owner=turmeric-lang
-```
+O1's consolidation held up exactly as promised: **every Class A file carried
+exactly one owner literal**, so each was a one-line edit.
 
-Then for `turmeric`, in one commit on a branch:
+| File | Literal | Verified |
+| --- | --- | --- |
+| `web/repo.js` | `GH_REPO` (covers 4 web files) | evaluates as ESM; `GITHUB_URL` derives correctly |
+| `tvm/tvm.sh` | `__tvm_gh_repo` default | `bash -n` |
+| `tools/genguides.py` | `GITHUB_URL` | parses |
+| `tools/genspices.py` | `GITHUB_BASE` | parses |
+| `scripts/wait-for-release.sh` | `TURMERIC_REPO` default | `bash -n` |
+| `Formula/turmeric.rb` | the `head` URL | `ruby -c` |
+| `tools/update-mir.sh` | `MIR_REPOSITORY` default | `bash -n` -- **not in the original list**, but `mir` moved too |
+| `.github/workflows/ci.yml` | -- | **nothing**, as predicted (owner-relative) |
 
-Then immediately, in one commit on a branch:
+Also swept in O4 rather than deferred to O5, because they are live
+user-facing instructions rather than prose: `README.md` (CI badge, `brew tap`
+line, `git clone`, security-advisory link) and `web/index.html` (tvm README
+link, `git clone`, Dockerfile link). The `brew` block additionally gained the
+`brew untap rjungemann/turmeric` step from 4.3 -- brew keys its tap cache by
+name and otherwise keeps serving the stale one.
 
-- `web/repo.js`: `GH_REPO = 'turmeric-lang/turmeric'` (covers 4 web files)
-- `tvm/tvm.sh`: the `__tvm_gh_repo` default
-- `tools/genguides.py`: `GITHUB_URL`
-- `tools/genspices.py`: `GITHUB_BASE`
-- `scripts/wait-for-release.sh`: the `TURMERIC_REPO` default
-- `Formula/turmeric.rb`: the `head` URL
-- `.claude/commands/cut-*-release.md`: the `gh attestation verify --repo` owner
-  (3 files) -- **but read 6.2 first**
-- `.github/workflows/ci.yml`: **nothing**
+**The attestation command was NOT a swap** (6.2). `README.md` now shows both
+owners with the rule that the owner follows the *release's vintage*, not where
+the repo lives, because v0.59.0 and earlier are signed as
+`rjungemann/turmeric`. Swapping it would have told every current user that
+their download failed verification. The three `cut-*-release.md` files got the
+same treatment as a sub-bullet.
 
-Then: re-add `SENTRY_DSN` (or set it org-wide first, per 2.1), confirm CI is
-still gated on `main` (6.1). There is **no** web deploy integration to
-reconnect -- the deploy is a local `wrangler deploy` (2.1).
-There is **no** branch protection or ruleset to re-apply -- measured empty on
-all 7 repos (section 2).
+Verified afterwards that the sweep did not overreach: **34 Class C
+`owner/repo#N` references are still present** and `CHANGELOG.md` is untouched,
+which is the property the URL-anchored pattern exists to preserve.
+
+Nothing else was owed at transfer time: `SENTRY_DSN` was already org-wide
+(2.1), there is no web deploy integration to reconnect (2.1), and there is no
+branch protection or ruleset to re-apply (section 2).
 
 ### O5 -- sweep Class B
 
-One commit, after the transfer, applying the 3.2 rule. Not a blind
-`sed`: 40 Class C references would be caught by one. BSD `sed -i` also has no
-`\b`, so use `perl -pi -e` with an explicit URL-shaped pattern:
+**The only step left besides O6.** One commit, applying the 3.2 rule. Not a
+blind `sed`: the 34 surviving Class C references would be caught by one. BSD
+`sed -i` also has no `\b`, so use `perl -pi -e` with an explicit URL-shaped
+pattern.
+
+Scope measured after O4 landed: **~520 owner URLs across 161 files**,
+overwhelmingly `docs/`. The heaviest are
+`docs/guides/value-representations-guide.md` (30),
+`docs/guides/opaques-guide.md` (19) and
+`docs/guides/developing-spices-guide.md` (16). All seven repos have moved, so
+the alternation can now cover every one of them rather than just the two the
+original pattern named:
 
 ```sh
 git grep -Il 'github\.com/rjungemann/' \
   | grep -v CHANGELOG.md \
-  | xargs perl -pi -e 's{github\.com/rjungemann/(turmeric|turmeric-spices)\b}{github.com/turmeric-lang/$1}g'
+  | xargs perl -pi -e 's{github\.com/rjungemann/(turmeric-spices|turmeric-godot|asdf-turmeric|smt-lib-benchmarks|turmeric|trowel|mir)\b}{github.com/turmeric-lang/$1}g'
 ```
+
+Order the alternation longest-first as above: `turmeric` would otherwise match
+the prefix of `turmeric-spices` and leave `github.com/turmeric-lang/turmeric-spices`
+mangled into `.../turmeric-spices` only by luck of `\b`. Spices has its own
+three hardcoded refs (`ci.yml:36,373,404`) to sweep in its own repo.
 
 Then `git diff --stat`, and read the diff before committing -- the pattern is
 URL-anchored precisely so that `rjungemann/turmeric#1002` cannot match.
