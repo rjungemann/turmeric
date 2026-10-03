@@ -60,13 +60,11 @@ version under `~/.tvm/versions/<v>/`.
 > build provenance, which is signed through Sigstore and names the workflow run
 > that produced the bytes:
 >
-> ```sh
-> # Releases built before the 2026-10-02 move to the turmeric-lang org
-> # (v0.59.0 and earlier) -- note `--owner`, not `--repo`:
-> gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
-> # Releases built after it:
-> gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
-> ```
+>     # Releases built before the 2026-10-02 move to the turmeric-lang org
+>     # (v0.59.0 and earlier) -- note --owner, not --repo:
+>     gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
+>     # Releases built after it:
+>     gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
 >
 > The owner is bound into the signature, so the right flag follows the
 > release's **vintage**, not where the repo lives now. A pre-move asset is
