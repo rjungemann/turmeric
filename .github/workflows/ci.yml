@@ -1965,14 +1965,28 @@ jobs:
       # rather than left to be discovered. ci.spec.js (the /ci dashboard) was
       # itself an instance of that trap: it existed, passed locally, and had
       # never run here.
-      # Each non-blocking suite also writes JUnit (one <testcase> per test)
-      # for the timings step below, so the suites get /ci rows like every
-      # ctest suite -- including an honest `status: fail` on a run whose job
-      # stayed green (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
-      - name: Run broader smoke suite (desktop, non-blocking)
+      # Each suite also writes JUnit (one <testcase> per test) for the timings
+      # step below, so both get /ci rows like every ctest suite -- including an
+      # honest `status: fail` on a run whose job stayed green, which is still
+      # reachable for mobile
+      # (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
+      #
+      # BLOCKING since 2026-10-02, which is that report's fix direction 6 and
+      # was left to a human on purpose.  What changed is that the condition it
+      # set -- "once the desktop suite is genuinely clean" -- is now true and
+      # measured rather than asserted: the last standing failure was marked in
+      # docs/reported/docs-offline-cold-pane-never-boots.md, and the /ci
+      # history puts the residual ISOLATED flake at 6 commits in 266 (2.3%),
+      # damped by `retries: 2` in playwright.config.js (see the note there).
+      #
+      # If this does block PRs on flake after all, the honest revert is
+      # `continue-on-error: true` back on this step -- not deleting specs from
+      # the path list below, which lowers the failure count by running less and
+      # is the failure mode that report calls "a regression wearing a fix's
+      # clothes".
+      - name: Run broader smoke suite (desktop) -- BLOCKING
         id: desktop
         working-directory: web
-        continue-on-error: true
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-desktop.xml
         run: npx playwright test --project=desktop --reporter=list,junit
@@ -1983,16 +1997,37 @@ jobs:
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
           tests/security.spec.js tests/ci.spec.js
 
+      # `always()` because the desktop step above now BLOCKS: without it a
+      # desktop failure skips this step, mobile produces no JUnit, and
+      # collect-playwright-timings reports web_mobile as `skip` with "suite did
+      # not run" -- so a desktop regression would silently cost the mobile row
+      # too, and the skip ledger would blame the wrong thing.
+      #
+      # Still non-blocking, and NOT because its tests are worse: mobile's
+      # isolated-flake rate (1.9%) is lower than desktop's and its clean streak
+      # is longer.  The blocker is its precondition -- the WebKit download step
+      # above is itself `continue-on-error`, and when that fails the whole
+      # project dies at `browserType.launch: Executable doesn't exist` before
+      # any test body runs (the post-mortem in that step's own comment).
+      # Gating here would turn a third-party download failure into a blocked
+      # PR, which is infrastructure flake, not a test signal.
       - name: Run mobile smoke suite (non-blocking)
         id: mobile
+        if: always()
         working-directory: web
         continue-on-error: true
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-mobile.xml
         run: npx playwright test --project=mobile --reporter=list,junit
 
-      # A non-blocking failure must still announce itself: on the job summary
-      # and as a workflow annotation, not five thousand lines down a log.
+      # Mobile still needs this: a non-blocking failure must announce itself on
+      # the job summary and as an annotation, not five thousand lines down a
+      # log.  Desktop no longer depends on it to be noticed -- the job is red
+      # -- but it stays in the table so both are read the same way, and its
+      # annotation is `::error` rather than `::warning` to match.
+      #
+      # `outcome` is the step result BEFORE continue-on-error is applied, so it
+      # reads "failure" for either step regardless of which one gates.
       - name: Report browser suite outcomes
         if: always()
         run: |
@@ -2002,11 +2037,11 @@ jobs:
             echo "| suite | outcome |"
             echo "|---|---|"
             echo "| deploy-gate (blocking) | passed |"
-            echo "| desktop (non-blocking) | ${{ steps.desktop.outcome }} |"
+            echo "| desktop (blocking) | ${{ steps.desktop.outcome }} |"
             echo "| mobile (non-blocking) | ${{ steps.mobile.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.desktop.outcome }}" = "failure" ]; then
-            echo "::warning title=Try Turmeric desktop suite failed::non-blocking, but see the playwright-report artifact and the web_desktop row on /ci"
+            echo "::error title=Try Turmeric desktop suite failed::this suite BLOCKS -- see the playwright-report artifact and the web_desktop row on /ci"
           fi
           if [ "${{ steps.mobile.outcome }}" = "failure" ]; then
             echo "::warning title=Try Turmeric mobile suite failed::non-blocking, but see the playwright-report artifact and the web_mobile row on /ci"
@@ -2029,10 +2064,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # `!cancelled()`, not `failure()`: the suites are continue-on-error, so a
-      # failing suite never put the job into a failure state and the report
-      # was uploaded only when nothing had failed -- the one case it was not
-      # needed.  The report is the evidence; upload it every time.
+      # `!cancelled()`, not `failure()`.  Written when BOTH suites were
+      # continue-on-error, so a failing suite never put the job into a failure
+      # state and `failure()` uploaded the report only when nothing had failed
+      # -- the one case it was not needed.  Desktop blocks now, so `failure()`
+      # would cover that one; mobile is still continue-on-error and would still
+      # slip through, and `!cancelled()` covers both without anyone having to
+      # re-derive which suite gates.  The report is the evidence; upload it
+      # every time.
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
