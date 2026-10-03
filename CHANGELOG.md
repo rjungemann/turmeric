@@ -2,6 +2,79 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.60.0] -- 2026-10-03
+
+### Changed
+
+- **The JIT engine is on by default, and MIR is vendored.** `TUR_JIT` defaults
+  ON on 64-bit x86-64 and arm64, with MIR's sources (the three TUs `tur_mir`
+  compiles, 2.7 MB) vendored under `external/mir/` -- no configure step reaches
+  the network. Release archives ship `libtur_mir.a` and run a program through
+  `tur jit` after unpacking, so a host embedding `libturi` has the engine
+  beside it. `tools/update-mir.sh` re-syncs the copy.
+- **A default `tur build` links the prebuilt runtime preamble instead of
+  recompiling it**, on Linux and Windows. `--runtime=auto` swaps the fixed
+  preamble for its decls region and links `libturt_preamble.a` rather than
+  recompiling ~4400 lines in every program: 81-86s -> 73s on a 4-core Linux
+  box over 1/10 of the suite, and 41.1 -> 36.8 min across the Windows CI
+  shards. `auto` quietly keeps the whole preamble when any precondition fails
+  (a sanitizer in `TUR_CC_FLAGS`, `--debug`, wasm, an r7rs prelude split, or
+  either archive missing). `TUR_PREAMBLE_SPLIT=0` opts out; `=1` opts in on
+  macOS, where the split stays opt-in but now links with `-dead_strip`.
+- **A written `: nil` / `: void` makes a defn void.** The body's value used to
+  win, so `(defn noop [x : int] : void (let [_ x] 0))` was emitted as
+  `static int64_t noop(int64_t)`; a body of any other type now runs for effect.
+  Relatedly, a word-result function is refused where a `nil` result is
+  expected -- that mismatch called the function through the wrong C type.
+- **Effect checking reaches code it used to skip.** A `defn` inside a
+  `(defmodule ...)` body, or inside a macro's top-level `(do ...)`, was never
+  resolved or checked, so `#fx{}` on it was a promise nothing read. The
+  `FnDef` index was also a fixed 1024-slot array that silently dropped entries
+  once full, and `#lang r7rs` programs index well past that, so a late
+  callee's inferred effects never reached its callers. An annotation that was
+  silently unchecked may now report a real error.
+- **`stdlib/either.tur` is generic in `(Either L R)`.** `left?`, `right?`,
+  `from-left`, `from-right`, `either`, `either-map` and `either-map-left` take
+  and return `(Either L R)` instead of erasing to `:int`, and
+  `str->int-checked` declares `(Either int int)`. Every caller in the tree
+  passed unchanged, but an `(Either cstr float)` now carries its payloads (the
+  `:int` signatures rejected a float outright), and an int default against an
+  `(Either cstr cstr)` is now `TUR-E0001`.
+- **The repos live in the `turmeric-lang` GitHub org.** Clone URLs, the
+  Homebrew tap (`brew install --HEAD turmeric-lang/turmeric/turmeric`) and the
+  installer name the new owner. Build provenance is bound to the owner that
+  built the asset, so verification follows a release's vintage: v0.59.0 and
+  earlier need `gh attestation verify <asset> --owner rjungemann`, this
+  release and later `--repo turmeric-lang/turmeric`.
+
+### Fixed
+
+- **`Arrow`'s `>>>` / `<<<` are specialized at the call's element types.** The
+  `(->)` instance built its closure once at erased words, calling through
+  `int64_t (*)(void *, int64_t)` while the caller read the result at
+  `(fn [float] float)` -- three indirect calls through the wrong function
+  type, right on x86-64 only by register luck, and the `-fsanitize=function`
+  gate's one known trap. The class now spells its arrows and the instance
+  bodies name the element types.
+- **A class variable mentioned only inside a function-typed parameter counts
+  as reaching a parameter.** `type_mentions_named_tyvar` fell through on
+  `TY_FN`, so a nullary method over such a generic hard-errored.
+- **Refinements and `loop-invariants`:** an early `return` no longer bypasses a
+  return refinement or a `:post` clause, a float field's selector takes its
+  field's sort, `Bool` equality is treated as iff, an unknown note is reported
+  as unknown, and a `#reads` measure passes the CT1 purity gate in every
+  contract position. `loop-invariants` havocs a nested loop's names, prunes an
+  early return's paths, analyses `definstance` methods, and declines
+  top-level lambdas out loud instead of silently.
+- **`with-cancel-guard`** uses the preamble's portable `setjmp`, calls typed
+  closures at their type, and checks nullary results.
+
+### Docs
+
+- The guides gained a comparison of Turmeric typeclasses with OCaml's modular
+  implicits, and `genguides` renders fenced code inside blockquotes and list
+  items as code rather than prose.
+
 ## [0.59.0] -- 2026-10-02
 
 ### Changed
