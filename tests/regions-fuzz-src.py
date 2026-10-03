@@ -413,7 +413,7 @@ def run_arm(tur, build, src, regions_on):
         stats = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
     if "AddressSanitizer" in p.stderr:
         return Outcome("asan", p.stdout, p.stderr, stats)
-    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    if fuzz_arm.is_fnsan_trap(p.returncode):
         return Outcome("fnptr_trap", p.stdout, p.stderr, stats)
     if p.returncode != 0:
         return Outcome("fail", p.stdout, p.stderr, stats)

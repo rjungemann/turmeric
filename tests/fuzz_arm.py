@@ -45,8 +45,24 @@ FNSAN_FLAGS = "-fsanitize=function -fsanitize-trap=function"
 # REPLACES it, so the armed value must restate it.
 TUR_DEFAULT_CC_FLAGS = "-O2 -std=c99 -Wall -fno-strict-aliasing"
 
-# Exit status `tur run` reports for a child killed by SIGILL (128 + 4).
-FNSAN_TRAP_RC = 132
+# Exit status `tur run` reports for a child killed by the sanitizer's trap.
+# clang lowers `-fsanitize-trap=function` per target: `ud2` on x86-64, which
+# raises SIGILL (128 + 4), and `brk` on arm64, which raises SIGTRAP (128 + 5).
+# Both are the same trap, so both classify as one.
+#
+# Only SIGILL was listed here, while `_probe` below already accepted either
+# signal -- so arming SUCCEEDED on arm64 ("canary trapped") while a real
+# mismatch was then misclassified: 133 missed this arm, missed the
+# `(134, 138, 139)` crash arm after it, and landed in the harness's generic
+# bucket as BUG_toolchain_other. Measured on macOS arm64 against
+# Homebrew clang: seed 20261003 case 376 of type-fuzz-src, which the Linux
+# leg of the same seed reports as BUG_fnptr_trap.
+FNSAN_TRAP_RCS = (132, 133)
+
+
+def is_fnsan_trap(rc):
+    """True iff `rc` is how a child killed by the fnsan trap is reported."""
+    return rc in FNSAN_TRAP_RCS
 
 # How a trap is classified.  The detector is exact -- it traps on `bool` vs
 # `int64_t` and on `char *` vs `int64_t` as readily as on `double` vs

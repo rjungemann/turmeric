@@ -1315,7 +1315,7 @@ def run_gate(tur, path, refined):
         return Outcome("clean", p.stdout, proven, refuted)
     # A trapped mismatched function-pointer call.  Without this arm it fell
     # through to "reject" and classify() dropped it as skip_invalid.
-    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    if fuzz_arm.is_fnsan_trap(p.returncode):
         return Outcome("fnptr_trap", p.stdout, proven, refuted)
     # SIGABRT (134) and SIGSEGV (139) both mean the program was built and then
     # died; a contract violation is the 134 case.

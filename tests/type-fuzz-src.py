@@ -1474,7 +1474,7 @@ def run_case(tur, path, src):
                            "emitted C line %d: %s %s value conversion: %s"
                            % (ln, how, kind, text))
         return Outcome("clean", p.stdout, p.stderr)
-    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    if fuzz_arm.is_fnsan_trap(p.returncode):
         return Outcome("fnptr_trap", p.stdout, p.stderr)
     if p.returncode in (134, 138, 139) or p.returncode < 0:
         return Outcome("crash", p.stdout, p.stderr)

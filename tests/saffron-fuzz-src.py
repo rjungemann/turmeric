@@ -746,7 +746,7 @@ def run_case(tur, path, src):
             kind = "value_conv"
             p = subprocess.CompletedProcess(p.args, 0, p.stdout,
                 "emitted C line %d: %s %s value conversion: %s" % (ln, how, ck, text))
-    elif p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    elif fuzz_arm.is_fnsan_trap(p.returncode):
         kind = "fnptr_trap"
     elif p.returncode in (134, 138, 139) or p.returncode < 0:
         kind = "crash"
