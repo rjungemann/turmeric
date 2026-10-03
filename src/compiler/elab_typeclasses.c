@@ -1778,6 +1778,9 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             for (uint8_t j = 0; j < n_mp; j++)
                 scope_add(&def_scope, mp[j]);
             e->fn_body_depth++;
+            /* A default method is its own function (see Elab.ret_contract). */
+            const RetContract *def_saved_ret_contract = e->ret_contract;
+            e->ret_contract = NULL;
 
             /* Elaborate body forms */
             uint32_t n_body = method_form->as.list.len - body_start;
@@ -1790,6 +1793,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
                     body_items[k] = elab_form(e, method_form->as.list.items[body_start + k]);
                     if (!body_items[k]) {
                         e->fn_body_depth--;
+                        e->ret_contract = def_saved_ret_contract;
                         e->scope = def_scope.parent;
                         scope_free(&def_scope);
                         return NULL;
@@ -1802,6 +1806,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             }
 
             e->fn_body_depth--;
+            e->ret_contract = def_saved_ret_contract;
             e->scope = def_scope.parent;
             scope_free(&def_scope);
 
@@ -5234,6 +5239,22 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * method body does not trigger TUR-E0008 (unhandled effect at top level).
          * The handler is expected to be provided at the call site. */
         e->fn_body_depth++;
+        /* early-return-bypasses-return-refinement: a `return` in the method gets
+         * the result checks the whole-body wrap below gives its tail value. */
+        const RetContract *inst_saved_ret_contract = e->ret_contract;
+        e->ret_contract = NULL;
+        {
+            const Binding *rb = mp->method_fd ? mp->method_fd->binding : NULL;
+            if (rb && rb->refine_return_pred && rt_contracts_emitted()) {
+                RetContract *rc = (RetContract *)arena_alloc(e->arena, sizeof(RetContract));
+                memset(rc, 0, sizeof(*rc));
+                rc->ret           = rb->refine_return_pred;
+                rc->ret_var       = rb->refine_return_var;
+                rc->class_ret     = rb->refine_class_ret_pred;
+                rc->class_ret_var = rb->refine_class_ret_var;
+                e->ret_contract = rc;
+            }
+        }
 
         /* saffron-applied-class-var-result-takes-one-instances-type: push a
          * GROUND applied result (`(Option Pt)`, after the class-variable
@@ -5261,17 +5282,19 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
         Expr *method_body = e_nil(e, impl_form->span);
         uint32_t n_body = impl_form->as.list.len - impl_body_start;
         Type *body_expected = e->expected_type;
+        /* loop-invariants-plan: the loops this body registers, decided below. */
+        uint32_t li_start = e->n_loop_inv_sites;
         if (n_body > 0) {
             if (n_body == 1) {
                 method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
-                if (!method_body) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                if (!method_body) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->ret_contract = inst_saved_ret_contract; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
             } else {
                 Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
                 for (uint32_t k = 0; k < n_body; k++) {
                     /* Only the tail form produces the result. */
                     e->expected_type = (k + 1 == n_body) ? body_expected : saved_body_expected;
                     items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
-                    if (!items[k]) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                    if (!items[k]) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->ret_contract = inst_saved_ret_contract; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
                 }
                 method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
                 method_body->as.do_.items = items;
@@ -5281,6 +5304,14 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
         e->expected_type = saved_body_expected;
 
         e->fn_body_depth--;
+        e->ret_contract = inst_saved_ret_contract;
+
+        /* loop-invariants-plan: decide this body's `:invariant` loops the way
+         * elab_defn does, before any contract wraps the body. */
+        li_analyze_method_loops(e, li_start, mp->method_params,
+                                mp->n_method_params,
+                                mp->method_fd ? mp->method_fd->binding : NULL,
+                                impl_form, impl_body_start);
 
         /* CT1: inject this instance method's parameter contract checks, while
          * the method scope is still current (the predicate elaborates in it).

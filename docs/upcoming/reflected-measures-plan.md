@@ -77,10 +77,11 @@ to reflection), and a `match` arm's binders were declared at the result
 refinement's sort instead of their field's, which in a `bool`-returning
 body dropped every `(= t (.tl xs))` as a Bool/Int mismatch -- fixed in
 `rt_prove_paths` as part of this work, since RF4 has nothing to select
-through without those equations. (`(= r true)` as the predicate still
-does not prove where bare `r` does: an equality between two propositions is
-an atom the cube expansion cannot see inside -- the same limitation the
-Bool-measure `iff` encoding works around.) Cost: cube and
+through without those equations. (`(= r true)` as the predicate did not
+prove where bare `r` did -- an equality between two propositions was an atom
+the cube expansion cannot see inside -- until 2026-10-03, when `enc_cmp`
+began encoding a Boolean equality as the `iff` the Bool-measure equation
+already uses.) Cost: cube and
 EUF-term peaks over all 116 pre-existing `refine-*`/`reflect-*` fixtures
 (happy and `errors/`) are **identical before and after** on every fixture
 (max cubes 16, max EUF terms 50; sums 178 and 863; the two new RF4 fixtures
@@ -89,15 +90,22 @@ mentions a reflected measure at a non-ground argument with a tag fact in
 scope. Budget going forward: the same two peaks must not grow on a fixture
 that writes no `^reflect`.
 
-One thing to know about crossings: `rt_collect_path_conds` deliberately
-omits an arm's tag and selector facts for a CALL-SITE crossing (a pattern
-binder that shadows an outer name would inherit its hypotheses in the flat
-namespace), so RF4 fires on return obligations and on crossings only where
-a tag fact reaches the environment some other way. Extending the collector
-with the same shadow veto `let` has is possible and was not done: every
-tag/selector fact is a ufunc, and `refine_model_search` declines any VC
-with one, so pushing them into crossing VCs would turn refuted crossings
-(TUR-E0371 with a model) into unknown ones -- the RF6 item first.
+One thing to know about crossings: since 2026-10-03, `rt_collect_path_conds`
+gives a CALL-SITE crossing an arm's tag and selector facts too, so RF4 fires
+there as it does on return obligations
+([reflect-two-provable-facts-report-as-not-holding](../archive/reflect-two-provable-facts-report-as-not-holding.md)).
+Three guards, because those facts were omitted for real reasons:
+
+- They are added only when the callee's predicate mentions a reflected
+  measure.
+- Within that, they are added only for an arm that connects, transitively,
+  to a variable the argument mentions. Every tag/selector fact is a ufunc,
+  and `refine_model_search` declines a VC carrying one, so adding them to a
+  crossing with a ground, false argument would turn its TUR-E0371 (with a
+  model) into an unknown (`errors/reflect-crossing-ground-false-in-arm`).
+- Any path fact that mentions a name rebound below its level is dropped.
+  This is the flat-namespace hazard. It turned out to be live for nested
+  `let`s already (`errors/refine-crossing-shadowed-let`).
 
 RF6.1's soundness argument, since a spurious refutation would be a wrong
 compile error: the search constructs an interpretation, not a guess. Under
@@ -547,31 +555,38 @@ and it never blocks a release. Reviewed at the v0.59.0 cut (2026-10-02); not
 due, nothing changed. Three things stand between here and graduating, in
 order of how much they should weigh:
 
-1. **RF3's fuzz acceptance, as this plan wrote it.** "Both prior soundness
-   bugs lived in the encoder, so `--n 400` at two seeds is non-optional." The
-   run passes -- measured 2026-10-02 against a v0.59.0 Debug build, seeds 11
-   and 23, 400 cases each, **0 soundness bugs and 0 other BUG classes** (384
-   proven / 734 refuted and 389 / 783 respectively) -- but the only admitted
-   measure the fuzzer generates is `reflect_if`, which is scalar and
-   non-recursive *by design*, so no recursive unfolding, no fuel boundary, no
-   arm selection and no RF4 tag-fact selection is ever generated. The whole
-   RF3/RF4 encoder addition is unfuzzed. Filed as
-   [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../reported/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md),
-   which proposes a `shape_reflect` mirroring `shape_loop`. This is the one
-   item the plan itself already committed to, so it should land whichever way
-   the expiry review goes.
+1. ~~**RF3's fuzz acceptance, as this plan wrote it.**~~ **Discharged
+   2026-10-03.** The 2026-10-02 run passed but never generated a recursive
+   measure, a fuel boundary, or an arm selection
+   ([reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md)).
+   `tests/refine-fuzz-src.py` now has `shape_reflect` (`--only-shape
+   reflect`), and the plan's `--n 400` at two seeds is:
+
+   | run (`--n 400 --mode both`) | seed | cases | proven / refuted | SOUNDNESS | other BUG | suspicious | agree_abort | agree_clean | skip_invalid |
+   | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+   | `--only-shape reflect`, fixed compiler | 11 | 400 | 304 / 2 | **0** | 0 | 0 | 206 | 101 | 91 |
+   | `--only-shape reflect`, fixed compiler | 23 | 400 | 316 / 0 | **0** | 0 | 0 | 203 | 109 | 88 |
+   | `--only-shape reflect`, PR #1034 head (unfixed) | 11 | 400 | 396 / 2 | **23** | 0 | 0 | 183 | 101 | 91 |
+   | `--only-shape reflect`, PR #1034 head (unfixed) | 23 | 400 | 415 / 0 | **26** | 0 | 0 | 177 | 109 | 88 |
+   | mixed population, fixed compiler | 11 | 400 | 412 / 736 | **0** | 0 | 24 | 16 | 4 | 126 |
+   | mixed population, fixed compiler | 23 | 400 | 400 / 776 | **0** | 0 | 18 | 13 | 11 | 120 |
+
+   Its first run found a soundness bug in the selector sorts rather than in
+   reflection
+   ([refine-float-field-selector-declared-int](../archive/refine-float-field-selector-declared-int.md)),
+   fixed the same day. The rows marked "unfixed" are that bug.
 2. **Still no consumer.** Nothing in `stdlib/` or on the v1 track writes
    `^reflect`. Graduating makes always-on a feature with no caller, which
    freezes a surface against zero usage evidence. The three triggers below
    are unchanged and none has fired.
-3. **Two known completeness limits, each a decision about what to freeze.**
+3. ~~**Two known completeness limits, each a decision about what to freeze.**
    `(= r true)` stays unknown where bare `r` proves, and an RF4 fact that
-   proves at a return obligation is unknown at a call-site crossing -- both
-   filed, with mechanisms and fix directions, as
-   [reflect-two-provable-facts-report-as-not-holding](../reported/reflect-two-provable-facts-report-as-not-holding.md).
-   RF6.1 landing may have removed the reason the crossing extension was
-   deferred; that is worth re-deciding before the surface freezes rather than
-   after. RF6.2 (`ENC_MAX_PROPAGATE` as a well-founded budget) remains
+   proves at a return obligation is unknown at a call-site crossing.~~
+   **Resolved 2026-10-03**
+   ([archived report](../archive/reflect-two-provable-facts-report-as-not-holding.md)):
+   a Boolean equality is encoded as an `iff`, and a crossing in a match arm
+   gets the arm's constructor facts behind the guards described under
+   "One thing to know about crossings". RF6.2 (`ENC_MAX_PROPAGATE` as a well-founded budget) remains
    deliberately not done -- no real program has hit the depth-4 cutoff.
 
 ## The trigger for a consumer

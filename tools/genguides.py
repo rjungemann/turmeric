@@ -1240,6 +1240,153 @@ def widen_nested_fences(text: str) -> str:
     return ''.join(out)
 
 
+_FENCE_LINE_RE = re.compile(r'^( {0,3})(`{3,}|~{3,})([^\n]*)$')
+
+
+def dedent_indented_fences(text: str) -> str:
+    """Move a fence indented by 1-3 spaces to column 0.
+
+    CommonMark lets a fence sit at a list item's content column -- two spaces
+    under `- `, three under `2. ` -- and GitHub renders it inside the item.
+    python-markdown's fenced_code only knows a column-0 fence, and its lists
+    want four-space continuation besides, so such a block rendered as running
+    text -- in sixteen guides when this was written, most often as one
+    inline <code> span flattening the snippet into a sentence.  Dedented, it
+    renders as a code block with its language class (so the turmeric/sweet-exp
+    toggles apply), directly after the list item.
+
+    Only fences OUTSIDE a column-0 fenced block are touched: a turmeric block's
+    inline C legitimately holds indented ``` runs.
+    """
+    lines = text.split('\n')
+    out = []
+    i = 0
+    outer = None                           # (char, len) of an open column-0 fence
+    while i < len(lines):
+        ln = lines[i]
+        m = _FENCE_LINE_RE.match(ln)
+        if outer:
+            if m and not m.group(1) and m.group(2)[0] == outer[0] and \
+               len(m.group(2)) >= outer[1] and not m.group(3).strip():
+                outer = None
+            out.append(ln)
+            i += 1
+            continue
+        if not m:
+            out.append(ln)
+            i += 1
+            continue
+        indent, fence = m.group(1), m.group(2)
+        if not indent:
+            outer = (fence[0], len(fence))
+            out.append(ln)
+            i += 1
+            continue
+        # An indented opening fence: find its closer at the same indent.
+        j = i + 1
+        while j < len(lines):
+            c = _FENCE_LINE_RE.match(lines[j])
+            if c and c.group(1) == indent and c.group(2)[0] == fence[0] and \
+               len(c.group(2)) >= len(fence) and not c.group(3).strip():
+                break
+            j += 1
+        if j >= len(lines):                # unclosed: leave it as it is
+            out.append(ln)
+            i += 1
+            continue
+        n = len(indent)
+        for k in range(i, j + 1):
+            row = lines[k]
+            lead = len(row) - len(row.lstrip(' '))
+            out.append(row[min(n, lead):])
+        i = j + 1
+    return '\n'.join(out)
+
+
+_QUOTED_FENCE_OPEN_RE = re.compile(r'^( {0,3}(?:>[ \t]?)+)(`{3,}|~{3,})[^\n`]*$')
+
+
+def unquote_blockquote_fences(text: str) -> str:
+    """Render a fenced block inside a blockquote as code.
+
+    python-markdown's fenced_code is a preprocessor over the whole text, and it
+    only knows a fence that starts at column 0. Inside a blockquote every line
+    starts with `>`, so the fence is never seen: the opening ```sh renders as a
+    literal paragraph, a `# comment` in the snippet becomes an <h1> -- and a
+    TOC entry -- and `<tag>` reaches the HTML as an element.  The source is
+    ordinary CommonMark (GitHub renders it), so the guide is not what is wrong.
+
+    The blockquote parser DOES recurse into block processing, and an indented
+    code block is a block processor, so the fence is rewritten into that form:
+    same quote prefix, four more spaces per line, a bare quoted line in place of
+    each fence (an indented block cannot interrupt a paragraph).  The info
+    string's language is dropped; nothing in a guide highlights by it outside
+    the turmeric/sweet-exp toggles, which never appear quoted.  An unclosed
+    fence is left alone.
+    """
+    lines = text.split('\n')
+    out = []
+    i = 0
+    while i < len(lines):
+        m = _QUOTED_FENCE_OPEN_RE.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        prefix, fence = m.group(1), m.group(2)
+        quote = prefix.rstrip()
+        close_re = re.compile(r'^%s{%d,}[ \t]*$' % (re.escape(fence[0]), len(fence)))
+        body, j, closed = [], i + 1, False
+        while j < len(lines):
+            ln = lines[j]
+            if ln.rstrip() == quote:
+                inner = ''
+            elif ln.startswith(prefix):
+                inner = ln[len(prefix):]
+            else:
+                break                      # the blockquote ended first
+            if close_re.match(inner):
+                closed = True
+                break
+            body.append(inner)
+            j += 1
+        if not closed:
+            out.append(lines[i])
+            i += 1
+            continue
+        out.append(quote)
+        out.extend(quote + '     ' + b if b.strip() else quote for b in body)
+        out.append(quote)
+        i = j + 1
+    return '\n'.join(out)
+
+
+def unrendered_fences(body_html: str) -> list:
+    """Fences the renderer never saw, left in the output as text.
+
+    The signature is a ``` run that STARTS a line of prose -- right after a
+    <p> or <li>, or at the head of a line inside one -- with code spans and
+    <pre> blocks removed first, since backticks legitimately survive there.  A
+    run in the middle of a sentence or a table cell is prose that mentions
+    backticks, not a fence, and is left alone.
+
+    The second signature is the same failure one step later: when the opening
+    fence line is not a fence (an info string fenced_code rejects), the three
+    backticks pair up as an inline code span, so a paragraph OPENS with a
+    <code> that runs across a line break -- the info string and the code,
+    flattened into one sentence.
+
+    Returns a short excerpt per occurrence."""
+    def excerpt(text, m):
+        return text[max(0, m.start() - 40):m.end() + 60].replace('\n', ' ')
+    found = [excerpt(body_html, m)
+             for m in re.finditer(r'<p><code>[^<]*\n', body_html)]
+    prose = re.sub(r'<pre\b.*?</pre>|<code\b.*?</code>', '', body_html, flags=re.S)
+    found += [excerpt(prose, m)
+              for m in re.finditer(r'(?:<p>|<li>|\n)[ \t]*(```)', prose)]
+    return found
+
+
 def _count_toc_entries(tokens: list) -> int:
     return sum(1 + _count_toc_entries(t.get('children', [])) for t in tokens)
 
@@ -1317,6 +1464,9 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
     if meta is None:
         meta = fm_meta
 
+    # First, so the marker stripping below sees a list item's fence too.
+    text = dedent_indented_fences(text)
+
     # Drop every checker marker from an opening fence's info string.
     #
     # `no-check`, `no-manifest-check` and anything check-guide-pairs.py grows
@@ -1331,10 +1481,18 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
                   flags=re.MULTILINE)
     text = strip_manual_toc(text)
     text = widen_nested_fences(text)
+    text = unquote_blockquote_fences(text)
 
     conv = md_lib.Markdown(extensions=['fenced_code', 'tables', 'toc'],
                             extension_configs={'toc': {'permalink': False}})
+    # Keep an ordered list's own first number. A fence inside a list item
+    # (dedented above) ends the list for python-markdown, so the items after
+    # it open a new <ol>, which would otherwise restart at 1. The `lazy_ol`
+    # keyword is ignored by Markdown 3.x, and the sane_lists extension that
+    # sets this also stops `-` and `1.` lists merging, so set it directly.
+    conv.parser.blockprocessors['olist'].LAZY_OL = False
     body_html = conv.convert(text)
+    fence_errors = unrendered_fences(body_html)
     body_html = inject_syntax_toggles(body_html)
     body_html = render_task_lists(body_html)
     body_html = render_mermaid_blocks(body_html)
@@ -1364,6 +1522,7 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
         'body': body_html,
         'toc_tokens': toc_tokens,
         'meta': meta,
+        'fence_errors': fence_errors,
     }
 
 
@@ -1756,6 +1915,17 @@ def main() -> None:
     render_index(categories, all_stems, out_dir, recent=recent,
                  recent_updated=recent_updated)
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
+
+    # A fence the renderer never saw turns the rest of its block into prose --
+    # headings out of `#` comments, elements out of `<placeholders>` -- with
+    # no error.  genpack's fragment check only notices when the stray text
+    # happens to look like an unclosed tag, so fail on the cause here.
+    bad = [(doc['stem'], e) for doc in docs for e in doc.get('fence_errors', [])]
+    for stem, excerpt in bad:
+        print(f'error: {stem}.md: a code fence rendered as text: ...{excerpt}...',
+              file=sys.stderr)
+    if bad:
+        sys.exit(f'error: {len(bad)} unrendered code fence(s); see above')
 
     if args.emit_pack:
         emit_pack_guides(docs, guides_dir, Path(args.emit_pack),

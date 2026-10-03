@@ -1,5 +1,46 @@
 # Two provable `^reflect` facts report as "does not hold for every input"
 
+**RESOLVED 2026-10-03.** All three parts:
+
+- **Shared: the note.** `emit_predicate_note` (`refine_discharge.c`) now
+  takes the verdict. A refutation keeps "does not hold for every input here"
+  (or "is false for the value given here" when closed). An unknown says
+  "could not be proved here, which is not evidence that it fails". This
+  improves every `TUR-W0372` in the language. Two fixtures pinned the old
+  wording on an unknown: `errors/refine-unpropagated-result` and
+  `refine-nonlinear-warn`.
+- **Half 1.** `enc_cmp` (`refine_collect.c`) encodes an equality between two
+  propositions as the operand itself against a `true`/`false` literal (or its
+  negation), and otherwise as the implication pair, the same `iff` that
+  `rf_def` already used for a Bool measure's own equation.
+  `reflect-bool-equality-goal` proves all four spellings under
+  `--strict-refine`. `errors/reflect-bool-equality-refuted` is the control: a
+  wrong one is still refuted with its counterexample.
+- **Half 2.** `rt_collect_path_conds` gives a crossing in a constructor arm the
+  tag fact and the Int-sorted record selector equations, spelled as
+  `rt_prove_paths` spells them. `reflect-crossing-in-match-arm` proves
+  `via-crossing` under `--strict-refine`. Three guards come with it:
+  1. The facts are added only when the callee's predicate mentions a
+     reflected measure (`rt_pred_mentions_reflected`).
+  2. They are added only for an arm that connects, transitively, to a
+     variable the argument mentions (`RtRel`). That keeps the regression this
+     report predicted from happening: a ground, false argument in an arm
+     stays `TUR-E0371` with a model
+     (`errors/reflect-crossing-ground-false-in-arm`). Measured before the
+     guard: it degraded to unknown.
+  3. Any path fact mentioning a name rebound below the level that collected
+     it is dropped (`rt_cs_push` / `rt_rebinds_mentioned`). `_` binders and a
+     binder repeated within one pattern are skipped.
+
+  The third guard fixed a live pre-existing bug on the way. Two nested
+  `let`s of the same name put `x = -5` and `x = 1` into one flat namespace,
+  and the contradiction "proved" `(needs-pos x)` under `--strict-refine`
+  (`errors/refine-crossing-shadowed-let`). The callee's entry check still
+  caught it at runtime, so it was a wrong verdict, not a miscompile.
+
+The original filing follows.
+
+
 **Severity: low-medium (completeness, but the diagnostic text asserts
 something false about the user's code).** Two independent shapes where a
 reflected measure's fact is provable but comes back unknown. Neither is a

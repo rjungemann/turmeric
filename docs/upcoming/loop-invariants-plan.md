@@ -441,7 +441,9 @@ bet and elaboration confirmed it.
   decision 3. Macros that expand to `while` compose for free.
 - **Preservation through arbitrary body control flow** (branching bodies,
   nested loops). Declined conservatively in the first cut; the
-  branching-`let` split is the template if demand appears.
+  branching-`let` split is the template if demand appears. (Since landed for
+  branching bodies, nested loops -- havocked -- and an early `return` -- its
+  paths pruned; see "Left open".)
 
 ---
 
@@ -522,8 +524,12 @@ All six phases, behind `--enable=loop-invariants` (row in
   value given here"); an OPEN counterexample from a walk that dropped a fact is
   TUR-W0372 instead, because it may rest on what was dropped.
 - **Scope of the defn-level pass.** Loops are decided by the enclosing `defn`
-  (so `main` and every ordinary function). A loop in a `definstance` method or
-  a top-level lambda keeps both runtime checks and gets no static verdict.
+  (so `main` and every ordinary function) or `definstance` method, the method's
+  parameter refinements serving as its entry facts. A loop in a top-level
+  `(def f (fn ...))` lambda has no definition to anchor its facts to and may be
+  rebound, so it is **declined**: `TUR-W0372`, both runtime checks kept, and
+  counted in the stats line like any other decline (`li_decline_unanalyzed`).
+  Until 2026-10-03 both forms were silently unanalysed.
 
 ### Pre-existing bugs found and fixed on the way
 
@@ -589,20 +595,22 @@ harness's documented report-only class.
 
 - Graduation, on the experiment lifecycle (the row's `expires_at` forces the
   review, not the date it happens).
-- A nested loop that assigns still declines the outer loop; a `when` guarding
-  an early `return` still declines the whole loop. Both measured and filed
-  2026-10-02 as
-  [loop-invariant-declines-more-than-soundness-requires](../reported/loop-invariant-declines-more-than-soundness-requires.md),
-  which shows each decline is broader than its own reason (an inner-local
-  counter cannot affect the outer invariant; initiation and preservation do
-  not depend on how the loop exits) and that the nested-loop decline path has
-  no fixture.
-- A loop outside a `defn` -- in a `definstance` method or a top-level lambda --
+- ~~A nested loop that assigns still declines the outer loop; a `when` guarding
+  an early `return` still declines the whole loop.~~ **Resolved 2026-10-03**
+  ([archived report](../archive/loop-invariant-declines-more-than-soundness-requires.md)).
+  A nested loop's assigned names are havocked on every path, so the outer loop
+  declines only if one of them is read after it. A `return`'s paths are pruned
+  from the body composition, so initiation and preservation are still proved,
+  and only the post-loop fact is withheld (`LoopInvSite.early_return`).
+  Pinned by `loop-invariant-nested-and-early-return`,
+  `errors/loop-invariant-early-return-refuted`, and the two new cases in
+  `loop-invariant-declines`.
+- ~~A loop outside a `defn` -- in a `definstance` method or a top-level lambda --
   is registered and given both runtime checks but never analysed, and says
-  nothing at any strictness level. Filed as
-  [loop-invariant-silently-unverified-outside-a-defn](../reported/loop-invariant-silently-unverified-outside-a-defn.md).
-  The "Scope of the defn-level pass" note above records the design; the report
-  is that it is silent rather than declined.
+  nothing at any strictness level.~~ **Resolved 2026-10-03**
+  ([archived report](../archive/loop-invariant-silently-unverified-outside-a-defn.md)):
+  methods are analysed, and a top-level lambda is declined out loud. See the
+  "Scope of the defn-level pass" note above.
 - The ECS `for-each` lowering (RE2) is **no longer waiting on this plan, and
   will not be the consumer that fires the trigger above.** C3 landed, and RE2
   was re-measured 2026-10-02 (see its probe update in
@@ -616,11 +624,12 @@ harness's documented report-only class.
   runtime". So RE2 would consume the correctness path only, and is unstarted
   by decision. Trigger 1 above, which is phrased in terms of a profile showing
   the re-check is a real cost, cannot be fired by RE2.
-- **The gap that should be closed before graduating this row** is
+- **The gap that should be closed before graduating this row** was
   [reads-measure-rejected-in-invariant-and-pre](../reported/reads-measure-rejected-in-invariant-and-pre.md):
-  a `#reads` measure is rejected in a `:invariant` by `TUR-E0375` while a
-  parameter refinement accepts it, so no stdlib container's length can appear
-  in an invariant (every stdlib accessor is inline C). The bounded-index walk
-  this plan cites as its motivating example therefore cannot be written
-  against a real container -- only against a bound passed in as a plain
-  `int`.
+  a `#reads` measure was rejected in a `:invariant` by `TUR-E0375` while a
+  parameter refinement accepted it, so no stdlib container's length could
+  appear in an invariant. **Half-closed 2026-10-03:** the gate now accepts a
+  `#reads` measure in every contract position, so the bounded-index walk can be
+  written against a real container and is runtime-checked
+  (`refine-reads-measure-contract-positions`). It is not yet *proved*, even
+  inside `frozen` -- the report lists the three changes that stand in the way.

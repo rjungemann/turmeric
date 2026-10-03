@@ -620,6 +620,17 @@ int fn_type_structurally_compatible(Type actual, Type expected) {
         if (!fn_slot_is_wildcard(af, ak) && !fn_slot_is_wildcard(ef, ek) &&
             !fn_slot_same_carrier(ak, ek))
             return 0;
+        /* word-result-fn-into-nil-slot: a `nil` result is `void` in C, which
+         * is neither carrier, so a word-returning function in a `(fn [...] nil)`
+         * slot is called through the wrong function type (a trap under
+         * -fsanitize=function and WASM's call_indirect).  The reverse -- a
+         * nil-returning function where a word is expected -- is bridged by the
+         * nil_result_word shim, so only this direction is refused.  A written
+         * `: nil` / `: void` makes a defn void (elab_defn), so a function
+         * DECLARED void is never caught by this. */
+        if (!fn_slot_is_wildcard(af, ak) && !fn_slot_is_wildcard(ef, ek) &&
+            ek == TY_NIL && ak != TY_NIL && ak != TY_NEVER)
+            return 0;
     }
     return 1;
 }

@@ -770,7 +770,9 @@ maintains:
 
 `:invariant` goes directly after the condition, at most once (combine
 predicates with `and`). It must be a pure `bool` -- the same purity gate as any
-contract predicate (`TUR-E0375`).
+contract predicate (`TUR-E0375`). A `#reads` measure passes that gate, so an
+invariant can mention a container's length, as `(<= i (vlen v))`. It is
+runtime-checked: the analysis does not prove one yet.
 
 **It is a contract first.** The invariant is checked on entry and again as the
 last statement of every iteration; a failure panics with
@@ -829,9 +831,24 @@ variables the analysis cannot see is reported (`TUR-W0372`, `is not analysed sta
 both checks:
 
 - an assignment through a place (`(set! (.f s) v)`) or to an atom;
-- an early exit (`return`, `?`, a captured continuation) -- `(not c)` would
-  not hold on that path;
-- a nested loop that assigns, or a body `let` that rebinds a name in scope;
+- an early exit other than `return` (`?`, a captured continuation), a
+  `return` in a nested loop, or one the body composer cannot place (inside a
+  call's argument, a `match` arm);
+- a body `let` that rebinds a name in scope, or a nested loop whose assigned
+  name is read after it (its value there is unknown).
+
+Two shapes look like they should decline and do not:
+
+- **A nested loop is havocked, not declined.** Nothing it assigns has a
+  known value afterwards, but that only matters to code that reads one of
+  those names again. An inner counter (`(let [^mut j 0] (while ...))`) costs
+  nothing. An outer name it assigns leaves only the conjuncts that mention
+  that name unproved.
+- **A `return` in the body is pruned.** The paths through it leave the
+  function, so they owe no re-establishment, and initiation and preservation
+  are still proved. Only the post-loop fact `p AND (not c)` is withheld from
+  the code after the loop, because the condition may still hold where the
+  body returned.
 - a variable the loop depends on that is **borrowed** anywhere in the function
   (`(& x)`, `&mut x` -- a callee can write through it), or **assigned inside a
   lambda or an effect-handler clause** (a call can then change it with no
@@ -887,6 +904,12 @@ note: the predicate (> r 0) does not hold for every input here
 note: counterexample: x = -2
 help: (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) }
 ```
+
+That predicate note is a claim against your code, so it appears only on a
+refutation, where a counterexample exists. An unknown (`TUR-W0372`) gets a
+different note instead: `the predicate ... could not be proved here, which is
+not evidence that it fails`. The solver declining to decide says nothing about
+whether the code is right.
 
 The `help:` line is **not a heuristic**. It is a second query through the same
 solver seam: a candidate fact is asserted as a hypothesis and the chain is
@@ -1158,9 +1181,18 @@ anyway.
   than soundness -- the callee's own entry check always remains:
   a caller whose body **assigns** anywhere (a condition naming a reassigned
   variable may no longer hold at the call); a **constructor tag or field
-  selector**, since those arrive with pattern binders; a `let` that binds a
-  **function**, which is not an arithmetic fact; and a call reachable by more
-  than one route, which a macro sharing a node can produce.
+  selector**, except where a reflected measure needs one (below); a `let`
+  that binds a **function**, which is not an arithmetic fact; and a call
+  reachable by more than one route, which a macro sharing a node can produce.
+
+  The constructor exception is for `^reflect` measures. When the callee's
+  predicate mentions a reflected measure, an arm that connects to a variable
+  the argument mentions contributes `(= (#dt/tag s) k)` and its Int-sorted
+  record selectors, so RF4 can select the arm, as it does for a return
+  obligation. It is no wider than that, because those symbols switch off the
+  model search that produces a counterexample. A fact that names a variable
+  rebound further down the path is dropped: at the call, the name means the
+  inner binding.
 - **[by design] A crossing under a shadowing binder is abandoned, not answered.** The
   encoder has one flat namespace, so an argument naming a shadowed variable
   would inherit the outer one's hypotheses -- `(let [x (- x x)] (sdiv 10 x))`
@@ -1205,7 +1237,17 @@ anyway.
   prove -- so an effectful predicate makes behaviour depend on whether its own
   contracts were compiled in. Reported only on PROVEN impurity: a predicate
   calling a function whose body the purity walk does not model (a field read, a
-  loop) is left alone, since a wrong "impure" would reject working code.
+  loop) is left alone, since a wrong "impure" would reject working code. A
+  direct call to a `#reads` measure is not counted either: it only reads, so
+  running it is not observable (see
+  [stateful-refinements-guide](stateful-refinements-guide.md#codegen-and-enforcement)).
+- **[by design] A function that can `return` early is not proved.** Its
+  refined return and `:post` are reported unknown (`TUR-W0372`, "the body can
+  leave early through `return`") and checked at runtime on every exit, the
+  early `return`s included. Proving only the last body form would cover the
+  fall-through path and nothing else. Until 2026-10-03 that is exactly what
+  happened, and the early value went unchecked
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/early-return-bypasses-return-refinement.md)).
 - **[by design] Decisions are memoized within a compilation unit**, keyed by a fingerprint
   of the normalized VC under alpha-renaming, and every hit is confirmed by
   structural comparison before its verdict is reused. Repeating the same

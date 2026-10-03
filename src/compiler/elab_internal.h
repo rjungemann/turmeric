@@ -1082,7 +1082,27 @@ typedef struct Elab {
     struct LoopInvSite    *loop_inv_sites;
     uint32_t               n_loop_inv_sites;
     uint32_t               cap_loop_inv_sites;
+    /* The result checks of the function whose body is being elaborated, which
+     * elab_return applies to each `(return v)` -- an early return leaves
+     * before the whole-body wrap (rt_wrap_return_check) ever sees a value.
+     * NULL when there are none, when contracts are not emitted, and inside any
+     * nested function body (a lambda's `return` is the lambda's). */
+    const struct RetContract *ret_contract;
 } Elab;
+
+/* See Elab.ret_contract.  Each predicate is NULL when absent; they are applied
+ * in this order, the same order the whole-body wrap nests them. */
+typedef struct RetContract {
+    const struct Form *post;           /* `:post`, bound as `result` */
+    const struct Form *ret;            /* a refined return type */
+    const char        *ret_var;
+    const struct Form *class_ret;      /* an instance method: its class's promise */
+    const char        *class_ret_var;
+} RetContract;
+
+/* Wrap a returned value in the enclosing function's result checks (see
+ * Elab.ret_contract); `value` unchanged when there are none. */
+struct Expr *rt_check_returned_value(Elab *e, struct Expr *value, Span span);
 
 /* loop-invariants-plan: one `(while c :invariant p body...)`.
  *
@@ -1111,6 +1131,11 @@ typedef struct LoopInvSite {
     bool                analyzed;
     bool                entry_proven;
     bool                pres_proven;
+    /* The body can leave through `return`.  Initiation and preservation do
+     * not depend on how the loop exits, so they are still decided (the paths
+     * through a `return` are pruned); only the post-loop fact `p AND (not c)`
+     * is withheld from what follows the loop. */
+    bool                early_return;
     const char        **assigned;     /* names the loop assigns (valid when proven) */
     uint32_t            n_assigned;
 } LoopInvSite;
@@ -1137,6 +1162,17 @@ void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_param
                       const uint32_t *ct_param_param_idx, uint32_t n_ct_param_preds,
                       const struct Form *ct_pre_form, const struct Form *body,
                       const char *fn_name);
+
+/* The same for a `definstance` method: `mb` is the method's binding (its
+ * refinement arrays are the entry facts), `impl_form` the method's form, and
+ * `body_start` the index of its first body form. */
+void li_analyze_method_loops(Elab *e, uint32_t from, Binding **params,
+                             uint32_t n_params, const Binding *mb,
+                             const struct Form *impl_form, uint32_t body_start);
+
+/* After the whole unit: decline (TUR-W0372) every loop site no definition
+ * analysed -- a top-level lambda's -- so none is silently unverified. */
+void li_decline_unanalyzed(Elab *e);
 
 /* CT0: a contract type in ANNOTATION position contributes its BASE type to the
  * signature; the predicate rides separately, as an entry check and (under

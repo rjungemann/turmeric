@@ -1,0 +1,43 @@
+;; reads-measure-rejected-in-invariant-and-pre, the negative control: the CT1
+;; gate narrowed for a `#reads` measure, it did not disappear.  `vec-len` is
+;; inline C with no `#reads` annotation, so it is still TUR-E0375 in all four
+;; contract positions -- and so is an impure term beside a `#reads` measure:
+;; only the measure's own call is exempt, never its neighbours or an
+;; unannotated wrapper around it.
+(defn tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn vlen [^borrow v : (Vec int)] #reads v : int
+  (vec-len v))
+
+(defn wrapped-vlen [^borrow v : (Vec int)] : int
+  (vlen v))
+
+(defn on-param [^borrow v : (Vec int) i : #refine{ x : int | (< x (vec-len v)) }] : int
+  i)
+
+(defn on-pre [^borrow v : (Vec int) n : int] : int
+  :pre (<= n (vec-len v))
+  n)
+
+(defn on-return [^borrow v : (Vec int) n : int] : #refine{ r : int | (<= r (vec-len v)) }
+  n)
+
+(defn on-invariant [^borrow v : (Vec int)] : int
+  (let [^mut i 0]
+    (while (< i (vec-len v)) :invariant (<= i (vec-len v))
+      (set! i (+ i 1)))
+    i))
+
+(defn beside-reads [^borrow v : (Vec int) n : int] : int
+  :pre (and (<= n (vlen v)) (>= (tick) 0))
+  n)
+
+(defn via-wrapper [^borrow v : (Vec int) n : int] : int
+  :pre (<= n (wrapped-vlen v))
+  n)
+
+(defn main [] : int 0)
