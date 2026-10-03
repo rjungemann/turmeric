@@ -56,6 +56,12 @@ brew tap turmeric-lang/turmeric https://github.com/turmeric-lang/turmeric
 brew install --HEAD turmeric-lang/turmeric/turmeric
 ```
 
+**The tap URL is not optional.** `brew tap user/repo` resolves to
+`github.com/user/homebrew-repo`, and there is no `homebrew-turmeric` repo --
+`Formula/turmeric.rb` lives in this one. Spelling the URL out is what points
+the tap at the right place; without it the tap fails before `install` is
+reached.
+
 The Homebrew formula is **`--HEAD`-only**: it builds whatever is on `main` at
 that moment and verifies no checksum. That is useful for tracking development
 and is not what you want for an ordinary install. See the
