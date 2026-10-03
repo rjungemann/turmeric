@@ -654,10 +654,17 @@ static bool outward_receivers_in_s(const CTerm *t) {
         case CT_PERFORM:  return outward_receivers_in_s(t->as.perform.body);
         case CT_RESUME:   return outward_receivers_in_s(t->as.resume.body);
         case CT_CLONEABLE:
-            if (t->as.cloneable.recv_outward &&
-                !(t->as.cloneable.receiver &&
-                  binding_cps_reachable(t->as.cloneable.receiver)))
-                return false;
+            if (t->as.cloneable.recv_outward) {
+                /* A closure receiver (shape 2 of serial-receiver-effect-under-
+                 * if-closure-or-leaf) is called through its lifted lambda's
+                 * twin, so that lambda is what must be in S. */
+                const Binding *rb = t->as.cloneable.receiver;
+                const Expr *rx = t->as.cloneable.receiver_expr;
+                if (!rb && rx && rx->kind == EX_CLOSURE && rx->as.closure_.closure &&
+                    rx->as.closure_.closure->fn)
+                    rb = rx->as.closure_.closure->fn->binding;
+                if (!(rb && binding_cps_reachable(rb))) return false;
+            }
             return outward_receivers_in_s(t->as.cloneable.body);
         case CT_CALLCC:   return outward_receivers_in_s(t->as.callcc.body);
         case CT_LOOP:     return outward_receivers_in_s(t->as.loop.body);
@@ -3954,6 +3961,21 @@ static void eff_acc_add_callee(EffAcc *acc, const Binding *b) {
  * Effects are dynamically scoped -- a `perform` and its `handle` must run on the
  * same machine (both DK, or both fiber) -- so this set is what the fixpoint
  * compares across every top-level function. */
+
+/* serial-receiver-effect-under-if-closure-or-leaf (shape 2): may an effect
+ * escape this closure receiver's body?  The same test cps_ir.c's
+ * fn_effect_may_escape applies to a named receiver: its declared row, else
+ * its inferred one, is not runtime-pure. */
+static bool serial_closure_recv_escapes(const FnDef *fd) {
+    if (!fd) return false;
+    if (fd->binding && fd->binding->type.kind == TY_FN
+        && !effect_row_is_runtime_pure(fd->binding->type.as.fn.effect_row))
+        return true;
+    if (!fd->inferred_effect_row) return true;
+    return !effect_row_is_runtime_pure(fd->inferred_effect_row);
+}
+static const Expr *peel_fn_value(const Expr *e);
+
 static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
     if (!e) return;
     #define REC(x) expr_collect_effects_acc((x), acc)
@@ -4188,7 +4210,27 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         case EX_CLONEABLE_RESET:  REC(e->as.cloneable_reset_.body); return;
         case EX_CLONEABLE_SHIFT:  REC(e->as.cloneable_shift_.k_fn); REC(e->as.cloneable_shift_.body); return;
         case EX_SERIAL_RESET:     REC(e->as.serial_reset_.body); return;
-        case EX_SERIAL_SHIFT:     REC(e->as.serial_shift_.k_fn); REC(e->as.serial_shift_.body); return;
+        case EX_SERIAL_SHIFT: {
+            /* serial-receiver-effect-under-if-closure-or-leaf (shape 2): a
+             * CAPTURING closure receiver an effect escapes is called OUTWARD,
+             * through its env-taking `__cps` twin (emit_serial_outward_call), so
+             * the reset's own continuation -- and the handlers above it -- is
+             * its downstream chain.  That twin exists only for a lambda in the
+             * threadable set, and this use is exactly a threading one: the call
+             * is a tail call on the reset's continuation (tier `now`). */
+            const Expr *kf = peel_fn_value(e->as.serial_shift_.k_fn);
+            if (acc->multi && kf && kf->kind == EX_CLOSURE
+                && kf->as.closure_.closure && kf->as.closure_.closure->fn
+                && serial_closure_recv_escapes(kf->as.closure_.closure->fn)) {
+                int sl = fvm_slot(acc->multi, kf->as.closure_.closure->fn->binding);
+                if (sl >= 0) {
+                    acc->multi->ok[sl]++;
+                    if ((int)PT_NOW > acc->multi->tier[sl])
+                        acc->multi->tier[sl] = (int)PT_NOW;
+                }
+            }
+            REC(e->as.serial_shift_.k_fn); REC(e->as.serial_shift_.body); return;
+        }
         /* async / STM */
         case EX_ASYNC:      REC(e->as.async_.fn_expr); return;
         case EX_AWAIT:      REC(e->as.await_.fut_expr); return;
@@ -9402,13 +9444,66 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
                 t->as.cloneable.x.type, t->as.cloneable.body, NULL, caps);
     free(xn);
     char *envexpr = emit_cont_env(ce, jname, caps);
-    char *fn = callee_name(t->as.cloneable.receiver);
     const char *kty = serial_recv_kty(ce, t);
-    ce_line(ce, "return %s__cps((%s)(intptr_t)%s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
-                " /* serial reset: outward receiver */",
-            fn, kty, kchain, jname, envexpr, ce->cur_k);
+    if (t->as.cloneable.receiver_expr) {
+        /* serial-receiver-effect-under-if-closure-or-leaf (shape 2): a closure
+         * receiver.  Its value is emitted here, at the reset site, so its
+         * captures are read from the visible locals (or the lifted env), and
+         * its lifted lambda's `__cps` twin takes that value as the env it
+         * reads them through -- the same first argument the direct thunk
+         * gets on the native path (emit_cl_shift_bodyfn). */
+        const Expr *f = t->as.cloneable.receiver_expr;
+        int saved = ce->ctx->indent;
+        ce->ctx->indent = ce->indent;
+        char *fval = emit_value(ce->ctx, ce->out, f);
+        ce->ctx->indent = saved;
+        const FnDef *lfd = f->as.closure_.closure->fn;
+        char *thunk = raw_name_for_binding(lfd->binding);
+        const char *envty = lfd->closure && lfd->n_params > 1
+                          ? emit_param_ctype(ce->ctx, (FnDef *)lfd, 0) : NULL;
+        if (envty)
+            ce_line(ce, "return %s__cps((%s)(intptr_t)(%s), (%s)(intptr_t)%s,"
+                        " __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                        " /* serial reset: outward closure receiver */",
+                    thunk, envty, fval, kty, kchain, jname, envexpr, ce->cur_k);
+        else
+            ce_line(ce, "return %s__cps((%s)(intptr_t)%s,"
+                        " __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                        " /* serial reset: outward closure receiver */",
+                    thunk, kty, kchain, jname, envexpr, ce->cur_k);
+        free(thunk);
+        free(fval);
+    } else {
+        char *fn = callee_name(t->as.cloneable.receiver);
+        ce_line(ce, "return %s__cps((%s)(intptr_t)%s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                    " /* serial reset: outward receiver */",
+                fn, kty, kchain, jname, envexpr, ce->cur_k);
+        free(fn);
+    }
     free(envexpr);
-    free(fn);
+    /* serial-receiver-effect-under-if-closure-or-leaf (shape 1): with an `if`
+     * branch point in the context, the shift arm above ends in the outward
+     * call, and the PURE arm delivers its value -- the outer frames re-applied,
+     * exactly as the native lowering yields it -- into the same lifted rest.
+     * Both arms then share one continuation: the rest is emitted once, and an
+     * effect performed further down it still reaches the handlers above. */
+    if (t->as.cloneable.if_cond) {
+        ce->indent--;
+        ce_line(ce, "} else {");
+        ce->indent++;
+        char *pv = emit_cloneable_pure_arm(ce, t);
+        char *sv = slot_store_reap(ce->ctx, t->as.cloneable.x.ty,
+                                   t->as.cloneable.x.type, pv);
+        char *env2 = emit_cont_env(ce, jname, caps);
+        ce_line(ce, "return dk_run(__dk_reap_node(dk_frame_resume(%s, %s, %s)), %s);"
+                    " /* serial reset: pure arm into the outward rest */",
+                jname, env2, ce->cur_k, sv);
+        free(env2);
+        free(sv);
+        free(pv);
+        ce->indent--;
+        ce_line(ce, "}");
+    }
 }
 
 static void emit_cloneable(CE *ce, const CTerm *t) {

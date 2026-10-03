@@ -1718,10 +1718,10 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
     bool recv_outward = false;
     const Binding *recv = marshal_named_receiver(b, cur, serial, &recv_outward);
     const Expr *recv_expr = NULL;
-    /* The outward lowering runs the receiver on the reset's own continuation,
-     * so the context must be a straight frame list: an `if` branch point would
-     * need that continuation on both arms. */
-    if (recv_outward && saw_if) SK_REJECT();
+    /* The outward lowering runs the receiver on the reset's own continuation.
+     * An `if` branch point needs that continuation on both arms: the emitter
+     * lifts the rest once and delivers the pure arm into it
+     * (serial-receiver-effect-under-if-closure-or-leaf, shape 1). */
     if (!recv) {
         /* U7: a CLOSURE receiver (capturing or not).  Shape 1 calls it directly at
          * the reset site; Shape 2 threads it through the dk_shift body env -- the
@@ -1741,8 +1741,18 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
          * threaded through here. */
         const struct Closure *rcl = kf->as.closure_.closure;
         const Binding *rfb = (rcl && rcl->fn) ? rcl->fn->binding : NULL;
-        if (!rfb || (callee_colored(b, rfb) && fn_effect_may_escape(b, rfb)))
-            SK_REJECT();
+        if (!rfb) SK_REJECT();
+        if (callee_colored(b, rfb) && fn_effect_may_escape(b, rfb)) {
+            /* serial-receiver-effect-under-if-closure-or-leaf (shape 2): a
+             * serial closure receiver is called outward too -- through its
+             * env-taking `__cps` twin, which the emitter registers because
+             * this use makes the lambda threadable.  Classification evicts the
+             * function if the twin was not emitted after all (Rule D,
+             * outward_receivers_in_s), so the fallback's TUR-E0706 still
+             * names it then. */
+            if (!serial) SK_REJECT();
+            recv_outward = true;
+        }
     }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
