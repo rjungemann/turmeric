@@ -1,5 +1,48 @@
 # The `^reflect` fuzz population never reaches the RF3/RF4 encoder work
 
+**RESOLVED 2026-10-03.** Fix directions 1, 2 and 4 are done. Direction 3
+keeps `reflect_if` and `reflect_lie` where they are.
+
+`tests/refine-fuzz-src.py` has a `shape_reflect`. It declares a `defdata`
+list and four recursive `^reflect` measures over it with `match`: `fz-len`,
+`fz-sum`, `fz-allpos?`, and `fz-sorted?`, which nests a match. Its rungs:
+
+- ground and parameter-headed literals of depth 0..11, which cross the default
+  fuel of 8 both ways;
+- RF4 arm selection from a list parameter refined by a measure;
+- a sabotaged sibling per rung: off-by-one goals, a zeroed head, a bumped head;
+- a `^non-exhaustive` measure (RF2) and an inline-C measure (RF1's purity
+  half), which must be rejected.
+
+`--only-shape reflect` runs it at density, without random helpers or extra
+targets. In mixed runs it has 3% of the slice that was `shape_random`'s, the
+way `shape_loop` was carved out. Float mode uses only dyadic literals, so a
+sum is exact in double and
+[float-proofs-assume-exact-reals](../reported/float-proofs-assume-exact-reals.md)
+does not surface as noise.
+
+**Its first 20 cases found a soundness bug**, and it was not in the
+reflection encoder. A `float` record field's selector was declared Int, so
+every VC that mentioned one was contradictory and proved its goal. The unfixed
+compiler gives 23 and 26 `BUG_soundness` at the two seeds below, all float
+lists. Fixed in the same change and filed as
+[refine-float-field-selector-declared-int](refine-float-field-selector-declared-int.md).
+The reflection encoder itself came through clean.
+
+RF3's acceptance, as the plan wrote it, measured 2026-10-03:
+
+| run (`--n 400 --mode both`) | seed | cases | proven / refuted | SOUNDNESS | other BUG | suspicious | agree_abort | agree_clean | skip_invalid |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `--only-shape reflect`, fixed compiler | 11 | 400 | 304 / 2 | **0** | 0 | 0 | 206 | 101 | 91 |
+| `--only-shape reflect`, fixed compiler | 23 | 400 | 316 / 0 | **0** | 0 | 0 | 203 | 109 | 88 |
+| `--only-shape reflect`, PR #1034 head (unfixed) | 11 | 400 | 396 / 2 | **23** | 0 | 0 | 183 | 101 | 91 |
+| `--only-shape reflect`, PR #1034 head (unfixed) | 23 | 400 | 415 / 0 | **26** | 0 | 0 | 177 | 109 | 88 |
+| mixed population, fixed compiler | 11 | 400 | 412 / 736 | **0** | 0 | 24 | 16 | 4 | 126 |
+| mixed population, fixed compiler | 23 | 400 | 400 / 776 | **0** | 0 | 18 | 13 | 11 | 120 |
+
+The original filing follows.
+
+
 **Severity: medium (a non-optional acceptance criterion is not met, in the one
 place the plan names as highest-risk).**
 [reflected-measures-plan](../upcoming/reflected-measures-plan.md) RF3 states

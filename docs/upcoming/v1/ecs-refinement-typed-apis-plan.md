@@ -866,9 +866,12 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 >    precondition* is an unchecked out-of-range index into a buffer: memory
 >    unsafety produced by a prover mistake. Both historical refinement
 >    soundness bugs lived in the encoder, and as of 2026-10-02 the encoder's
->    newest work (`^reflect`'s RF3/RF4) has no differential fuzz coverage at
+>    newest work (`^reflect`'s RF3/RF4) had no differential fuzz coverage at
 >    all -- see
->    [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../../reported/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md).
+>    [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md).
+>    (Closed 2026-10-03 by `shape_reflect`, whose first run found a third
+>    encoder soundness bug -- a float field's selector declared Int -- fixed
+>    the same day.)
 >    **Closing that gap is a prerequisite, not a nicety**, if proofs are going
 >    to be load-bearing for memory safety. A bisection hatch
 >    (`TUR_<NAME>=0` re-enabling every suppressed check) and a harness kept on

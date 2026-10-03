@@ -555,19 +555,26 @@ and it never blocks a release. Reviewed at the v0.59.0 cut (2026-10-02); not
 due, nothing changed. Three things stand between here and graduating, in
 order of how much they should weigh:
 
-1. **RF3's fuzz acceptance, as this plan wrote it.** "Both prior soundness
-   bugs lived in the encoder, so `--n 400` at two seeds is non-optional." The
-   run passes -- measured 2026-10-02 against a v0.59.0 Debug build, seeds 11
-   and 23, 400 cases each, **0 soundness bugs and 0 other BUG classes** (384
-   proven / 734 refuted and 389 / 783 respectively) -- but the only admitted
-   measure the fuzzer generates is `reflect_if`, which is scalar and
-   non-recursive *by design*, so no recursive unfolding, no fuel boundary, no
-   arm selection and no RF4 tag-fact selection is ever generated. The whole
-   RF3/RF4 encoder addition is unfuzzed. Filed as
-   [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../reported/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md),
-   which proposes a `shape_reflect` mirroring `shape_loop`. This is the one
-   item the plan itself already committed to, so it should land whichever way
-   the expiry review goes.
+1. ~~**RF3's fuzz acceptance, as this plan wrote it.**~~ **Discharged
+   2026-10-03.** The 2026-10-02 run passed but never generated a recursive
+   measure, a fuel boundary, or an arm selection
+   ([reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md)).
+   `tests/refine-fuzz-src.py` now has `shape_reflect` (`--only-shape
+   reflect`), and the plan's `--n 400` at two seeds is:
+
+   | run (`--n 400 --mode both`) | seed | cases | proven / refuted | SOUNDNESS | other BUG | suspicious | agree_abort | agree_clean | skip_invalid |
+   | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+   | `--only-shape reflect`, fixed compiler | 11 | 400 | 304 / 2 | **0** | 0 | 0 | 206 | 101 | 91 |
+   | `--only-shape reflect`, fixed compiler | 23 | 400 | 316 / 0 | **0** | 0 | 0 | 203 | 109 | 88 |
+   | `--only-shape reflect`, PR #1034 head (unfixed) | 11 | 400 | 396 / 2 | **23** | 0 | 0 | 183 | 101 | 91 |
+   | `--only-shape reflect`, PR #1034 head (unfixed) | 23 | 400 | 415 / 0 | **26** | 0 | 0 | 177 | 109 | 88 |
+   | mixed population, fixed compiler | 11 | 400 | 412 / 736 | **0** | 0 | 24 | 16 | 4 | 126 |
+   | mixed population, fixed compiler | 23 | 400 | 400 / 776 | **0** | 0 | 18 | 13 | 11 | 120 |
+
+   Its first run found a soundness bug in the selector sorts rather than in
+   reflection
+   ([refine-float-field-selector-declared-int](../archive/refine-float-field-selector-declared-int.md)),
+   fixed the same day. The rows marked "unfixed" are that bug.
 2. **Still no consumer.** Nothing in `stdlib/` or on the v1 track writes
    `^reflect`. Graduating makes always-on a feature with no caller, which
    freezes a surface against zero usage evidence. The three triggers below

@@ -1423,6 +1423,50 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
             }
             return true;
         }
+        /* A RECORD FIELD SELECTOR `.f`.  Pure like the constructor it reads,
+         * but its SORT is the field's.  Falling through to the abstract-measure
+         * default declared every selector Int, so a `float` field's axiom
+         * `(= (.a (FB 0.5 p)) 0.5)` -- or a written `(= (.a v) 0.5)` hypothesis
+         * -- said an integer equals 0.5: a contradiction, which proved every
+         * goal and elided its check.  `(let [x (FB 0.5 p)] 3)` "proved"
+         * `(= r 7)` and returned 3.
+         *
+         * One sort per name, across every record that has such a field: the
+         * field's own when they agree; Real when Int and Real fields share the
+         * name (an integer is a Real, so this only forgoes integer reasoning);
+         * and no answer when a Bool field shares it with a number -- the
+         * encoder then refuses the mixed equality rather than tightening a
+         * Bool into an Int. */
+        if (name[0] == '.' && name[1] != '\0') {
+            const char *fnm = name + 1;
+            bool any = false, has_int = false, has_real = false, has_bool = false;
+            for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+                const AdtDef *adt = e->adt_defs[ai];
+                if (!adt) continue;
+                for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+                    const CtorDef *c = adt->ctors[ci];
+                    if (!c || !c->name || !c->is_record) continue;
+                    for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+                        if (!c->fields[fi].name || strcmp(c->fields[fi].name, fnm) != 0)
+                            continue;
+                        any = true;
+                        VCSort s = rt_sort_of_kind(c->fields[fi].kind);
+                        if (s == VS_REAL)      has_real = true;
+                        else if (s == VS_BOOL) has_bool = true;
+                        else                   has_int  = true;
+                    }
+                }
+            }
+            if (any && !(has_bool && (has_int || has_real))) {
+                out->ret_pred    = NULL;
+                out->ret_var     = NULL;
+                out->param_names = NULL;
+                out->n_params    = 0;
+                out->pure        = true;
+                out->ret_sort    = has_bool ? VS_BOOL : has_real ? VS_REAL : VS_INT;
+                return true;
+            }
+        }
         /* Genuinely nothing: an abstract measure -- an uninterpreted
          * mathematical function, which the language defines as congruent. */
         return false;
