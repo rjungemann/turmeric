@@ -601,6 +601,53 @@ the prefix of `turmeric-spices` and leave `github.com/turmeric-lang/turmeric-spi
 mangled into `.../turmeric-spices` only by luck of `\b`. Spices has its own
 three hardcoded refs (`ci.yml:36,373,404`) to sweep in its own repo.
 
+### O5a -- what a `github.com/`-anchored sweep cannot match (**LANDED 2026-10-02**)
+
+The pattern above is anchored on `github.com/rjungemann/<repo>`, which is what
+makes it safe -- it cannot touch the Class C `owner/repo#N` cross-references.
+The cost is that **every reference spelling the owner WITHOUT that host prefix
+survives it**, and those are disproportionately the ones that matter: not doc
+links, but commands and links a reader will actually run.
+
+Two shapes, six occurrences, all found only by grepping for `rjungemann/` and
+subtracting the `github.com/` and `githubusercontent.com/` hits:
+
+| Shape | Where |
+| --- | --- |
+| bare `owner/repo` in a CLI command | `brew install --cask rjungemann/trowel/trowel` x3 (`web/trowel/index.html`), `gh codespace create --repo rjungemann/turmeric` (`web/index.html`) |
+| a host that is not `github.com` | `codespaces.new/rjungemann/turmeric` (`README.md`, `web/index.html`) |
+
+`web/trowel/index.html:352` is the whole problem on one line: the sweep
+rewrote the `github.com/turmeric-lang/trowel/releases/latest` link in that
+paragraph and left the `rjungemann/trowel` tap name in the `step-code` block
+directly above it, so the page advertised two different owners for the same
+product.
+
+So after the URL sweep, run the complement and read it by hand:
+
+```sh
+git grep -In 'rjungemann/' \
+  | grep -v 'github\.com/rjungemann/' \
+  | grep -v 'githubusercontent\.com/rjungemann/' \
+  | grep -vE 'rjungemann/[a-zA-Z0-9._-]*#[0-9]'
+```
+
+What that turns up is mostly **deliberate** and must stay, which is why it
+wants eyes rather than another `perl -pi`:
+
+- the attestation vintage flags and `users/rjungemann/attestations/...`, a
+  path a transfer genuinely does not move (section 6.2);
+- the `brew untap rjungemann/<tap>` migration lines -- naming the OLD tap is
+  the point, since Homebrew keys its tap cache by name and a user who only
+  runs the new command keeps getting the stale one;
+- CHANGELOG entries, `docs/archive/` records, `benchmarks/*/RESULTS.md`
+  measurement provenance, and `cmake/mir.cmake`'s "copied from the
+  rjungemann/mir fork" note.
+
+Trowel's page gained the same untap note the README already carried for the
+turmeric tap; a moved cask has the identical stale-cache problem and had no
+note at all.
+
 Then `git diff --stat`, and read the diff before committing -- the pattern is
 URL-anchored precisely so that `rjungemann/turmeric#1002` cannot match.
 
