@@ -309,9 +309,13 @@ KNOWN_PROBES = [
     # entry), and effect-annotated fn params are fat-normalized like every
     # other nominal fn param.  Kept as a FIXED regression probe; pinned by
     # tests/fixtures/effect-capturing-closure-thin-param/.
+    # `Write` is declared (an undeclared row name is TUR-E0026) and main's row
+    # names IO because it prints (`println` is #fx{IO}) -- the same two edits
+    # that fixture got; without them the probe reads `fires (reject)`.
     ("poly-result-hof-capturing-closure-sigbus (effect row)",
+     "(defeffect Write [s :cstr] :nil)\n"
      "(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))\n"
-     "(defn main [] #fx{Write} : int\n"
+     "(defn main [] #fx{Write IO} : int\n"
      "  (let [k 7] (println (run (fn [] #fx{Write} : int (+ k 1)))))\n  0)\n"),
     # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
     # archived; probe retired -- pinned by
@@ -1869,7 +1873,7 @@ def main():
         n_trap = counts.get("FNPTR_TRAP", 0)
         if n_trap:
             print("  fn-pointer traps (report)   : %d   "
-                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
+                  "(TUR_FUZZ_FNSAN_STRICT=0: report-only)" % n_trap)
         print("  known open reports (report) : %d" % n_known)
         # A seam reject is the elaborator refusing a payload it cannot carry --
         # the outcome the session report asks for -- so it is reported, not

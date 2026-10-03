@@ -248,6 +248,10 @@ jobs:
           restore-keys: |
             ccache-test-${{ runner.os }}-
 
+      # The DEFAULT configuration, which carries the MIR JIT engine since
+      # TUR_JIT defaulted ON (2026-10-02) -- so these parts test what ships.
+      # The two engine-only suites that registers are run by the `jit` job, not
+      # here (tests/ctest-parts.py OTHER_JOB).
       - name: Configure (Debug + ASAN)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
@@ -597,17 +601,22 @@ jobs:
   jit:
     name: JIT engine (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # The MIR JIT engine had NO CI coverage at all: the `test` job configures
-    # without -DTUR_JIT=ON, so `tur_jit_fixture_tests` and `tur_repl_spice_jit`
-    # never register (CMakeLists.txt:634-655 gates both on TUR_JIT) and the
-    # whole engine shipped untested on every platform.  Every macOS JIT number
-    # in docs/upcoming/jit-engine-j0-findings.md was hand-measured on someone's
-    # laptop as a result.
+    # The MIR JIT engine had NO CI coverage at all until this job: the `test`
+    # job configured without -DTUR_JIT=ON, so `tur_jit_fixture_tests` and
+    # `tur_repl_spice_jit` never registered (CMakeLists.txt gates both on
+    # TUR_JIT) and the whole engine shipped untested on every platform.  Every
+    # macOS JIT number in docs/upcoming/jit-engine-j0-findings.md was
+    # hand-measured on someone's laptop as a result.
     #
-    # This is a SEPARATE job rather than a flag on `test`, for three reasons:
-    #   1. TUR_JIT makes configure fetch MIR over the network (cmake/mir.cmake
-    #      FetchContent, full clone of a pinned fork).  Folding that into the
-    #      main gate would make a GitHub/network blip fail every PR.
+    # TUR_JIT has defaulted ON since 2026-10-02 (MIR is vendored under
+    # external/mir/), so the `test` job builds the engine too and registers
+    # both suites.  It still does not RUN them: tests/ctest-parts.py lists them
+    # in OTHER_JOB, which names this job, and its --check reads this job's -R
+    # pattern below to confirm the claim.  So the engine's corpus runs here and
+    # only here, for these reasons:
+    #   1. (Retired 2026-10-02.)  TUR_JIT used to make configure clone MIR over
+    #      the network, and folding that into the main gate would have made a
+    #      GitHub/network blip fail every PR.  The vendored copy ended that.
     #   2. tur_jit_fixture_tests re-runs the whole ~2500-fixture corpus through
     #      the engine.  It is fast (~2 min on Apple Silicon, run serially and
     #      fanned out internally), but it is a second full corpus pass and
@@ -625,11 +634,11 @@ jobs:
     #      TUR_TEST_SHARD="i/N" for exactly that, guarded by the
     #      tur_shard_partition test; adding the axis is the gating decision
     #      described on the `test` job above, not a plumbing one.
-    #   3. The `jit` experiment graduated 2026-08-17, but the ENGINE is still
-    #      opt-in at build time (-DTUR_JIT=ON) and `cc` is still the default
-    #      engine, so this leg exercises a configuration most builds do not
-    #      have.  It should not gate merges at the same strength as the AOT
-    #      suite, which covers what everyone actually ships.
+    #   3. The `jit` experiment graduated 2026-08-17 and every default build now
+    #      carries the engine, but `cc` is still the default ENGINE, so the
+    #      programs people run go through the AOT suite's path.  This leg covers
+    #      the engine itself, which only `tur jit` / `--engine jit` / the REPL
+    #      reach.
     #
     # 60, raised from 45 on 2026-10-01: the whole-ctest alarm below went to
     # 2550s to stay above tur_jit_fixture_tests' raised per-test TIMEOUT, and
@@ -681,6 +690,8 @@ jobs:
           restore-keys: |
             ccache-jit-${{ runner.os }}-
 
+      # -DTUR_JIT=ON although it is the default: this job exists to run the
+      # engine, so it must not follow the default if that ever moves.
       - name: Configure (Debug + JIT)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
@@ -1015,6 +1026,71 @@ jobs:
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-whole-preamble-${{ runner.os }}-${{ github.sha }}
+
+  # The fixture corpus under clang's -fsanitize=function (trap mode): every
+  # indirect call the emitted C makes must go through a function pointer of
+  # EXACTLY the callee's type.  WASM's call_indirect traps on any difference,
+  # and on a `double` or a 16-byte `any` the native build answers wrong
+  # silently -- the longest-running wrong-answer family this repo has had.
+  # The corpus reached zero on 2026-10-02 (docs/archive/
+  # emitted-c-indirect-calls-are-not-type-exact.md), so this is a GATE: a
+  # failing fixture here is a new mismatched call.  tests/run-fnsan.sh proves
+  # the detector armed with a canary first, so it cannot pass vacuously.
+  fnsan:
+    name: Indirect-call type check (clang -fsanitize=function)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache clang
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-fnsan-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-fnsan-${{ runner.os }}-
+
+      # The compiler under test is the ordinary Debug build (gcc, ASan), as
+      # in `test`; only the fixture programs are compiled with clang.
+      - name: Configure + build (Debug)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build -j
+
+      # The Debug libturi.a is compiled with gcc's ASan, which clang cannot
+      # link against: the fixtures that use it would fail to build and drop
+      # out of the count.  An unsanitized one keeps them in.
+      - name: Build an unsanitized libturi.a
+        run: |
+          cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build-nosan -j --target libturi
+
+      - name: Suite under -fsanitize=function
+        run: |
+          set -o pipefail
+          CC=clang TUR_FNSAN_LIB_DIR=build-nosan/src bash tests/run-fnsan.sh 2>&1 | tee /tmp/fnsan-run.log
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-fnsan-${{ runner.os }}-${{ github.sha }}
 
   # Phase 3A/4 of docs/archive/suite-timing-trends-plan.md.
   #
@@ -1372,9 +1448,10 @@ jobs:
     # BUILD + SMOKE, and a separate job rather than a step on `windows:`.
     #
     # Nothing on Windows compiled the JIT sources at all until this existed:
-    # the `windows` job configures without -DTUR_JIT=ON, so src/jit_engine.c and
+    # the `windows` job configured without -DTUR_JIT=ON, so src/jit_engine.c and
     # src/turi/jit_ffi.c were unguarded by CI on the one platform whose headers
-    # differ most.  That is how jit_ffi.c reached main with an unguarded
+    # differ most.  (Since TUR_JIT defaulted ON, 2026-10-02, `windows` builds
+    # the engine as well; this job is still the only one that RUNS it there.)  That is how jit_ffi.c reached main with an unguarded
     # <dlfcn.h>, which MinGW does not ship -- the Windows JIT build was simply
     # broken and no job noticed.
     #
@@ -1390,7 +1467,7 @@ jobs:
     # back to cc only on Windows.  See docs/reported/windows-jit-corpus-not-in-ci.md.
     #
     # Separate job so it runs in parallel with `windows:` rather than adding its
-    # MIR fetch and build onto that job's ~30 minutes.
+    # smoke checks onto that job's ~30 minutes.
     defaults:
       run:
         shell: msys2 {0}
@@ -1416,8 +1493,9 @@ jobs:
           cc --version | head -1
           cmake --version | head -1
 
-      # TUR_JIT makes configure fetch MIR over the network (cmake/mir.cmake),
-      # which is why this is not folded into the default Windows build.
+      # -DTUR_JIT=ON although it is the default (vendored MIR, no network):
+      # this job exists to guard the engine, so it must not follow the default
+      # if that ever moves.
       - name: Configure (Debug + JIT)
         run: >-
           cmake -S . -B build-win-jit -G Ninja

@@ -1,7 +1,10 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
 > **Status: WP1 and WP2 DONE (2026-09-29); WP3, WP4, WP5 and WP6 DONE
-> (2026-09-30); WP7, WP8 PROPOSED.** Written 2026-09-30
+> (2026-09-30); WP7, WP8 PROPOSED.** WP8's decision is made (2026-10-02):
+> `#fx{Unsafe}` is Option A, pointer arithmetic only -- see open question 3
+> and [effect-row-honesty-plan](effect-row-honesty-plan.md); its lint-default
+> bullet is still open. Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
 > every row there is a *candidate* until the work package that owns it
@@ -163,7 +166,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | M-4 | medium | **FIXED (WP4)**, residue filed as `docs/reported/httpd-residual-request-hardening.md` -- fixture `httpd-request-hardening`; fuzz target `fuzz_httpd_head`. `httpd`: `Content-Length` is `(int)strtol` into `malloc(content_len + 1)` with no cap (`stdlib/httpd.tur:293, 329, 2491`); `Transfer-Encoding` ignored (smuggling behind a proxy); static-file traversal guard is `strstr(path, "..")` with `stat` not `lstat` (`:4143-4200`); binds `INADDR_ANY` by default (`:720`). Multipart (`:2102-2176`) and Basic auth (`:1963, 2014`) unreviewed. |
 | M-5 | medium | **FIXED by WP5** (section 2d), with 26 more sites the sweep found. `read-async` does `malloc((size_t)bytes + 1)` with an unchecked, possibly negative `int` (`src/turi/fiber.c:763`); `tur_string_substring`/`slice` compute `start + len > n` with signed overflow (`src/runtime/tur_string.c:183, 300`); `n_from_bytes` accepts `len > strlen` (`src/turi/string_native.c:25-30`); `sb_reserve` doubles unchecked (`tur_string.c:238-243`); `bytes-alloc` `malloc(8 + (size_t)n)` with negative `n` (`stdlib/serial.tur:56-62`); `alloca(n * 8)` with user `n` in `stdlib/sized-buf.tur:445, 484` (gated `#fx{Unsafe}`). |
 | M-6 | medium (silent UAF class) | **FIXED by WP5** (section 2d): one survey site confirmed -- as a class, not a site -- three retired, and a second class the survey did not have. Region escape hooks missing, per the CLAUDE.md rule: `tur_hamt_transient_set` (`src/runtime/hamt.c:1879`, from `stdlib/hamt.tur:740`), `tvar/write`/`tvar/swap` (`stdlib/stm.tur:88, 109`; `src/runtime/stm.c` has no note), `sized-buf-set!` (`sized-buf.tur:307`), `sized-matrix-set!` (`:232`), `sized-bitvec-set!` (`sized-bits.tur:139`), `httpd-resp-header-add!` (`httpd.tur:1281`). Each is a candidate use-after-rewind on the default build. |
-| M-7 | info | The effect system is not a security boundary today: `--strict-effects` defaults off and only warns (`src/runtime/globals.c:135`); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. |
+| M-7 | info | The effect system is not a security boundary today, though one half of it is enforced. **Enforced:** calling an `#fx{Unsafe}` function outside `(unsafe ...)` is a hard error unless the caller declares `#fx{Unsafe}` (which propagates); `(unsafe ...)` discharges the obligation and erases the row, by design (Option A, decided in [effect-row-honesty-plan](effect-row-honesty-plan.md) section 3). **Not enforced by default:** `--strict-effects` is opt-in and warns (`-Werror=strict-effects` makes it fail the build); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. Because wrappers erase the row, `Unsafe` cannot answer "what may corrupt memory on bad input". |
 
 ### Web (WP6)
 
@@ -185,7 +188,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | C-4 | medium | Release assets are unsigned: no Sigstore/cosign, no GitHub build-provenance attestation, tags are `git tag -a` not `-s` (`.claude/commands/cut-*-release.md`). `softprops/action-gh-release@v2` runs floating with `contents: write` (`release.yml:338-355`). |
 | C-5 | medium | No workflow pins an action to a SHA; `mymindstorm/setup-emsdk@v14` with `version: latest` (`ci.yml:134, 1470`); `msys2/setup-msys2@v2`; `pip install` unpinned (`ci.yml:105, 1467`; `release.yml:286`); `ci.yml:152-157` clones `turmeric-spices` default branch unpinned and compiles it; `ci.yml` has no top-level `permissions:` (default token scope everywhere except `publish-timings`' `contents: write`, `:762-765`); ccache `restore-keys` prefixes (`:112, 1454`). |
 | C-6 | low | **`inputs.seed` half FIXED (WP4)**, in passing, while adding the parser job to the same file: the seed goes through `env:` with a digits check. The `issues: write` scope is WP7's. `fuzz.yml:75` interpolates `${{ inputs.seed }}` directly into a `run:` block (dispatch-only, so needs write access already; `inputs.n` at `:87` uses the safe `env:` form). Workflow has `issues: write` and `GITHUB_TOKEN` for `gh issue create` (`:41-43, 122+`). |
-| C-7 | low | `cmake/mir.cmake:138-160` fetches MIR from the personal fork `rjungemann/mir.git` (SHA-pinned; JIT-only, default off). `examples/snake` pins raylib by tag. `Dockerfile` uses `ubuntu:22.04` by tag; `.devcontainer/Dockerfile` has two `curl \| bash` installs. |
+| C-7 | low | MIR comes from the personal fork `rjungemann/mir.git`: until 2026-10-02 `cmake/mir.cmake` fetched it at configure time (SHA-pinned; JIT-only, default off); since then a copy is vendored under `external/mir/` (fork commit in `external/mir/UPSTREAM`, re-synced by `tools/update-mir.sh`) and `TUR_JIT` defaults ON, so it ships in every default build. `examples/snake` pins raylib by tag. `Dockerfile` uses `ubuntu:22.04` by tag; `.devcontainer/Dockerfile` has two `curl \| bash` installs. |
 | C-8 | low | Committed to git: `.claude/settings.local.json` (with a broad `Bash(xargs cat *)` allow), a `.claude/projects/.../memory/project_er6.md`, and `TEMP.md`. Missing: `SECURITY.md`, `CODEOWNERS`, `.github/dependabot.yml`, CodeQL/scanning workflow, and any private-vulnerability-reporting setting. |
 
 ## 2a. WP1's verification pass (2026-09-29)
@@ -1613,11 +1616,12 @@ Linux and macOS), and the mermaid pin WP6 handed over in section 2f.
 
 ### WP8 -- Effects as a stated boundary (1 day, decision-heavy)
 
-- Decide what `#fx{Unsafe}` promises (section 7). If it is meant as a
-  trust marker -- "this function can corrupt memory on bad input" -- then
-  the deserializers in M-1/M-5 need it, and the survey's list is the
-  backlog. If it is purely about pointer arithmetic, say so, and the
-  security guide stops mentioning it.
+- ~~Decide what `#fx{Unsafe}` promises (section 7).~~ **DECIDED 2026-10-02:
+  Option A, pointer arithmetic only** ([effect-row-honesty-plan](effect-row-honesty-plan.md)
+  section 3). The marker describes a body, `(unsafe ...)` discharges it and
+  erases the row, so the M-1/M-5 deserializers are not retro-tagged. The
+  security guide says so in one section, "What the effect system does and
+  does not promise", including what *is* enforced.
 - Consider defaulting `--lint-inline-c-unsafe` on once `stdlib/` is clean
   (a follow-on to `docs/reported/stdlib-int-stand-in-audit.md`'s sweep).
 - **Exit:** one paragraph in the security guide, and a decision recorded
@@ -1726,8 +1730,12 @@ checklist, not a gate.
    `bytes->serial-cont/verified` could still be added later without breaking
    anything. It would be the natural home for the HMAC the guestbook
    hand-rolls in inline C, if a second program ever needs one.
-3. **`#fx{Unsafe}` semantics** (WP8): pointer arithmetic only, or "may
-   corrupt memory on bad input"?
+3. ~~**`#fx{Unsafe}` semantics** (WP8): pointer arithmetic only, or "may
+   corrupt memory on bad input"?~~ **ANSWERED 2026-10-02: pointer arithmetic
+   only (Option A).** It is what is built and what every stdlib call site
+   assumes, and `(unsafe ...)`-as-discharge is load-bearing; the two readings
+   are mutually exclusive on one marker. A propagating "tainted input" marker
+   would be a separate feature under its own name.
 4. **Try Turmeric:** keep `CAP_ALL` behind the browser sandbox (proposed),
    or run the wasm env sandboxed too for defence in depth?
 5. **Installer:** keep Homebrew as the primary channel (with a stable

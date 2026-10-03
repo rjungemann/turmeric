@@ -507,7 +507,7 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
      * mismatch).  See the M2-completion primitive-payload construct path.
      *
      * Phase 5 carrier-bridge deletion: NEVER apply the cross-spec fallback to
-     * a `#{Construct}` callee.  emit_call_name disambiguates a construct only
+     * a `^construct` callee.  emit_call_name disambiguates a construct only
      * by the exact Expr* recording (a by-value spec and the carrier base
      * differ ONLY in return ABI), so the same shared `(some ...)` Expr*
      * recorded under a by-value option_map spec must NOT be reported as
@@ -564,7 +564,7 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     if (e->as.call_.n_args == 0) {
         return NULL;
     }
-    /* Same disambiguation for an N-arg `#{Construct}` callee (`(ok x)` /
+    /* Same disambiguation for an N-arg `^construct` callee (`(ok x)` /
      * `(err e)` / `(some x)`): a by-value spec and the int64 carrier base differ
      * ONLY in return ABI, not in argument types, so the structural by-args match
      * below cannot tell them apart.  The per-Expr* recording (handled above) is
@@ -1418,7 +1418,7 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
  * fn_body_tail_is_carrier_producer (ascribe/do/if/let), delegating the leaf
  * decision to expr_emits_byvalue_carrier_abi.
  *
- * Post-M2, a #{Construct} helper (ok/err/some/none) specialized at a concrete
+ * Post-M2, a ^construct helper (ok/err/some/none) specialized at a concrete
  * call site lowers to its by-value `*__spec__*` clone, so a body whose tail is
  * `(ok (make-struct ...))` hands back the struct by value.  The carrier->concrete
  * return-deref in emit_fns.c must NOT fire for such a body -- dereferencing an
@@ -1492,7 +1492,7 @@ static bool call_ordinary_defn_byval_aggregate(EmitCtx *ctx, const Expr *call,
         return false;
     if (!fb->is_global || fb->is_poly_fn || fb->poly_type) return false;
     if (fb->body_is_inline_c) return false;  /* handled by the inline-C seam */
-    /* A `#{Construct}` template (some/none/ok/err) has context-dependent
+    /* A `^construct` template (some/none/ok/err) has context-dependent
      * lowering: in a carrier-returning context (e.g. inside a generic
      * `option_map` spec) it emits its bare int64-carrier base `some(..)`, not
      * the by-value monomorph -- so it is NOT unconditionally a by-value
@@ -2543,7 +2543,7 @@ static char *fat_dispatch_box_arg(EmitCtx *ctx, Buf *body, const Expr *arg,
  * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
  * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
  * the tail is a carrier producer whose by-value aggregate return is nonetheless
- * EMITTED as the int64 carrier (an inline-C / #{Construct} producer under the
+ * EMITTED as the int64 carrier (an inline-C / ^construct producer under the
  * defstruct-as-defadt lowering), `emit_value` yields the carrier handle but the
  * temp is the by-value aggregate -- deref it carrier->concrete so the assign
  * type-checks.  emit_if_value applies the same bridge per arm inline; this is the
@@ -3234,7 +3234,7 @@ const char *match_binder_c_type(const Type *t) {
  *
  * A binding whose declared C type is a by-value aggregate can be initialised by
  * a producer whose C return is the uniform int64 carrier -- an inline-C body
- * declared `: (Result T E)`, a #{Construct} helper, an instance method. Emitting
+ * declared `: (Result T E)`, a ^construct helper, an instance method. Emitting
  * `T x = <int64_t>;` is a hard cc error, so the carrier has to be dereferenced
  * into the aggregate first.
  *
@@ -4440,7 +4440,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool only_then_diverges = then_has_return_or_throw && else_no_return;
     bool only_else_diverges = else_has_return_or_throw && then_no_return;
     /* Phase 5 carrier-bridge deletion: if either arm is a by-value Option/Result
-     * producer (a monomorphized #{Construct} spec), the merge temp must be that
+     * producer (a monomorphized ^construct spec), the merge temp must be that
      * by-value struct -- the if's own `e->type` is collapsed to the int64
      * carrier, so the default temp decl would type it int64 and the by-value arm
      * would `cc`-mismatch.  Declare the temp by-value and bridge each
@@ -6314,7 +6314,7 @@ static char *fat_closure_tyvar_sink_adapter(EmitCtx *ctx, const Expr *inner,
         Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sk, i));
         apc[i] = (ctx->fat_box_sink_erased_mask & ARG_IDX_BIT(i))
             ? "int64_t"
-            : (type_is_b4box_closure_slot(pt) ? "int64_t" : type_c_name(pt));
+            : thunk_param_slot_c_name(pt);
     }
     const char *crc = typed_ok ? thunk_result_slot_c_name(rt) : "int64_t";
     Type srt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sk));
@@ -9271,7 +9271,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * int)`), which the narrower wide-ADT test passed by
                          * value to a shim that dereferenced it. */
                         slot_is_wide[i] = type_is_b4box_closure_slot(arg_slot_ty[i]);
-                        arg_ct[i] = slot_is_wide[i]
+                        /* fnsan-ptr-void-fn-slot-word: a `ptr<void>` or fn
+                         * slot is the word; TUR_APPLY's per-argument cast
+                         * converts a pointer argument. */
+                        arg_ct[i] = (slot_is_wide[i] ||
+                                     type_is_word_closure_slot(arg_slot_ty[i]))
                                         ? "int64_t"
                                         : emit_type_c_name(ctx, arg_slot_ty[i]);
                         if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
@@ -10221,8 +10225,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * an int64 box pointer, and fat_dispatch_box_arg
                              * above already converted the argument. */
                             buf_printf(&out, ", %s",
-                                type_is_b4box_closure_slot(arg_types[i])
-                                    ? "int64_t" : type_c_name(arg_types[i]));
+                                thunk_param_slot_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -10241,7 +10244,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             (arg->type.kind == TY_FN || arg->type.kind == TY_PTR_VOID)) {
                             needs_ptr_cast = true;
                         }
-                        if (needs_ptr_cast) {
+                        if (type_is_word_closure_slot(arg_types[i])) {
+                            /* fnsan-ptr-void-fn-slot-word: the slot is the
+                             * word. */
+                            buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        } else if (needs_ptr_cast) {
                             buf_printf(&out, ", (void *)(intptr_t)(%s)", arg_strs[i]);
                         } else {
                             buf_printf(&out, ", %s", arg_strs[i]);
@@ -10497,7 +10504,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             /* SR-fat-abi: see the CY2 twin above. */
                             buf_printf(&out, ", %s",
                                 type_is_b4box_closure_slot(emit_resolve_type(ctx, arg_types[i]))
-                                    ? "int64_t" : type_c_name(arg_types[i]));
+                                    ? "int64_t" : thunk_param_slot_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -10551,7 +10558,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool ptr_into_carrier = !slot_is_ptr && slot_cty &&
                             strcmp(slot_cty, "int64_t") == 0 &&
                             val_len > 0 && val_cty[val_len - 1] == '*';
-                        if (slot_is_ptr && var_is_int64_carrier) {
+                        if (type_is_word_closure_slot(arg_types[i])) {
+                            /* fnsan-ptr-void-fn-slot-word: a `ptr<void>` or
+                             * fn slot is the word, whatever the argument is
+                             * held as. */
+                            buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        } else if (slot_is_ptr && var_is_int64_carrier) {
                             buf_printf(&out, ", (%s)(intptr_t)(%s)", emit_type_c_name(ctx, arg_types[i]), arg_strs[i]);
                         } else if (!slot_is_ptr && (arg_is_fat_box || ptr_into_carrier)) {
                             buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
@@ -13071,7 +13083,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
                      /* CONV-S1 seam 4 (carrier-producer arg -> by-value spec
                       * param): the arg is a direct call to a carrier producer -- an
-                      * inline-C / #{Construct} / `__inst_` method whose by-value
+                      * inline-C / ^construct / `__inst_` method whose by-value
                       * ADT-app result (`(Result bool cstr)` / `(Option Device)`
                       * under lowering) is EMITTED as the int64 carrier, so its
                       * `emit_arg->type` reads by-value (type_uses_carrier_abi
@@ -13216,7 +13228,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_free(&cast);
                     }
                 }
-                /* Option none-as-NULL retirement (Track A): a `#{Construct}`
+                /* Option none-as-NULL retirement (Track A): a `^construct`
                  * result (`some`/`none`/`ok`/`err`, which stay on the int64
                  * carrier base) passed straight into a PLAIN (non-spec) callee
                  * whose declared param is a concrete by-value Option/Result --
@@ -13231,7 +13243,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * historical NULL-deref segfault.
                  *
                  * Scoped TIGHTLY -- only when (a) the arg is itself a call to a
-                 * `#{Construct}` template (the some/none/ok/err carrier
+                 * `^construct` template (the some/none/ok/err carrier
                  * producers, the documented gap), AND (b) the param's struct
                  * family is Option or Result (the only families the bridge's
                  * canonical `tur_option_t`/`tur_result_box_t` field-wise
@@ -16848,6 +16860,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * converts at the word boundary instead of the raw
                          * slot 0 (ensure_fat_word_adapter). */
                         char *wadapt = NULL;
+                        bool wadapt_cast = false;
                         const Expr *ci = e->as.poly_wrap_.inner;
                         while (ci && ci->kind == EX_ASCRIBE) ci = ci->as.ascribe_.inner;
                         const FnDef *cfd = (ci && ci->kind == EX_CLOSURE &&
@@ -16862,7 +16875,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             for (uint8_t ci2 = 0; ci2 < cn; ci2++) {
                                 Type pt = emit_resolve_type(ctx,
                                     emit_fn_arg_type_from_type(cty, (uint8_t)(ci2 + 1)));
-                                pcs[ci2] = type_is_b4box_closure_slot(pt)
+                                pcs[ci2] = (type_is_b4box_closure_slot(pt) ||
+                                            type_is_word_closure_slot(pt))
                                     ? "int64_t" : emit_type_c_name(ctx, pt);
                             }
                             Type rt = emit_resolve_type(ctx,
@@ -16871,7 +16885,53 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                                 : thunk_result_slot_c_name(rt);
                             wadapt = ensure_fat_word_adapter(ctx, rcs, pcs, cn);
                         }
-                        if (wadapt)
+                        /* fnsan-narrow-fat-value-into-concrete-carrier: a fat
+                         * value whose lambda this site cannot see -- the
+                         * result of `(l2f2 ...)`, a `(fn [] int16)` -- still
+                         * has slot 0 at the SLOT convention (a narrow result
+                         * widened, thunk_result_slot_c_name), while a
+                         * concrete (phase F) sink calls `.fn` at the narrow
+                         * type (`__tur_poly_to_fat0_int16_t`).  The thunk_
+                         * binding arm above adapts exactly this when it knows
+                         * the lambda; key the same adapter on the value's own
+                         * type here.  Found by the type fuzzer
+                         * (closure_ret,deep,scalar_int16,through,thunk). */
+                        if (!wadapt && !cfd && !thunk_binding &&
+                            !e->as.poly_wrap_.boxes_aggregate &&
+                            !(ctx->poly_wrap_callee_carrier &&
+                              (e->as.poly_wrap_.carrier_erased_arg_mask ||
+                               e->as.poly_wrap_.carrier_erased_result ||
+                               e->as.poly_wrap_.carrier_erased_result_hkt)) &&
+                            ci && ci->type.kind == TY_FN &&
+                            ci->type.as.fn.arity <= MAX_FN_ARITY) {
+                            Type vty = ci->type;
+                            uint8_t vn = (uint8_t)vty.as.fn.arity;
+                            Type vres = emit_resolve_type(ctx,
+                                emit_fn_result_type_from_type(vty));
+                            const char *vcpc[MAX_FN_ARITY], *vapc[MAX_FN_ARITY];
+                            bool v_ok = vres.kind != TY_FN && vres.kind != TY_NIL &&
+                                type_kind_is_poly_concrete(vres.kind);
+                            for (uint8_t i = 0; i < vn && v_ok; i++) {
+                                Type pt = emit_resolve_type(ctx,
+                                    emit_fn_arg_type_from_type(vty, i));
+                                if (!type_kind_is_poly_concrete(pt.kind)) v_ok = false;
+                                vcpc[i] = thunk_param_slot_c_name(pt);
+                                vapc[i] = emit_type_c_name(ctx, pt);
+                            }
+                            const char *vcrc = v_ok ? thunk_result_slot_c_name(vres) : NULL;
+                            const char *varc = v_ok ? emit_type_c_name(ctx, vres) : NULL;
+                            if (v_ok && strcmp(vcrc, varc) != 0)
+                                wadapt = ensure_call_adapter_ex(
+                                    ctx, ctx->thunk_typedefs ? ctx->thunk_typedefs
+                                                             : ctx->file,
+                                    NULL, vcrc, vcpc, varc, vapc, vn);
+                            wadapt_cast = wadapt != NULL;
+                        }
+                        if (wadapt && wadapt_cast)
+                            buf_printf(&out, "(tur_poly_fn_t){ %s, "
+                                             "(int64_t(*)(void*,int64_t))%s }",
+                                       tmp, wadapt);
+                        else if (wadapt)
                             buf_printf(&out, "(tur_poly_fn_t){ %s, %s }", tmp, wadapt);
                         else
                             buf_printf(&out,
@@ -17062,7 +17122,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     er = ib->source_fn_def->inferred_effect_row;
                 else if (ib && ib->type.kind == TY_FN)
                     er = ib->type.as.fn.effect_row;
-                bool effectful = er && er->kind != ERK_EMPTY;
+                /* Runtime-pure rows (only capability tags, e.g. IO from a
+                 * `println`) are not CPS-colored and have no `__cps` entry. */
+                bool effectful = er && !effect_row_is_runtime_pure(er);
                 /* The twin force-declares the wrapped fn as `int64_t <fn>(int64_t)`
                  * (emit_module.c) and dispatches its int64 `__cps` entry, so the
                  * wrapped fn's arg AND result must both be a plain `int`/`int64`
@@ -17399,8 +17461,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sk, i));
                         apc[i] = (ctx->fat_box_sink_erased_mask & ARG_IDX_BIT(i))
                                      ? "int64_t"
-                                     : (type_is_b4box_closure_slot(pt) ? "int64_t"
-                                                                       : type_c_name(pt));
+                                     : thunk_param_slot_c_name(pt);
                         dpc[i] = typed_ok ? thunk_param_slot_c_name(fnt_params[i]) : "int64_t";
                         if (strcmp(apc[i], dpc[i]) != 0) differs = true;
                         /* The default shim also CALLS the function at dpc.  A
@@ -17517,7 +17578,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     const char *apc[MAX_FN_ARITY];
                     for (uint8_t i = 0; i < arity; i++) {
                         Type pt = emit_resolve_type(ctx, emit_fn_arg_type_from_type(*sft, i));
-                        apc[i] = type_is_b4box_closure_slot(pt) ? "int64_t" : type_c_name(pt);
+                        apc[i] = thunk_param_slot_c_name(pt);
                     }
                     Type rt = emit_resolve_type(ctx, emit_fn_result_type_from_type(*sft));
                     const char *arc = rt.kind == TY_NIL ? NULL

@@ -448,7 +448,7 @@ def check_program(tur, build, src_text, expected, rewinds, retires):
                 problems.append(msg)
             else:
                 print("  note: " + msg + " (report-only; "
-                      "TUR_FUZZ_FNSAN_STRICT=1 fails on it)", flush=True)
+                      "TUR_FUZZ_FNSAN_STRICT=0 set)", flush=True)
             continue
         if o.status == "fail":
             tail = o.stderr.strip().splitlines()[-1] if o.stderr.strip() else "(no stderr)"

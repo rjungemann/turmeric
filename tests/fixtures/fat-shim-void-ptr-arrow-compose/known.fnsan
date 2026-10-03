@@ -1,0 +1,1 @@
+arrow-instance-closure-erased-to-words -- the Arrow [(->)] instance returns a closure built at erased words; the caller reads it at (fn [ptr<void>] ptr<void>) and the result is int64_t vs void *.

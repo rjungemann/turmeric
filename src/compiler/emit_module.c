@@ -382,6 +382,21 @@ static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
          * TUR_APPLYn_T cast that this shim is the other half of. */
         case TY_ANY:
             return true;
+        /* fnsan-ptr-void-fn-slot-word: a function-typed PARAMETER is the
+         * word in slot 0 (thunk_param_slot_c_name) and in every definition
+         * (ER4), so it has a concrete C ABI.  Declining sent every function
+         * whose parameter is a function to the generic word shim -- right
+         * for an erased consumer, but a typed caller casts slot 0 at the
+         * real result type: `double (*)(void *, int64_t)` against a shim
+         * returning the word.  A function-valued RESULT is admitted at
+         * type_c_name's spelling, `void *` for a boxed (fat) one and
+         * `int64_t` for a thin one, which is how the definitions return it
+         * and how a typed caller casts it (a captureless lambda returning a
+         * capturing closure, `void *__fn_14(int64_t)`, now gets the typed
+         * shim instead of the word shim a `(fn [ptr<void>] ptr<void>)`
+         * caller misread). */
+        case TY_FN:
+            return type_is_word_closure_slot(t);
         case TY_ADT:
             return t.as.adt_.def != NULL;
         case TY_APP:
@@ -531,6 +546,18 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
  * conventions. */
 const char *thunk_param_slot_c_name(Type t) {
     if (type_is_b4box_closure_slot(t)) return "int64_t";
+    if (type_is_word_closure_slot(t)) return "int64_t";
+    return type_c_name(t);
+}
+
+/* fnsan-ptr-void-fn-slot-word: the spelling a closure thunk's DEFINITION
+ * gives a parameter, where it differs from the slot.  A function-typed
+ * parameter is the word in both (ER4); an untyped `ptr<void>` is the word in
+ * the slot but `void *` in the definition, which ensure_closure_slot0_widen
+ * and the typed fatshims bridge. */
+const char *thunk_param_def_c_name(Type t) {
+    if (type_is_b4box_closure_slot(t)) return "int64_t";
+    if (t.kind == TY_FN && type_is_word_closure_slot(t)) return "int64_t";
     return type_c_name(t);
 }
 
@@ -2041,8 +2068,10 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
                               : adt_app_byval_pass_by_ptr(rp);
             if (type_is_b4box_closure_slot(rp) && rp_pbp)
                 buf_printf(target, "const %s *", type_c_name(rp));
-            else
+            else if (type_is_b4box_closure_slot(rp))
                 buf_puts(target, type_c_name(rp));
+            else
+                buf_puts(target, thunk_param_def_c_name(rp));
         }
     }
     buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
@@ -2060,8 +2089,14 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
             /* by-value callee below the pbp threshold: deref the box. */
             buf_printf(target, "*(%s *)(intptr_t)a%u",
                        type_c_name(rp), (unsigned)i);
-        else
-            buf_printf(target, "a%u", (unsigned)i);
+        else {
+            /* fnsan-ptr-void-fn-slot-word: a `ptr<void>` word back to the
+             * pointer the bare function takes. */
+            char an[16];
+            snprintf(an, sizeof an, "a%u", (unsigned)i);
+            emit_scalar_word_conv(target, thunk_param_slot_c_name(rp),
+                                  thunk_param_def_c_name(rp), an);
+        }
     }
     buf_puts(target, widen ? "));\n}\n" : ");\n}\n");
     return name;
@@ -2083,9 +2118,24 @@ char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
                                  uint8_t n_params) {
     if (!ctx || !out || !thunk_sym) return NULL;
     const char *rc = type_c_name(result_type);
-    if (!narrow_int_carrier(rc)) return NULL;
+    bool narrow = narrow_int_carrier(rc);
+    /* fnsan-ptr-void-fn-slot-word: an untyped `ptr<void>` parameter is the
+     * word in slot 0 (type_is_word_closure_slot), but the thunk's definition
+     * keeps it `void *` -- the body reads it as a pointer, and its forward,
+     * spec and CPS declarations all say so.  The same wrapper that widens a
+     * narrow result converts each such word back to the pointer.  A
+     * function-typed parameter needs nothing: the definition already takes
+     * it as the word (ER4). */
+    bool word_ptr = false;
+    for (uint8_t i = 0; i < n_params && !word_ptr; i++)
+        word_ptr = param_types[i].kind == TY_PTR_VOID &&
+                   type_is_word_closure_slot(param_types[i]);
+    if (!narrow && !word_ptr) return NULL;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    const char *def_rc = has_ret ? rc : "void";
+    const char *slot_rc = has_ret ? thunk_result_slot_c_name(result_type) : "void";
     Buf nb; buf_init(&nb);
-    buf_puts(&nb, "__tur_widen_");
+    buf_puts(&nb, word_ptr ? "__tur_slot0_" : "__tur_widen_");
     append_sanitized_c_token(&nb, thunk_sym);
     buf_putc(&nb, '\0');
     char *name = strdup(nb.data);
@@ -2102,15 +2152,28 @@ char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
     }
     ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
-    buf_printf(out, "static int64_t %s(void *__e", name);
+    buf_printf(out, "static %s %s(void *__e", slot_rc, name);
     for (uint8_t i = 0; i < n_params; i++)
         buf_printf(out, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
                    (unsigned)i);
-    buf_printf(out, ") {\n    return (int64_t)((%s (*)(void *", rc);
+    buf_puts(out, ") {\n    ");
+    /* The cast widens a narrow result; any other result (a pointer, or a
+     * by-value aggregate, which C cannot cast to) is returned as it is. */
+    if (has_ret) {
+        if (strcmp(slot_rc, def_rc) != 0) buf_printf(out, "return (%s)", slot_rc);
+        else buf_puts(out, "return ");
+    }
+    buf_printf(out, "((%s (*)(void *", def_rc);
     for (uint8_t i = 0; i < n_params; i++)
-        buf_printf(out, ", %s", thunk_param_slot_c_name(param_types[i]));
+        buf_printf(out, ", %s", thunk_param_def_c_name(param_types[i]));
     buf_printf(out, "))(intptr_t)%s)(__e", thunk_sym);
-    for (uint8_t i = 0; i < n_params; i++) buf_printf(out, ", a%u", (unsigned)i);
+    for (uint8_t i = 0; i < n_params; i++) {
+        char an[16];
+        snprintf(an, sizeof an, "a%u", (unsigned)i);
+        buf_puts(out, ", ");
+        emit_scalar_word_conv(out, thunk_param_slot_c_name(param_types[i]),
+                              thunk_param_def_c_name(param_types[i]), an);
+    }
     buf_puts(out, ");\n}\n");
     return name;
 }
@@ -3489,7 +3552,7 @@ static Type emit_abi_instantiate_type(const Type *t,
 /* nested-construct-byvalue: structurally unify a generic pattern (carrying named
  * tyvars, e.g. `(Result A B)`) against a concrete type (`Result__Option__cstr__cstr`,
  * a monomorphized struct, or `(Result (Option cstr) cstr)`) and collect the
- * tyvar -> concrete bindings.  Used to recover a #{Construct}'s payload arg types
+ * tyvar -> concrete bindings.  Used to recover a ^construct's payload arg types
  * from its (recovered by-value) concrete result, so a nested `(some (ok-val ...))`
  * built inside a constrained instance body lowers each construct seam to the
  * right by-value element type instead of the int64 carrier representative. */
@@ -5668,7 +5731,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * by-value struct receiver inside a spec.  Attempt the by-value twin
      * redirect before the no-bindings early-return below. */
     if (emit_abi_try_byval_twin_redirect(ctx, call, items, n_items)) return;
-    /* nested-construct-byvalue (Gaps #2/#3): when a nested #{Construct} arg was
+    /* nested-construct-byvalue (Gaps #2/#3): when a nested ^construct arg was
      * already resolved top-down from its enclosing construct's by-value payload
      * field type (the result_type_override recursion below), the normal arg-scan
      * that reaches it afterwards must NOT re-register it -- its own abi_bindings
@@ -5970,7 +6033,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     }
 
     if (!bindings || n_bindings == 0) {
-        /* M7 layer-4: a 0-arg `#{Construct}` (`(none)`) in an HKT
+        /* M7 layer-4: a 0-arg `^construct` (`(none)`) in an HKT
          * instance-method body has no abi_bindings of its own, but when scanned
          * inside an active by-value HKT instance-method spec the
          * construct_recovered_byvalue path below recovers it by value from the
@@ -6854,7 +6917,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         }
     }
     /* end-to-end-monomorphization (M2 completion, primitive-payload Result/
-     * Option at the typeclass-dispatch boundary): a #{Construct} constructor
+     * Option at the typeclass-dispatch boundary): a ^construct constructor
      * whose RESULT is a concrete by-value (non-heap) struct -- e.g.
      * `(ok v) : (Result int cstr)` -- should construct the struct directly
      * instead of returning the int64 carrier box and forcing a
@@ -6891,7 +6954,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * pinned the return to the same parametric family promote. */
     bool construct_recovered_byvalue = false;
     {
-        /* CONV-S1: a `#{Construct}` template whose struct lowered to a record
+        /* CONV-S1: a `^construct` template whose struct lowered to a record
          * defadt has a constructor-CALL body (`(Option false x)`, EX_CALL with a
          * resolved ctor), not an EX_MAKE_STRUCT -- `make-struct` rewrote to the
          * auto-bound ctor call.  Recognize both so the by-value result recovery
@@ -6901,7 +6964,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             && (fd->body->kind == EX_MAKE_STRUCT
                 || (fd->body->kind == EX_CALL && fd->body->as.call_.ctor))
             && fd->binding && fd->binding->is_construct_template;
-        /* nested-construct-byvalue (Gaps #2/#3/#5): a nested #{Construct} arg
+        /* nested-construct-byvalue (Gaps #2/#3/#5): a nested ^construct arg
          * whose concrete by-value result type was threaded top-down from the
          * enclosing construct's recovered payload field type (via
          * result_type_override).  Use the override directly -- the construct's
@@ -7006,7 +7069,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
             }
         }
-        /* Phase 5 carrier-bridge deletion: monomorphize a #{Construct} at a
+        /* Phase 5 carrier-bridge deletion: monomorphize a ^construct at a
          * plain call site whose own bindings (or grounded call->type) resolve to
          * a concrete by-value non-heap struct -- `(some 42)` => `(Option int)`. */
         if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
@@ -7211,7 +7274,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * Other ABI changes (different opaque ints, pointers, type-apps) keep
      * the carrier emit, which compiles cleanly through the int64 path. */
     /* M2b: the same monomorphization-vs-carrier choice applies to
-     * `#{Construct}` polymorphic defns whose body is a `(make-struct …)`.
+     * `^construct` polymorphic defns whose body is a `(make-struct …)`.
      * Their carrier-emit body is synthesized in emit_fns.c to the same
      * `return tur_box_ok((int64_t)(intptr_t)x);` shape the inline-C body
      * produces, so for ABI-neutral specs (no by-value struct in args or
@@ -7249,7 +7312,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 needs_byvalue_spec = true; break;
             }
             /* M5 residual-straddle (docs/artifacts/m5-residual-straddle-
-             * retirement.md): a defn carrying `#{ByVal}` opts into
+             * retirement.md): a defn carrying `^byval` opts into
              * by-value spec interning for *any* aggregate arg type that
              * resolves to a concrete struct application -- including
              * TY_APP (e.g. `(Vec int)` after Path A substitution).  The
@@ -7281,7 +7344,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
             }
         }
-        /* zero-arg-construct-ground-byvalue-return: a 0-arg `#{Construct}`
+        /* zero-arg-construct-ground-byvalue-return: a 0-arg `^construct`
          * constructor (`(none)`) called in a ground by-value context resolves
          * `result_type` to a concrete parameterised TY_APP (`(Option
          * BoundedIdx)`) with a real by-value codegen layout -- NOT the int64
@@ -7419,7 +7482,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     emit_abi_record_specialized_call(ctx, call, spec->clone_name);
 
     /* nested-construct-byvalue (Gaps #2/#3): thread each by-value payload field
-     * type down onto a nested #{Construct} argument, so `(ok (some ...))` builds
+     * type down onto a nested ^construct argument, so `(ok (some ...))` builds
      * `Option__cstr` inside `Result__Option__cstr__cstr`.  arg_types[i] already
      * holds the concrete field type (recovered above from the result); recurse
      * BEFORE the normal arg-scan reaches the nested construct so the correct
@@ -7847,7 +7910,7 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
     }
 }
 
-/* CONV-S1 seam 4 (a): register the #{Construct} calls in the VALUE-TAIL of `e`
+/* CONV-S1 seam 4 (a): register the ^construct calls in the VALUE-TAIL of `e`
  * (descending through ascribe / if-then-else / do-last / let-body) with
  * `override` as their result type.  A binding-less return-only-poly construct
  * (`(none)` / `(empty)`) carries an abstract `(Option A)` type of its own; only
@@ -7995,10 +8058,10 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                     ctx->current_abi_specialization->n_bindings,
                     items, n_items);
             }
-            /* nested-construct-byvalue (Gap #5): if this call is a #{Construct}
+            /* nested-construct-byvalue (Gap #5): if this call is a ^construct
              * that stayed on the int64 carrier (no by-value spec recorded for it
              * under the active outer), suppress by-value promotion of any nested
-             * #{Construct} argument while scanning its args -- the carrier
+             * ^construct argument while scanning its args -- the carrier
              * consumer expects the int64 carrier, not a by-value aggregate. */
             bool saved_suppress = ctx->abi_scan_suppress_construct_byvalue;
             if (e->as.call_.fn_binding &&
@@ -8329,7 +8392,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         }
         /* abi-scan-misses-effect-operands: the effect family had no arms, so a
-         * generic or #{Construct} call sitting in a `perform` ARGUMENT or in a
+         * generic or ^construct call sitting in a `perform` ARGUMENT or in a
          * `resume` VALUE was never interned -- `(perform (EO (some 5)))` in a
          * colored function emitted the unspecialized `some(...)` (an implicit
          * declaration) and a handler clause's `(resume k (unwrap-or o 0))`
@@ -8450,7 +8513,7 @@ static const char *abi_trace_clone_name(const EmitCtx *ctx, const Expr *call) {
     }
     const Binding *b = call->kind == EX_CALL ? call->as.call_.fn_binding : NULL;
     /* Mirror emit_call_name / find_matched_abi_spec: a 0-arg or N-arg
-     * `#{Construct}` callee is disambiguated only by the per-Expr* recording
+     * `^construct` callee is disambiguated only by the per-Expr* recording
      * above, never by the structural by-args match (which cannot tell a
      * by-value spec from the carrier base for a constructor). */
     if (call->kind == EX_CALL && b &&

@@ -94,6 +94,7 @@
 #include "../runtime/globals.h"  /* Gap 7: g_interpret_mode (per-env snapshot) */
 #include "ffi_thunk.h"  /* jit-ffi-c2mir-plan F2: thunk-backed extern-c */
 #include "jit_ffi.h"    /* jit-ffi-c2mir-plan: provider + sig vocabulary */
+#include "inline_c_jit.h"  /* aot-compiled-repl-plan C1 */
 
 /* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
  * spill above it.  Keeps the per-call scratch off the C stack for the common
@@ -6366,8 +6367,22 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
      * to the clean "inline-C not supported" error. */
     bool sr_has_call = strstr(body, "printf") || strstr(body, "__TUR_CNAME_") ||
                        strstr(body, ")(");
+    /* turi-inline-c-simple-return-takes-first-return: the same rule for control
+     * flow, which the accessor matcher already had (W4: `>1` return declines).
+     * This pattern evaluates the FIRST `return` it finds, so a loop or a second
+     * return means the answer depends on a path it never walks:
+     *   for (int i = 0; i < 2; i++) if (xs[i] % 2 != 0) return 0;
+     *   return 1;
+     * was claimed as `return 0` -- false for every input, rc=0, no warning.
+     * Declining gives the clean "inline-C not supported" error instead (and,
+     * with --enable=repl-jit-inline-c, the compiled answer). */
+    bool sr_has_flow = ic_body_has_word(body, "for") ||
+                       ic_body_has_word(body, "while") ||
+                       ic_body_has_word(body, "do") ||
+                       ic_body_has_word(body, "goto") ||
+                       ic_body_count_sub(body, "return ") > 1;
     if (!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch &&
-        !sr_has_call) {
+        !sr_has_call && !sr_has_flow) {
         const char *r = strstr(body, "return "); if (r) {
             r += 7; r = ic_skip_ws(r);
             int64_t val = 0;
@@ -10378,6 +10393,19 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                 }
                 return inline_result;
             }
+        }
+        /* aot-compiled-repl-plan C1: the pattern executor declined, so this
+         * body is about to be "inline-C not supported".  With
+         * --enable=repl-jit-inline-c on a JIT build, compile it instead.
+         * User code only: the stdlib's inline-C is answered by native
+         * overrides (above) or by interpreter intercepts the error path runs
+         * first (the session channel templates, gc_force), and none of it
+         * should be compiled behind the interpreter's back. */
+        if (fn->binding && !fn->binding->is_from_stdlib) {
+            TuriValue jit_result;
+            if (turi_inline_c_jit_try(env, fn, param_offset, args, n_args,
+                                      &jit_result))
+                return jit_result;
         }
     }
 
@@ -14950,6 +14978,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             effect_env_register_builtin_unsafe(
                 eff_env, eval_arena,
                 symtab_intern(&env->st, strslice(EFFECT_NAME_UNSAFE, 6)));
+            effect_env_register_builtin_capabilities(eff_env, eval_arena,
+                                                     &env->st);
             env->effect_env = eff_env;
         }
         effect_check_pass(eval_arena, prog, eff_env);

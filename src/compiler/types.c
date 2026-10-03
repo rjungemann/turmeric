@@ -4247,6 +4247,25 @@ bool type_is_b4box_closure_slot(Type t) {
     return false;
 }
 
+/* fnsan-ptr-void-fn-slot-word: the closure-slot WORD question.  An untyped
+ * `ptr<void>` and a function value are both pointer-sized handles a program
+ * can erase into one another -- `(:: f :ptr<void>)`, a `(Vec ptr<void>)` of
+ * closures, a `: ptr<void>` result re-ascribed as `(fn [ptr<void>] ...)` --
+ * so the slot-0 signature a closure is DEFINED at and the one a re-ascribing
+ * caller CASTS to must spell the two parameters alike, or the call is an
+ * indirect call through the wrong function type (a -fsanitize=function trap,
+ * a call_indirect trap on WASM).  A function-typed parameter is already the
+ * int64 word in every definition (ER4), and every erased consumer calls slot
+ * 0 at words, so the shared spelling is the word: `int64_t`.  Parameters
+ * only -- a fat function result and a `ptr<void>` result are both `void *`
+ * already.  A typed `ptr<T>`, `ptr<const-void>` and a cfnptr keep their real
+ * C types: they are FFI spellings, not erasure. */
+bool type_is_word_closure_slot(Type t) {
+    if (t.kind == TY_PTR_VOID) return !t.as.ptr.inner && !t.as.ptr.is_const;
+    if (t.kind == TY_FN) return !t.as.fn.cfnptr;
+    return false;
+}
+
 ContainerElemForm container_elem_form(Type elem) {
     /* CE1: one chokepoint, defined AS repr_of's container answer so the two
      * cannot drift (the retired-shadow argument below applies here too).  A

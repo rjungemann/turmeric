@@ -464,7 +464,11 @@ cmake --build build -j --config Debug
 bash tests/run.sh                                                                # compiled-fixture suite
 ```
 
-The built compiler lands at `./build/tur`.
+The built compiler lands at `./build/tur`. It carries the MIR JIT engine
+(`tur jit`): `TUR_JIT` defaults ON on 64-bit x86-64/arm64, compiling the MIR
+sources vendored under `external/mir/` -- no configure reaches the network.
+Never edit `external/mir/` by hand; `external/mir/VENDORED.md` says how to
+change MIR.
 
 ### Test suite size and runtime -- READ BEFORE ASSUMING A HANG
 
@@ -760,6 +764,12 @@ recorded has closed. Only the stdout diff is excused; a build failure, crash
 or timeout still fails. Use it for a gap a plan wants on record as a test
 rather than as prose (first use: r7rs-lang-plan D5's referential-transparency
 gap, since closed and its marker deleted), never to park a regression.
+
+A fixture may also carry `known.fnsan` (not a skip marker): its compiled
+program is a KNOWN trap under clang's `-fsanitize=function`, and the marker's
+first line names the open report.  `tests/run-fnsan.sh` (the `fnsan` CI job)
+leaves it out of the gate run, then runs it alone and FAILS if it no longer
+traps -- delete the marker then.  Never use it to park a new trap.
 
 A fixture may also carry `requires.no-leak-check` (not a skip marker): the
 compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for

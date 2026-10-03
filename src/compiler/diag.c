@@ -237,6 +237,7 @@ const char *diag_code_to_string(DiagCode code) {
         /* CF6: async Send-across-await */
         case TUR_E0022_AWAIT_LIVE_NOT_SEND:              return "TUR-E0022";
         case TUR_E0025_DUPLICATE_INSTANCE:               return "TUR-E0025";
+        case TUR_E0026_UNKNOWN_EFFECT_IN_ROW:            return "TUR-E0026";
         /* Phase B: mixed-width numeric arithmetic */
         case TUR_E0042_MIXED_WIDTH_ARITH:                return "TUR-E0042";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
@@ -363,6 +364,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0001_FN_TYPE_COLON:             return "TUR-D0001";
         case TUR_D0002_FX_ROW_LEGACY_HASH:        return "TUR-D0002";
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
+        case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -424,6 +426,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
     if (strcmp(s, "TUR-E0022") == 0) return TUR_E0022_AWAIT_LIVE_NOT_SEND;
     if (strcmp(s, "TUR-E0025") == 0) return TUR_E0025_DUPLICATE_INSTANCE;
+    if (strcmp(s, "TUR-E0026") == 0) return TUR_E0026_UNKNOWN_EFFECT_IN_ROW;
     if (strcmp(s, "TUR-E0042") == 0) return TUR_E0042_MIXED_WIDTH_ARITH;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
     if (strcmp(s, "TUR-E0260") == 0) return TUR_E0260_SIZED_TYPE_MISMATCH;
@@ -544,6 +547,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0001") == 0) return TUR_D0001_FN_TYPE_COLON;
     if (strcmp(s, "TUR-D0002") == 0) return TUR_D0002_FX_ROW_LEGACY_HASH;
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
+    if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -876,6 +880,32 @@ static const DiagExplanation diag_explanations_[] = {
       "autoload) is not a duplicate in this sense: the same definition arriving\n"
       "through two load paths stays a silent no-op.\n"
     },
+    { TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+      "TUR-E0026: Unknown effect in an effect row\n"
+      "\n"
+      "An uppercase name inside #fx{...} must be an effect that some\n"
+      "defeffect in the program declares.  (A lowercase name is a row\n"
+      "variable and is not looked up.)  This one is not declared anywhere\n"
+      "the compiler can see.\n"
+      "\n"
+      "Example:\n"
+      "  (defn log-line [] #fx{Write} : int ...)   ;; error: no defeffect Write\n"
+      "\n"
+      "The usual cause is an effect from a module that is not loaded: Write,\n"
+      "Read, Log, Fail and the rest of stdlib/effects.tur are not\n"
+      "autoloaded.  Load it -- (load \"stdlib/effects.tur\") -- or declare the\n"
+      "effect yourself.  (The capability tags IO, FS, Net, Proc and Rand are\n"
+      "compiler-known and need no declaration; Unsafe likewise.)\n"
+      "\n"
+      "Compiler attributes that used to be written in the row are not\n"
+      "effects: Construct is ^construct, ByVal is ^byval, and NonExhaustive\n"
+      "is (match ^non-exhaustive ...).\n"
+      "\n"
+      "This used to be silent: the unknown name was dropped, so #fx{FS}\n"
+      "checked as #fx{}, and a caller's #fx{} -- which should have failed\n"
+      "with TUR-E0009 for calling an FS function -- passed a check that had\n"
+      "quietly stopped happening.\n"
+    },
     { TUR_E0014_NOT_CLONE,
       "TUR-E0014: Captured binding does not implement Clone\n"
       "\n"
@@ -1005,12 +1035,18 @@ static const DiagExplanation diag_explanations_[] = {
       "TUR-W0030: Unannotated effectful function (--strict-effects)\n"
       "\n"
       "Under --strict-effects, every function whose inferred effect row is non-empty\n"
-      "should carry an explicit #{...} annotation. This warning fires when an unannotated\n"
-      "function performs one or more effects.\n"
+      "should carry an explicit #fx{...} annotation. This warning fires when an\n"
+      "unannotated function performs one or more effects -- a defn, a fn literal\n"
+      "(named by where it is: \"anonymous function in 'f'\"), or an instance\n"
+      "method (whose row is its defclass method's).\n"
       "\n"
-      "Fix: add an effect-row annotation to the function, e.g.:\n"
-      "  (defn my-fn [] #{Write} :nil ...)\n"
-      "Or handle the effect inside the function so its row is empty.\n",
+      "Fix: add the effect-row annotation the message spells, e.g.:\n"
+      "  (defn my-fn [] #fx{Write} :nil ...)\n"
+      "  (fn [k] #fx{Bt} (bt-set! c 1))\n"
+      "Or handle the effect inside the function so its row is empty.\n"
+      "\n"
+      "-Werror=strict-effects makes this an error (and implies --strict-effects).\n"
+      "--lint-effects is a deprecated alias for --strict-effects.\n",
     },
     { TUR_W0031_EFFECT_OVER_ANNOTATED,
       "TUR-W0031: Over-annotated effect row\n"
@@ -1018,8 +1054,12 @@ static const DiagExplanation diag_explanations_[] = {
       "The declared effect row contains an effect that the function never actually\n"
       "performs. This may indicate a stale annotation after refactoring.\n"
       "\n"
-      "Fix: remove the unused effect from the #{...} annotation, e.g.:\n"
-      "  (defn my-fn [] #{Write} :nil ...)  ; remove Log if it is never performed\n",
+      "Fix: remove the unused effect from the #fx{...} annotation, e.g.:\n"
+      "  (defn my-fn [] #fx{Write} :nil ...)  ; remove Log if it is never performed\n"
+      "\n"
+      "Not reported for a capability effect (^capability), which the annotation\n"
+      "alone justifies, nor for an instance method, whose row is its class\n"
+      "method's: an instance that performs less than its class allows is normal.\n",
     },
     { TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,
       "TUR-W0032: Row variable is always instantiated to a concrete row\n"
@@ -1030,7 +1070,9 @@ static const DiagExplanation diag_explanations_[] = {
       "allows the compiler to enforce it strictly.\n"
       "\n"
       "Fix: replace the row variable with the concrete effect set, e.g.:\n"
-      "  (defn run-twice [f :(fn [] #{Ask} :int)] #{Ask} :int ...)\n",
+      "  (defn run-twice [f :(fn [] #fx{Ask} :int)] #fx{Ask} :int ...)\n"
+      "\n"
+      "Reported under --strict-effects; -Werror=strict-effects makes it an error.\n",
     },
     { TUR_W0033_UNREACHABLE_HANDLER,
       "TUR-W0033: Handler clause is unreachable\n"
@@ -1934,7 +1976,7 @@ static const DiagExplanation diag_explanations_[] = {
       "                 `(Cons _ t) (+ 1 (len t))`), or a subterm of one.\n"
       "                 Arithmetic on the argument (`(f (- n 1))`), calls\n"
       "                 through variables, and mutual recursion all reject.\n"
-      "  coverage    -- every `match` is proven exhaustive: a `#{NonExhaustive}`\n"
+      "  coverage    -- every `match` is proven exhaustive: a `^non-exhaustive`\n"
       "                 opt-out, or a literal-scrutinee match with no `_` /\n"
       "                 variable arm, rejects.  So does any form the reflection\n"
       "                 walk does not positively recognise (macros, lambdas,\n"
@@ -2560,6 +2602,23 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Run tools/migrate-fx-rows.py to rewrite a tree.  Removed in a future\n"
       "release.\n",
+    },
+    /* effect-row-honesty-plan W0 */
+    { TUR_D0004_NONEXHAUSTIVE_FX_MARKER,
+      "TUR-D0004: `#fx{NonExhaustive}` is deprecated; write `^non-exhaustive`\n"
+      "\n"
+      "The opt-out from match exhaustiveness checking is an attribute of the\n"
+      "match, not an effect, so it no longer borrows the effect-row brackets.\n"
+      "`#fx{...}` now holds effects and row variables only.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (match #fx{NonExhaustive} e (Left l) l)\n"
+      "\n"
+      "Fix:\n"
+      "  (match ^non-exhaustive e (Left l) l)\n"
+      "\n"
+      "The old spelling still opts out, so a program keeps compiling; under\n"
+      "--Werror=deprecated it is an error.  It is removed in a future release.\n",
     },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,

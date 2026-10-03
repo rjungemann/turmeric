@@ -2,6 +2,120 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.59.0] -- 2026-10-02
+
+### Changed
+
+- **`println` declares `#fx{IO}`, so `#fx{}` means "does not even print".**
+  Printing was invisible to the effect system: `println` was a builtin with an
+  empty row. Now a function annotated `#fx{}` that prints is `TUR-E0009`, and
+  an annotated function that prints must name `IO` (which also covers `Write`,
+  `FS`, `Net`, `Proc` and `Rand`, its children). Unannotated code is
+  unaffected. `IO` is a `^capability` -- tracked, never handled -- so for
+  output a handler should be able to intercept, `(perform (Write s))` is still
+  the path; the effects guide now says which to reach for. Under
+  `--strict-effects`, an unannotated function that prints now gets
+  `TUR-W0030`. Saffron's dynamic `println` carries the row too, and hover
+  shows it: `(println : (fn [int] #fx{IO} : nil))`.
+- **`IO`, `FS`, `Net`, `Proc` and `Rand` are compiler-known**, like `Unsafe`:
+  `#fx{IO}` resolves with nothing loaded. `stdlib/effects.tur` keeps its
+  declarations; a `defeffect` of one of these names must match the built-in
+  exactly (`(defeffect FS [] :nil ^extends IO ^capability)`), and anything else
+  is an error.
+- **Compiler attributes moved out of the effect row.** `#fx{...}` now holds
+  effects and row variables only. `(defn ^construct some ...)` replaces
+  `#fx{Construct}`, `(defn ^byval name ...)` replaces `#fx{ByVal}`, and
+  `(match ^non-exhaustive x ...)` replaces `#fx{NonExhaustive}`, which still
+  works with a `TUR-D0004` deprecation warning. An unknown attribute before a
+  defn's name (`(defn ^contruct f ...)`) is an error instead of becoming the
+  function's name.
+- **An undeclared effect name in `#fx{...}` is an error (`TUR-E0026`).** It
+  used to be dropped silently, so `#fx{IO}` in a file that had not loaded
+  `stdlib/effects.tur` checked as `#fx{}`, and a caller's `#fx{}` then passed
+  the `TUR-E0009` check the tag existed to buy. The error names the tag,
+  offers a did-you-mean for a near miss, and says which module to load for
+  the `stdlib/effects.tur` names. It covers every position a row is written:
+  a `defn`, a `fn` literal, a fn-typed parameter, a record field, a class
+  method. The check found four rows in the tree that had never resolved: a
+  stdlib `#fx{FS}` on a stdout writer (now `#fx{IO}` -- stdout is not FS), and
+  three fixtures' undeclared `Write` and `#fx{|e}`.
+- **`--lint-effects` is a deprecated alias for `--strict-effects`
+  (`TUR-W0050`).** It was a byte-identical second copy of the `TUR-W0030`
+  check. `-Werror=strict-effects` is new: it makes the `--strict-effects`
+  warnings errors, and implies the flag.
+- **Effect diagnostics no longer print compiler-made names.** A `fn` literal
+  is *anonymous function in 'dfs-or'* rather than `__fn_38`, an instance
+  method is *method 'eq?' of instance Eq [int]*, and a class default body is
+  *default body of method 'greeting' in class Greet*. A rank-2 wrapper the
+  compiler generates (`__poly_N`) no longer gets its own `TUR-W0030`; the
+  function it wraps already does. `TUR-W0030` spells the row to
+  add (`add #fx{Bt} after its parameter vector`) in the current `#fx{}`
+  syntax rather than the retired `#{}`. `TUR-W0031` is no longer reported on
+  an instance method, whose row is its class method's and cannot be changed
+  from the instance.
+- **A fat closure's slot 0 takes an untyped `ptr<void>` parameter as the
+  word (`int64_t`).**  A function-typed parameter already crossed that way, and
+  a program that erases a closure to `ptr<void>` and calls it back as
+  `(fn [ptr<void>] ...)` needs the two to share one spelling, or the call goes
+  through a function pointer of the wrong type (a WASM `call_indirect` trap).
+  Turmeric code is unaffected; **inline C that calls a closure's slot 0 by
+  hand** must spell such a parameter `int64_t` --
+  `TUR_APPLY1_T(void *, int64_t, f, p)`, not `TUR_APPLY1_T(void *, void *, f,
+  p)`.  The closure's own body still sees a `void *`.  See
+  [docs/guides/value-representations-guide.md](docs/guides/value-representations-guide.md#slot-0s-signature-which-parameters-are-the-word).
+- **Stdlib comparators take a real `(fn [A A] bool)`.** `vec-eq?`,
+  `map-eq-raw?`, `set-eq-cmp?`, `result-eq?`, `pair-eq-carrier?`,
+  `mutmap-eq-storage?` and `map-eq-dynamic` call their comparator's slot 0
+  with each element as a word but declared it an untyped `^fat`, so the
+  comparator was boxed at its own signature: for `(fn [a : float b : float]
+  ...)` the elements went in integer registers and the thunk read xmm
+  registers nobody set. Compiled, `(vec-eq? [7.1] [3.25] cmp)` answered true
+  where `tur --interpret` said false. The Turmeric wrappers `map-eq?`,
+  `map-eq-k?` and `mutmap-eq?` keep an independent type variable, so an
+  erased comparator over a typed map is still accepted.
+
+### Fixed
+
+- **A caller written above a generic callee now sees the callee's real
+  signature.** An arity-only forward declaration produced `TUR-E0709` for a
+  by-value result, "expected int, got float" for a float argument, and a
+  SIGSEGV when a lambda was handed to a later generic higher-order function.
+  Pass 2 now orders a defn after any not-yet-elaborated "lossy" defn it calls
+  (generic, or with a fn-typed parameter), breaking a cycle at its first lossy
+  member. Inside a `defmodule` the same pre-pass had kept every non-scalar
+  declared return -- `(Result Handle cstr)`, `(Option Box)`, a bare `: Box` --
+  as the int-carrier placeholder, which is what broke the `secret`, `valkey`
+  and `tourist-session-valkey` spices. Mutually recursive generics that saw
+  each other's placeholder result are primed before elaboration.
+- **An open argument ahead of the one that fixes a type variable no longer
+  types the result as `int`.** `(get-or (none) 1.5)` against
+  `[o : (Option A) d : A]` printed `1`, and `(err "e")`, `(vec-new)` and
+  `(map-new)` in first position did the same; a `cstr` default printed an
+  address. Such a binding is provisional now and grounded after the loop, so
+  emit monomorphizes it. Also fixed in the same sweep: a catch-all variable
+  arm over `(Option A)` in a generic emitted invalid C at every
+  instantiation, and a `uint8` payload (`(cx nn (:: 200 uint8))`) aborted the
+  compiler.
+- `^fat x : (fn ...)` in a `let` bound to a captureless lambda or a named
+  defn stored a bare code pointer, and the first call took SIGSEGV; bound to a
+  closure-returning call such as `(>>> f g)`, a float call printed garbage.
+- A CPS-emitted tail call into an inline join leaked the fresh sum box it
+  produced itself -- `(ok? (result-map (ok 1) f))` inside a colored function
+  dropped its 16-byte `Ok`.
+- The fixture corpus is clean under clang's `-fsanitize=function`, and a new
+  `fnsan` CI job keeps it that way. A `known.fnsan` marker names a fixture's
+  open report, and such a fixture is run alone and required to still trap, so
+  the list cannot go stale.
+
+### Documentation
+
+- **The security guide is accurate about `#fx{Unsafe}` and proc macros.**
+  `#fx{Unsafe}` is enforced at every call site (only `(unsafe ...)` or an
+  `Unsafe` caller discharges it), and it means "this body does pointer
+  arithmetic", not "this function may corrupt memory on bad input" -- the
+  audit plan's open question 3, answered. `--no-proc-macros` is
+  rust-analyzer's `procMacro.enable` turned off; rust-analyzer ships it on.
+
 ## [0.58.0] -- 2026-10-01
 
 ### Security

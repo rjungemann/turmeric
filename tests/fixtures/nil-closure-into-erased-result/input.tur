@@ -5,7 +5,7 @@
 ;; under clang -fsanitize=function, and on WASM's call_indirect, it traps.
 ;; A nil-returning BARE fn had the same mismatch through the generic word
 ;; shim.  Both now go through a slot-0 shim that calls the function and
-;; answers the zero word (docs/reported/emitted-c-indirect-calls-are-not-type-exact.md,
+;; answers the zero word (docs/archive/emitted-c-indirect-calls-are-not-type-exact.md,
 ;; region-scope-void-body's row).
 ;;
 ;; `shout` is a CPS function (the bracket is a `bt-scope`), so its wrapper is

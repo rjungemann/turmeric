@@ -1,26 +1,27 @@
 # Plan: Compiled evaluation at the `tur repl` prompt
 
-> **Status:** Proposed, on hold, not started. **Rewritten 2026-09-29.** The
-> 2026-06-28 draft (in git history) proposed compiling each prompt form with a
-> `cc` subprocess into a `.so` and `dlopen`ing it. It predates the in-process
-> MIR JIT (graduated 0.34.0). The JIT and the spice REPL now provide most of
-> the machinery the draft planned to build, and the draft had design flaws
-> this version fixes (see "Why not the 2026-06-28 draft"). The file name is
-> historical: nothing here is ahead-of-time compiled any more. Move the plan to
-> `docs/upcoming/` when work starts, and point the experiment rows'
-> `plan_path` at it there.
-> **Last Updated:** 2026-09-30
-> **Track:** post-v1. C0, a bug fix, landed 2026-09-30.
+> **Status:** C0 landed 2026-09-30. **C1 landed 2026-10-02** behind
+> `--enable=repl-jit-inline-c`. C2 was investigated 2026-10-02 (findings under
+> C2) and is not started. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> git history) proposed compiling each prompt form with a `cc` subprocess into
+> a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
+> 0.34.0). The JIT and the spice REPL now provide most of the machinery the
+> draft planned to build, and the draft had design flaws this version fixes
+> (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
+> here is ahead-of-time compiled any more.
+> **Last Updated:** 2026-10-02
+> **Track:** post-v1. C0 (a bug fix) and C1 (an experiment) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
-> **Requires:** `-DTUR_JIT=ON`. It is OFF by default and the release workflow
-> does not turn it on, so C1-C3 reach source builds only until that changes
-> (Open question 1).
-> **See also:** [jit-guide](../../guides/jit-guide.md),
-> [spice-repl-plan](../../archive/spice-repl-plan.md),
-> [jit-engine-plan](../../archive/jit-engine-plan.md) (J2 image mode),
-> [jit-ffi-c2mir-plan](../../archive/jit-ffi-c2mir-plan.md),
-> [cc-path-preamble-split-plan](../cc-path-preamble-split-plan.md).
+> **Requires:** a `TUR_JIT` build. Since 2026-10-02 that is the default on
+> 64-bit x86-64 and arm64: MIR is vendored under `external/mir/`, so a default
+> configure no longer reaches the network, and the release binaries carry the
+> engine. That resolves Open question 1.
+> **See also:** [jit-guide](../guides/jit-guide.md),
+> [spice-repl-plan](../archive/spice-repl-plan.md),
+> [jit-engine-plan](../archive/jit-engine-plan.md) (J2 image mode),
+> [jit-ffi-c2mir-plan](../archive/jit-ffi-c2mir-plan.md),
+> [cc-path-preamble-split-plan](cc-path-preamble-split-plan.md).
 
 ## Goal
 
@@ -56,7 +57,7 @@ error: eval: inline-C not supported in interpreter mode (function uses a native 
 
 The same `c-mix` in a file prints `97` under `tur jit`. Until C0 landed, adding
 a `for` loop to the body made things worse: the REPL could not even read the
-form.
+form. Since C1, `tur repl --enable=repl-jit-inline-c` prints `97` too.
 
 ## What already exists
 
@@ -68,6 +69,9 @@ form.
 | Repeated in-process compile | `repl_jit_build`, `src/main.c:5155`; `compile_to_c` at `:5234` | Precedent for running the front end and emitter inside the REPL process on every `(reload)`, saving and restoring `g_interpret_mode` / `g_emit_for_link` around it |
 | Old images stay resident | retired list, `src/turi/ffi_thunk.c:494-507` | The lifetime rule: never free an image something may still point into |
 | Exports manifest and scalar marshaling | `g_manifest_sink` (`src/main.c:5232`), `tur_ffi_install_spice_bindings`, `src/turi/ffi_thunk.c` | Binding a compiled function as an interpreter native: C name, signature, and int/float/cstr/bool/nil marshaling |
+| C1's mid-turn compile (2026-10-02) | `repl_inline_c_jit_build` (`src/main.c`), `src/turi/inline_c_jit.c`, `repl_jit_compile_image(..., prune, ...)` | Compiling inside a turn without disturbing it: diagnostic-registry save/replace, emission-flag save/restore, `jit_prune` on an image TU, quiet c2mir warnings |
+| Lean resident images (2026-10-02) | `tur_jit_compile_image` releases the C front end once an image is initialized | An image costs ~1.6 MB resident instead of ~28-62 MB, which is what makes "keep every image" thinkable (C2, point 5) |
+| Vendored MIR, `TUR_JIT` on by default (2026-10-02) | `external/mir/`, `cmake/mir.cmake`, `CMakeLists.txt` | Every default build and release binary carries the engine |
 
 ## Why not the 2026-06-28 draft
 
@@ -89,7 +93,7 @@ form.
   `(defn f ...)` in one file is an "already defined" error. (Until
   2026-09-30 the `defn` case got past the front end and failed in the C
   compiler instead:
-  [duplicate-defn-in-one-file-reaches-the-c-compiler](../../archive/duplicate-defn-in-one-file-reaches-the-c-compiler.md).)
+  [duplicate-defn-in-one-file-reaches-the-c-compiler](../archive/duplicate-defn-in-one-file-reaches-the-c-compiler.md).)
   The draft's registry also looked a `def` up *before* initializing it, so a
   re-`def` would have kept the stale value. The interpreter re-initializes.
 - **A `void *` registry** cannot hold floats or by-value aggregates. Storing
@@ -130,57 +134,134 @@ the ways to reduce it.
 ### C0 -- the prompt must accept a multi-line inline-C form (LANDED 2026-09-30)
 
 This was a bug fix:
-[repl-continuation-counter-misreads-reader-syntax](../../archive/repl-continuation-counter-misreads-reader-syntax.md).
+[repl-continuation-counter-misreads-reader-syntax](../archive/repl-continuation-counter-misreads-reader-syntax.md).
 A `for (...;...;...)` inside a fence kept the `..` prompt open forever, and a
 `')'` char literal made the REPL evaluate the form halfway through the fence.
 The REPL now asks `reader_open_depth` (`src/compiler/reader.c`) whether the
 input is complete, and keeps a blank line typed inside a fence or string.
 C1 and C2 could not be tested at an interactive prompt without it.
 
-### C1 -- JIT the inline-C `defn`s the interpreter cannot run
+### C1 -- JIT the inline-C `defn`s the interpreter cannot run (LANDED 2026-10-02)
 
 The smallest change that closes the gap. The interpreter stays the evaluator,
-and only the inline-C bodies it refuses get compiled.
+and only the inline-C bodies it refuses get compiled. Experiment
+`repl-jit-inline-c` (a prototype, expires 0.62.0); it applies wherever turi
+runs, so `tur repl` and `tur --interpret` alike. With it on, the `c-mix`
+example above prints `97` at the prompt and under `--interpret`. Try Turmeric
+has no JIT and is unchanged.
 
-- **Trigger.** Compile on the first call where `try_exec_simple_inline_c`
-  declines and the interpreter would otherwise return "inline-C not
-  supported" (`src/turi/eval.c:11569`). This applies only on a JIT build with
-  the experiment on. Compiling lazily means the stdlib's inline-C, which has
-  native overrides, is never compiled, and a `defn` that is never called costs
-  nothing. Cache the compiled function on the binding, and drop the cache when
-  the name is redefined.
-- **Compile.**
-  - Build a minimal program: the `defn`'s own source form, plus the
-    session's `defstruct`/`defopaque`/`defdata` forms that its signature
-    names.
-  - Run it through `compile_to_c` in process, with the same flag
-    save/restore that `repl_jit_build` does. Set `g_manifest_sink` so the
-    emitter reports the function's C name and signature.
-  - JIT the result with `tur_jit_compile_image` and look the function up
-    with `tur_jit_image_sym`.
+**As built.** `src/turi/inline_c_jit.{h,c}` is the MIR-free half, in
+`tur_core`. The compile is a hook that `tur` registers from `main.c` on a
+`TUR_HAVE_JIT` build (`repl_inline_c_jit_build`), so a build without an engine
+has no hook and keeps today's error.
 
-  Going through the real emitter keeps everything the interpreter cannot
-  reproduce: hoisted `#include`s, the preamble's typed builders
-  (`tur_ok_ptr`, ...), and the body-entry region note for typed node
-  parameters.
-- **Bind.** Install the function as an interpreter native through the same
-  marshaling that spice exports use. Coverage is whatever that path supports
-  today: int-class, float, cstr, bool, nil. Other signatures keep today's
-  error, extended to name the unsupported type.
-- **Refuse cleanly** when the body calls another Turmeric definition (the
-  minimal program then does not elaborate) or c2mir rejects the C. Print
-  c2mir's diagnostic, then today's error.
-- **Cost.** One ~110ms compile per distinct inline-C `defn`, paid on its
-  first call.
-- **Gate.** Experiment `repl-jit-inline-c`: a full `EXPERIMENTS[]` row, and
-  `experiment_warn_if_used` on the turi call path. It applies wherever turi
-  runs, so both `tur repl` and `tur --interpret`. Try Turmeric has no JIT
-  and is unchanged.
-- **Payoff beyond the prompt.** `tests/run-turi.sh` PASS-skips every fixture
-  with user inline-C
-  ([test-suite-portability-guide](../../guides/test-suite-portability-guide.md#7d-what-run-turish-does-not-run----and-how-it-says-so)).
-  On a JIT build with C1 on, many of those fixtures could run. Measuring how
-  many is a follow-on, not part of C1.
+- **Trigger.** `eval_apply_driven` (`src/turi/eval.c`), straight after
+  `try_exec_simple_inline_c` declines -- the point where the body would
+  otherwise reach "inline-C not supported". It applies to user code only
+  (`!is_from_stdlib`). The stdlib's inline-C is answered by native overrides
+  first, or by interpreter intercepts that run on the error path itself: the
+  session channel templates, and `gc_force`. Compiling those would bypass the
+  intercepts.
+- **Cache.** One entry per `FnDef`, holding either the compiled shim or the
+  refusal message. A redefinition elaborates a new `FnDef`, so it misses the
+  cache and compiles afresh. The old entry and the old image stay, under the
+  same retired-image rule as the spice reload. A refusal is cached too, so a
+  body c2mir rejects costs one compile, not one per call.
+- **Signature first.** Before compiling, every parameter and the result must be
+  a scalar the emitter's `NAME__ffi` shim marshals: int-class, float, cstr,
+  bool, or a unit result. Anything else is refused with the type named (`takes
+  a parameter of type Pt`).
+- **Source.** The defn's own text, sliced from the file it was read from by the
+  span elaboration records on the binding (`Binding.defn_claim`, set for every
+  top-level `defn`). That covers the prompt, `--interpret`, and defns brought
+  in with `(load ...)`. A reader whose text the plain reader cannot read back
+  (neoteric, sweet) falls back to printing the session's Form. A defn written
+  by a macro has neither, and is refused.
+- **Program.** `(defmodule __repl-jit (export NAME) <defn>)`. That is narrower
+  than the plan above proposed. No type definitions ride along, because the
+  signature check admits only scalars, so a signature can never name one.
+- **Compile.** `compile_to_c` on a scratch file under `$TMPDIR` named after the
+  defn, with the emission flags `repl_jit_build` saves. The manifest supplies
+  the C name, and `g_emit_ffi_export_shims` supplies the shim. The compile runs
+  mid-evaluation, so the host puts back everything `compile_to_c` resets that
+  the turn still uses: the diagnostic file registry (the turn's source is file
+  id 0) and the had-error flag. c2mir's warnings are suppressed for these
+  compiles (`tur_jit_set_quiet_warnings`); its errors still print. The TU is
+  pruned like `tur jit`'s (`jit_prune`), with one non-static caller appended
+  to keep `__tur_static_init` alive.
+- **Call.** Through `NAME__ffi`, which casts each slot to the real C parameter
+  type. The result is tagged by the declared type, so a cstr comes back as a
+  cstr and a bool as a bool. The spice export shim, by contrast, returns every
+  int-class result as an int.
+
+**Refusals.** Each is an error value, and the session carries on:
+
+- A body that calls another Turmeric definition. Only the defn is compiled, so
+  MIR's link fails (`import of undefined item helper`).
+- A non-scalar signature.
+- A variadic defn.
+- A defn written by a macro.
+- An inline-C block that is not a defn's whole body, such as one inside a `let`
+  or a Turmeric body. Those stay "inline-C not supported".
+
+**Found on the way, fixed.** The pattern executor's `simple-return` matcher
+answered with the *first* `return` in a body, even one behind a loop or an
+`if`. So `all-even` printed `false` for `(all-even 4 8)` under `--interpret`,
+rc=0 and no warning, and C1 never saw the body. It now declines a body with a
+loop or more than one `return`:
+[turi-inline-c-simple-return-takes-first-return](../archive/turi-inline-c-simple-return-takes-first-return.md).
+
+**What an image costs, and what changed for it.** Measured on the C1 path,
+Release, x86-64 Linux, 4 cores. The baseline is the image path as it was
+(unpruned TU, C front end kept until the image is freed):
+
+| | first compile | resident after 51 compiles |
+| --- | --- | --- |
+| as it was | ~235 ms | 3.2 GB (~62 MB per image) |
+| + `jit_prune` on the C1 TU | ~130 ms | 1.4 GB (~28 MB per image) |
+| + C front end released once the image is initialized | ~135 ms | 116 MB (~1.6 MB per image) |
+
+The C front end -- parsed system headers and runtime declarations -- was most
+of an image, and nothing reads it after the module is linked: generation works
+from MIR's own IR. So `tur_jit_compile_image` now calls `c2mir_finish` as soon
+as the image is initialized, for every image, including the spice REPL's and
+the dynamic FFI's thunks. `TUR_JIT_KEEP_C2MIR=1` restores the old lifetime.
+120 consecutive compiles in one Release session returned 120 correct results.
+In a 51-compile session the compile share averages ~155 ms; the interpreter's
+own share of that session is ~700 ms in total.
+
+**Payoff beyond the prompt, measured.** `tests/run-turi.sh` PASS-skips every
+fixture with user inline-C. Of those, 564 have an `expected.stdout` and no args
+or stdin. Under `tur --interpret` they score:
+
+- **Today:** 133 pass. (The skip is coarser than the failures.)
+- **With C1:** 185 pass, 52 more, and no fixture that passed before fails.
+
+The 379 still failing break down as:
+
+| Count | Cause |
+| --- | --- |
+| 133 | non-scalar signature |
+| 30 | body calls Turmeric code |
+| 10 | inline-C that is not a whole defn body |
+| 205 | interpreter gaps unrelated to C1 (arrow instances, async/await, ...) |
+| 1 | timeout |
+
+Re-enabling those 52 in `run-turi.sh` (a marker, or running the carve-out with
+the experiment on) is a follow-on.
+
+**Test.** `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`,
+registered on `TUR_JIT` builds, in the `test` job's aux part). It covers:
+
+- the gate off;
+- loop and branch bodies;
+- a hoisted `#include`;
+- float, cstr and bool signatures;
+- a cached second call;
+- redefinition dropping the cache;
+- both refusals;
+- `--interpret`;
+- no scratch file left behind.
 
 ### C2 -- compile whole turns
 
@@ -302,6 +383,91 @@ of the globals rather than the slots, and the two states would drift apart. A
 
 A loaded spice (RP3) is out of scope for C2; see C3.
 
+#### Investigation (2026-10-02)
+
+Read against `main` after C1 landed, with C1's measurements. Nothing here is
+built yet. C2 is a change to the emitter and to turi together, and it wants a
+branch of its own.
+
+1. **The engine is now there to use.** `TUR_JIT` defaults ON and release
+   binaries carry it (Open question 1). The `cc` + `dlopen` alternative is no
+   longer needed to reach users.
+2. **Commit-without-evaluate is one branch.** `turi_eval_impl` evaluates a
+   turn in step 7 with `eval_toplevel_guarded(env, prog, n_fsd, ...)`
+   (`src/turi/eval.c`, "7. Evaluate the new top-level expressions"), and step
+   8 commits `src_acc`, `acc_forms`, `prior_*`, the elaboration session and
+   `acc_turns` only when that result is not an error. In compiled mode, step 7
+   becomes "run the compiled turn", and its result feeds the same
+   `turi_is_error` test. Step 8 is unchanged. Step 8 already records
+   `last_result_type`, the type the turn-entry printer needs.
+3. **The compile path exists and is safe mid-session.** C1's
+   `repl_inline_c_jit_build` is the template:
+   - `compile_to_c` from a scratch file;
+   - the diagnostic-registry save/replace;
+   - the flag save/restore;
+   - `jit_prune`, keeping `__tur_static_init` alive;
+   - `repl_jit_compile_image`.
+
+   C2 swaps the one-defn program for the definition table plus the turn
+   entry. Entry points other than the turn entry are not needed, so the whole
+   TU prunes the same way.
+4. **Latency budget looks reachable for small sessions.** C1's first compile
+   is ~135 ms in process with pruning, which is under the 200 ms target. That
+   is a one-defn program. C2's program is the whole definition table, so the
+   number to measure is the 200-defn case. The 2026-09-29 table puts `emit-c`
+   at ~37 ms and `compile_ms` at ~115-125 ms unpruned, and pruning cut C1's
+   compile from ~235 ms to ~130 ms.
+5. **Image memory is now the binding constraint, not latency.** "Every turn's
+   image stays resident until `:reset`" was unaffordable as the engine stood.
+   An image kept ~62 MB, so 1,000 turns would have been ~60 GB. With pruning
+   and the C front end released (C1), an image is ~1.6 MB, which is ~1.6 GB
+   per 1,000 turns. That is measurable and bounded, but too much to accept
+   unreviewed. Before C2 lands, decide one of:
+   - (a) make images smaller still, for example by releasing MIR function IR
+     after generation once nothing can lazily generate from it;
+   - (b) free an image once no slot, closure or dictionary can point into it,
+     which needs the provenance C2 does not track today;
+   - (c) accept the cost and document a `:reset` cadence.
+
+   The success criterion "resident memory after 1,000 turns is measured" now
+   has a number to beat.
+6. **Slot-backed globals can be done without touching reference sites.** A
+   `def` emits `static T name_N;`, initialized either as a statement of the
+   synthesized `main` body ("Gap F") or in `__tur_module_def_init`. In
+   REPL-compiled mode, emit a pointer and a macro in its place:
+
+   ```c
+   static T *__tur_slot_name_N;
+   #define name_N (*__tur_slot_name_N)
+   ```
+
+   Every existing read, `set!` and address-of of `name_N` then reaches the slot
+   unchanged. That includes the `TUR_REGION_NOTE_WORDS` hook `set!` already
+   emits. The initializer binds the pointer with `tur_repl_slot(...)` and runs
+   only when the slot is fresh. The `^thread-local` path (G4b, which emits
+   accessor functions in place of storage) is the precedent for redirecting a
+   global's storage in this emitter. A `^thread-local` def keeps that path; a
+   slot is process-wide by construction.
+7. **No pattern-executor dependence.** A compiled turn never consults
+   `try_exec_simple_inline_c`, so the matcher's guessing (fixed again above for
+   `simple-return`) is moot in compiled mode. That is one more reason to
+   prefer C2 over growing the matcher.
+8. **Still open, from the design above:**
+   - the turn-entry printer (Show dispatch in compiled code);
+   - redefinition of a `defstruct`/`defdata` whose values live in slots (the
+     fingerprint changes, so the slot is refreshed; that is correct, and it
+     needs a transcript test);
+   - continuations crossing images.
+
+**Recommendation:** do C2 as its own branch, in this order:
+
+1. The step-7 branch plus the definition table, keeping today's per-image
+   globals. Every turn then re-runs every initializer, so this is correct only
+   for sessions whose `def`s are pure and never mutated; the transcript diff
+   says where it is not.
+2. The slot macro.
+3. The image-memory decision (point 5) before the experiment soaks.
+
 ### C3 -- spices in compiled mode
 
 With a spice loaded, a compiled turn needs to call the spice's functions. The
@@ -321,7 +487,10 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
    compiling elaborator.
 2. **Reduce the fixed c2mir cost.** Measure how much of the ~110ms floor is
    the split runtime's declarations and how much is stdlib code emitted into
-   every program.
+   every program. Partly answered by C1 (2026-10-02): pruning the stdlib code
+   a program never reaches (`jit_prune`, which `tur jit` already did and the
+   image path did not) took a one-defn image from ~235 ms to ~130 ms. What is
+   left is mostly the split runtime's declarations and the system headers.
 3. **Split each turn into two images:** a definitions image rebuilt only when
    a definition changes, and a small turn image for expression-only turns.
    This is correct only if an expression cannot change the whole-program facts
@@ -334,7 +503,7 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
 | Phase | Gate | Lands | Tests |
 | --- | --- | --- | --- |
 | C0 | none (bug fix) | landed 2026-09-30 | `tests/turi/repl-multiline-input.sh`: every repro in the report, piped, asserting on the evaluated output (the failure exits 0) |
-| C1 | `repl-jit-inline-c` | post-v1 | `tests/turi/repl-jit-inline-c.sh`: loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, redefinition dropping the cache, refusal of a body that calls a Turmeric function. It probes the binary for the JIT and PASS-skips without it, like `tests/run-flags.sh`'s `jit-ffi-*` cases |
+| C1 | `repl-jit-inline-c` | landed 2026-10-02 | `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`, `TUR_JIT` builds): the gate off, loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, a cached second call, redefinition dropping the cache, refusal of a body that calls a Turmeric function and of a struct parameter, `--interpret`. It probes the binary for the JIT and PASS-skips without it |
 | C2 | `compiled-repl` | post-v1 | Transcript diff: run each transcript in a corpus through the interpreted and the compiled REPL and fail on any difference, as the engine triangle does. See the corpus list below. Latency: a new `benchmarks/repl-turn/` |
 | C3, C4 | as C2 | after C2 | as needed |
 
@@ -353,9 +522,9 @@ The C2 transcript corpus covers:
 
 - **C0 (met 2026-09-30):** every repro in the report evaluates correctly,
   piped and interactive.
-- **C1:** on a JIT build with the experiment on, the `c-mix` example above
-  prints `97` at the prompt and under `--interpret`. Unsupported signatures
-  still get a clean error.
+- **C1 (met 2026-10-02):** on a JIT build with the experiment on, the `c-mix`
+  example above prints `97` at the prompt and under `--interpret`.
+  Unsupported signatures get a clean error that names the type.
 - **C2:**
   - The transcript diff shows no differences beyond the documented ones.
   - A turn in a session of up to 200 definitions takes at most 200ms at the
@@ -364,13 +533,14 @@ The C2 transcript corpus covers:
 
 ## Open questions
 
-1. **The JIT is not in release binaries.** `TUR_JIT` defaults to OFF
-   (`CMakeLists.txt:138`) and `.github/workflows/release.yml` does not set it,
-   so C1-C3 reach source builds only. The same decision blocks
-   [ffi-spices-integration-plan](../ffi-spices-integration-plan.md) S5. The
-   alternative for C2 is a `cc` + `dlopen` path that shares the slot table.
-   That needs `tur` to export its symbols on non-JIT builds too, and costs
-   ~200-500ms per turn.
+1. ~~**The JIT is not in release binaries.**~~ **Resolved 2026-10-02.** MIR is
+   vendored under `external/mir/` (`tools/update-mir.sh` re-syncs it from the
+   fork), so `TUR_JIT` defaults ON on 64-bit x86-64 and arm64 without a
+   configure-time fetch. The release workflow ships the engine, and it now
+   runs a program through `tur jit` from each extracted archive. The `cc` +
+   `dlopen` alternative for C2 is not needed. For
+   [ffi-spices-integration-plan](ffi-spices-integration-plan.md) S5 this
+   turned a blocker into a decision: a `-DTUR_JIT=OFF` build still exists.
 2. **CLI after graduation.** While experimental, the feature is
    `--enable=compiled-repl`. Afterwards it could become `tur repl --eval jit`,
    or extend `--engine`, which today only chooses how a spice is built.

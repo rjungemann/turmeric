@@ -366,6 +366,10 @@ trap _abort_on_signal INT TERM
 # Optional regex filter for fixture names (relative path under tests/fixtures).
 # Example: TUR_TEST_FILTER='^rc-auto-drop|^rc-ref-conversion$'
 TUR_TEST_FILTER="${TUR_TEST_FILTER:-}"
+# Optional regex of fixture names to leave OUT (applied after the filter).
+# tests/run-fnsan.sh uses it for the fixtures that carry a `known.fnsan`
+# marker, which it then runs on their own and requires to still trap.
+TUR_TEST_EXCLUDE="${TUR_TEST_EXCLUDE:-}"
 
 # Optional named sub-suite for faster developer feedback / CI fan-out.
 # Groups are defined by file/dir presence (robust), not fragile name regexes:
@@ -420,6 +424,9 @@ fi
 
 matches_filter() {
     local fixture_name="$1"
+    if [ -n "$TUR_TEST_EXCLUDE" ] && [[ "$fixture_name" =~ $TUR_TEST_EXCLUDE ]]; then
+        return 1
+    fi
     if [ -z "$TUR_TEST_FILTER" ]; then
         return 0
     fi
@@ -1146,7 +1153,7 @@ run_negative_worker() {
 }
 
 export TUR BUILD_CC RESULTS_DIR TUR_EMIT_C_MODE
-export TUR_TEST_FILTER
+export TUR_TEST_FILTER TUR_TEST_EXCLUDE
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
 export TUR_TSAN _tur_timeout_bin TUR_MTIME TUR_STDLIB_HASH
