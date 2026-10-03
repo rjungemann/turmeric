@@ -1,4 +1,36 @@
+---
+title: A child forked under the sanitized tur jit can hang on ASan's allocator lock
+category: Archive
+description: Under a Debug (ASan) tur jit, a JIT'd program allocates through ASan's allocator, whose size-class locks a forked child can inherit held; r7rs-threads-lifecycle's fork check failed about one run in three on the JIT legs. The host now tells JIT'd code (TUR_JIT_HOST_ASAN) and the check stands down only there.
+---
+
 # A child forked under the sanitized `tur jit` can hang on ASan's allocator lock
+
+> **RESOLVED 2026-10-03** (archived).  Fix direction 1.  `src/jit_engine.c`
+> appends `#define TUR_JIT_HOST_ASAN 1` to the JIT prelude when the HOST was
+> built with AddressSanitizer (`__SANITIZE_ADDRESS__`, or clang's
+> `__has_feature(address_sanitizer)`), and `life-forks` in
+> `tests/fixtures/r7rs-threads-lifecycle/life.tur` returns 0 failures under
+> that define only.  The check still runs compiled and under a non-sanitized
+> `tur jit`.  Measured: `(fork-failures 1)` in 3 of 8 runs of the Debug
+> `tur jit` before, 0 of 8 after; `tests/run-jit.sh` on the fixture three
+> times, all PASS.
+>
+> **Why a skip and not a narrower change.**  Pausing the burner around each
+> fork, or giving the child a non-allocating body, does not help: on an ASan
+> host even the child's first LAZILY GENERATED function takes the allocator
+> lock, because MIR's generator runs in the host and allocates through it.
+> Any check that forks a threaded program and then runs JIT code in the child
+> is exposed there, and the lock is ASan's to take, not tur's.
+>
+> **Coverage traded, recorded so it is not mistaken for none:** this check
+> was the only one exercising the `g_gen_lock` `pthread_atfork` fix
+> ([jit-fork-child-hangs-with-threads](jit-fork-child-hangs-with-threads.md))
+> under the JIT, and every CI JIT leg that can fork is a Debug (ASan) build.
+> So that fix now runs unexercised in CI.  A Release `tur jit` leg, or a
+> toolchain whose ASan runtime locks its allocator around `fork` (fix
+> direction 2), would restore it -- delete the `#if` in `life-forks` then.
+
 
 **Severity: low (CI flake on the JIT legs; no product impact).** Only the Debug
 (`-fsanitize=address`) `tur jit` is affected, because only there does the
