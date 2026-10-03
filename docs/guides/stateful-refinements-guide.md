@@ -243,7 +243,7 @@ is still `TUR-E0375`, and so is an unannotated function that wraps one. The
 other contract positions -- `:pre`, `:post`, a refined return, and a loop's
 `:invariant` -- therefore accept a `#reads` measure as an ordinary **runtime**
 check. Before 2026-10-03 all four were `TUR-E0375`
-([reads-measure-rejected-in-invariant-and-pre](../reported/reads-measure-rejected-in-invariant-and-pre.md)).
+([reads-measure-rejected-in-invariant-and-pre](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/reads-measure-rejected-in-invariant-and-pre.md)).
 A `#reads` invariant is not yet *proved*, even inside `frozen`; that report says
 why.
 
