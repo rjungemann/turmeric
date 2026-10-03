@@ -1,10 +1,17 @@
 # Moving the Turmeric repos to a GitHub org
 
-> **Status: PROPOSED 2026-10-01. Step O1 (reference consolidation) has landed;
-> the transfer itself has not.** Written in answer to "what is a good option for
-> moving turmeric repos out of my rjungemann account -- a free-tier GH org?"
-> The short answer is **yes, GitHub Free for organizations is sufficient and
-> costs nothing here**, and section 1 is the measurement that settles it.
+> **Status: IN PROGRESS. O1 (reference consolidation) landed 2026-10-01.
+> O2 (redirect verification) is RESOLVED 2026-10-02 -- see section 5, O2.
+> Tier 1 (the four zero-coupling supplemental repos) TRANSFERRED 2026-10-02.
+> `trowel`, `turmeric-spices` and `turmeric` have not moved yet.** Written in
+> answer to "what is a good option for moving turmeric repos out of my
+> rjungemann account -- a free-tier GH org?" The short answer is **yes, GitHub
+> Free for organizations is sufficient and costs nothing here**, and section 1
+> is the measurement that settles it.
+>
+> **The secrets ledger -- every secret, its consumer, and where it has to be
+> redefined -- is [section 2.1](#21-the-secrets-ledger----every-secret-and-where-it-goes).**
+> The per-repo progress tracker is [section 0a](#0a-progress-tracker).
 > **Type:** repository / release infrastructure
 > **Touches:** no compiler source. `tvm/tvm.sh`, `web/{repo,site,ci-metrics,worker}.js`,
 > `tools/gen{guides,spices}.py`, [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml),
@@ -19,11 +26,20 @@
 > 2. **Target name `turmeric-lang`**, matching the domain. Plain `turmeric` is
 >    a taken user account. `turmeric-lang` was unclaimed on 2026-10-01 and is
 >    being reserved.
-> 3. **`turmeric` and `turmeric-spices` must move in the same window**, spices
->    first. O1 made the CI clone owner-relative, which is what creates the
->    ordering constraint (section 4.1). This is the one way the move can turn
->    CI red on its own.
-> 4. **Do not rewrite `owner/repo#N` cross-references or CHANGELOG entries.**
+> 3. **`turmeric-spices` must move before `turmeric`, never after.** O1 made
+>    turmeric's CI clone owner-relative, which is what creates the ordering
+>    constraint (section 4.1). This is the one way the move can turn CI red on
+>    its own. They do *not* have to move in the same window: measured
+>    2026-10-02, spices' own CI hardcodes `rjungemann/turmeric` (ci.yml lines
+>    36, 373, 404) rather than deriving it, so spices-in-org /
+>    turmeric-still-at-`rjungemann` resolves through the redirect and is safe
+>    to sit in for as long as you like.
+> 4. **Migrate gradually, supplemental repos first and `turmeric` last**
+>    (owner's call, 2026-10-02). Section 0a tracks it. In-flight turmeric PRs
+>    are not a reason to delay: all four open PRs are same-repo `claude/*`
+>    branches, so they transfer with the repo, numbers intact, with nothing to
+>    re-push from the old remote.
+> 5. **Do not rewrite `owner/repo#N` cross-references or CHANGELOG entries.**
 >    They redirect, and rewriting them falsifies a historical record
 >    (section 3, Class C).
 
@@ -55,6 +71,25 @@ flowchart TD
   A1 --> V["O6: verify the four uncovered paths<br/>installer / ci dashboard / tap / attestation"]
   B1 --> V
 ```
+
+## 0a. Progress tracker
+
+Tiered by coupling: a repo is in Tier 1 only if it owns no secrets and nothing
+resolves a URL into it at build or install time.
+
+| Tier | Repo | Owner now | Transferred | Still owed |
+| --- | --- | --- | --- | --- |
+| 1 | `smt-lib-benchmarks` | `turmeric-lang` | **2026-10-02** | Class B doc sweep |
+| 1 | `mir` | `turmeric-lang` | **2026-10-02** | `tools/update-mir.sh:34` default, `VENDORED.md` prose; default branch is `__probe` (see 4.4) |
+| 1 | `asdf-turmeric` | `turmeric-lang` | **2026-10-02** | `lib/utils.bash`, `README.md`, `bin/help.overview` |
+| 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | `build.yml:36,107`, `README.md` |
+| 2 | `trowel` | `rjungemann` | -- | **7 signing secrets (2.1)**; cask name; `CMakeLists.txt:219` |
+| 3 | `turmeric-spices` | `rjungemann` | -- | must precede `turmeric`; own owner refs |
+| 3 | `turmeric` | `rjungemann` | -- | `SENTRY_DSN`; Class A one-liners (O4); Cloudflare reconnect; O5 sweep; O6 verification |
+
+Tier 1 was verified after transfer, not assumed: for all four, an old-path
+`git clone --depth 1` and `git ls-remote` still succeed, and `mir`'s 9
+workflows plus `turmeric-godot`'s 1 survived the move intact.
 
 ## 1. Why GitHub Free for organizations is sufficient
 
@@ -113,8 +148,8 @@ existing clones and already-installed `tvm` keep working.
 
 | Thing | Consequence | Where it bites |
 | --- | --- | --- |
-| **Actions secrets** | `SENTRY_DSN` becomes empty | `fuzz.yml:144,273`, `tsan.yml:86` -- runs stay green while reporting nothing |
-| **Rulesets / branch protection** | base-branch gate may lapse | CI is `pull_request: branches: [main]`; see section 6.1 |
+| **Actions secrets** | `SENTRY_DSN` and trowel's 7 signing secrets become empty | full ledger in **2.1** -- `fuzz.yml:144,273`, `tsan.yml:86` stay green while reporting nothing; trowel's release cannot sign |
+| **Rulesets / branch protection** | base-branch gate may lapse | **measured 2026-10-02: nothing to re-apply.** All 7 repos have 0 rulesets and no branch protection on `main`. Section 6.1 still applies as a thing to *confirm*, not restore |
 | **Dependabot alerts + security updates** | silently off | the tree has active Dependabot PRs today |
 | **CodeQL default setup** | `codeql.yml` may need re-enabling | security tab goes quiet |
 | **Allowed-actions policy** | third-party actions blocked | `mymindstorm/setup-emsdk`, and every pinned action in `ci.yml` |
@@ -123,7 +158,80 @@ existing clones and already-installed `tvm` keep working.
 
 Set `SENTRY_DSN` as an **org-level** secret rather than three repo-level
 copies. That is strictly better than today's arrangement and is the one place
-where the move improves the status quo for free.
+where the move improves the status quo for free. Do **not** hoist trowel's
+signing material the same way -- 2.1 says why.
+
+### 2.1 The secrets ledger -- every secret and where it goes
+
+Measured 2026-10-02 across all 7 repos, every store `gh secret list` does not
+show included. **8 secrets live in 2 repos.** Actions *variables*, Dependabot
+secrets, Codespaces secrets, environments and deploy keys are **empty in all 7
+repos**, so they need no migration at all.
+
+A transfer carries none of these. GitHub never discloses a secret's value back
+to you, so anything not independently recoverable has to come from your own
+records -- the "Recover from" column is the honest answer to "can I rebuild
+this if I never wrote it down?"
+
+| Secret | On | Consumed by | Redefine on | Recover from |
+| --- | --- | --- | --- | --- |
+| `SENTRY_DSN` | `turmeric` | `fuzz.yml:144`, `fuzz.yml:273`, `tsan.yml:86` | **org** `turmeric-lang`, visibility *All repositories* | Sentry project settings -> Client Keys (DSN) |
+| `MACOS_CERTIFICATE` | `trowel` | `release.yml:22` | **repo** `trowel` only | Re-export the Developer ID `.p12` from Keychain Access, then `base64` it |
+| `MACOS_CERTIFICATE_PASSWORD` | `trowel` | `release.yml:23` | repo `trowel` | Whatever you set on the `.p12` export -- your own record |
+| `MACOS_KEYCHAIN_PASSWORD` | `trowel` | `release.yml:24` | repo `trowel` | **Arbitrary.** It names a throwaway keychain the job creates; invent a fresh value, nothing validates it against anything |
+| `MACOS_CODESIGN_IDENTITY` | `trowel` | `release.yml:21` | repo `trowel` | `security find-identity -v -p codesigning` (the `Developer ID Application: ...` string) |
+| `APPLE_ID` | `trowel` | `release.yml:25` | repo `trowel` | Your Apple Developer account email |
+| `APPLE_TEAM_ID` | `trowel` | `release.yml:26` | repo `trowel` | developer.apple.com -> Membership details |
+| `APPLE_APP_PASSWORD` | `trowel` | `release.yml:98-106` (notarization) | repo `trowel` | **Re-issuable.** appleid.apple.com -> Sign-In and Security -> App-Specific Passwords. Revoke the old one |
+
+#### Why `SENTRY_DSN` goes org-wide and the Apple secrets do not
+
+An org secret with *All repositories* visibility is readable by any workflow in
+any org repo. Secrets are withheld from **forked** PRs -- but every PR in this
+project is a same-repo `claude/*` branch, and those **do** receive secrets. So
+an org-wide `MACOS_CERTIFICATE` would be readable by a branch workflow in
+`turmeric`, `spices` or `mir`, none of which has any business signing anything.
+A Sentry DSN is an ingest endpoint, not a credential that can sign software;
+the blast radius is not comparable. Keep the signing material scoped to the one
+repo that signs.
+
+#### Commands
+
+Setting an **org** secret needs a scope a default `gh` login does not carry
+(`gist, read:org, repo, workflow` as of 2026-10-02):
+
+```sh
+gh auth refresh -h github.com -s admin:org
+
+gh secret set SENTRY_DSN --org turmeric-lang --visibility all
+
+# trowel's seven, repo-scoped, once trowel is in the org:
+base64 -i DeveloperID.p12 | gh secret set MACOS_CERTIFICATE -R turmeric-lang/trowel
+gh secret set MACOS_CERTIFICATE_PASSWORD -R turmeric-lang/trowel
+gh secret set MACOS_KEYCHAIN_PASSWORD    -R turmeric-lang/trowel
+gh secret set MACOS_CODESIGN_IDENTITY    -R turmeric-lang/trowel
+gh secret set APPLE_ID                   -R turmeric-lang/trowel
+gh secret set APPLE_TEAM_ID              -R turmeric-lang/trowel
+gh secret set APPLE_APP_PASSWORD         -R turmeric-lang/trowel
+```
+
+Verify with `gh secret list -R turmeric-lang/trowel` -- it lists names, which
+is enough to catch a missing one, and is all GitHub will tell you.
+
+#### Not a GitHub secret, but in the same class
+
+- **The Cloudflare Workers connection.** `try-turmeric` and `turmeric-spices`
+  are both live Workers, but **no** `CLOUDFLARE_API_TOKEN` exists in any repo
+  and no workflow mentions `wrangler`. So the web deploy is either a local
+  `wrangler deploy` (nothing breaks on transfer) or Cloudflare **Workers
+  Builds** connected to the GitHub repo -- which is authorized per GitHub
+  *account* and must be re-authorized against the org. Determine which
+  **before** `turmeric` moves; it is the one unmeasured item left.
+- **Fine-grained PATs** scoped to `rjungemann/*` 404 rather than failing auth
+  (section 2). Re-scope to the org.
+- **Trowel's transfer is safe even with the secrets missing.** Its `ci.yml`
+  uses none of them; only `release.yml` does. So the gate is "do not cut a
+  trowel release until the 7 are back", not "do not transfer trowel".
 
 ## 3. The three classes of reference
 
@@ -146,7 +254,7 @@ dead link. Each now has exactly one literal, so the move is a one-line edit:
 | `.github/workflows/ci.yml` | `${{ github.repository_owner }}` | needs **no** edit at move time |
 | `scripts/wait-for-release.sh` | `TURMERIC_REPO` default | already overridable before O1 |
 | `Formula/turmeric.rb` | `head` URL | one literal; a formula cannot import a constant |
-| `cmake/mir.cmake` | `TUR_MIR_GIT_REPOSITORY` | already a CACHE var; see 4.2 |
+| ~~`cmake/mir.cmake`~~ | -- | **STALE, corrected 2026-10-02.** There is no `TUR_MIR_GIT_REPOSITORY` any more and no `FetchContent`/`GIT_REPOSITORY` at all: #1024 made the vendored `external/mir/` tree the only source, so `cmake/mir.cmake` resolves no URL and is not Class A. The fork's owner survives only in `tools/update-mir.sh:34` (`MIR_REPOSITORY` default, already overridable) and `external/mir/VENDORED.md` prose. `update-mir.sh` fetches an explicit commit SHA, never a branch |
 
 ### Class B -- static text and links (~600, overwhelmingly `docs/`)
 
@@ -186,7 +294,7 @@ archeology-by-sed that a later reader cannot untangle. A blind
 
 ## 4. Scope -- which repos move
 
-### 4.1 `turmeric` + `turmeric-spices` move together, spices first
+### 4.1 `turmeric-spices` moves before `turmeric`, in either window
 
 This is a hard ordering constraint and it is one that O1 introduced
 deliberately. `ci.yml` now clones:
@@ -199,28 +307,47 @@ deliberately. `ci.yml` now clones:
 
 Owner-relative, which makes the step's trust-boundary comment true by
 construction instead of by convention -- the clone can no longer reach outside
-the owner that owns the workflow. The cost is that **the two repos must share
-an owner at all times**:
+the owner that owns the workflow. The cost is an **ordering** constraint on the
+two repos:
 
 | Order | Result |
 | --- | --- |
-| spices first | turmeric's CI keeps cloning `rjungemann/turmeric-spices` via redirect, then resolves to the org. **Safe.** |
+| spices first | turmeric's CI keeps cloning `rjungemann/turmeric-spices`, which redirects to the org. **Safe, and safe to stay in indefinitely** -- see below. |
 | turmeric first | CI immediately clones `turmeric-lang/turmeric-spices`, which does not exist yet. **Every PR red** until spices follows. |
 | both, same sitting | Safe, and the window where it matters is minutes. |
 
-Also note that `turmeric-spices` CI re-pins turmeric's `main` on every
-run, so two spices runs hours apart already use different compilers -- and
-the spices side has its own owner references to sweep in the same window.
+**The original plan said the two "must move in the same window"; measured
+2026-10-02, that is stronger than necessary.** The constraint is one-directional,
+because the dependency is asymmetric:
 
-### 4.2 Decisions still open
+- *turmeric -> spices* is **owner-relative** (`${{ github.repository_owner }}`),
+  so it tracks whichever owner holds turmeric. This is the direction that
+  breaks, and only if turmeric moves first.
+- *spices -> turmeric* is **hardcoded** `rjungemann/turmeric` in three places
+  (`ci.yml:36` and `:404` `actions/checkout`, and `:373` a `git ls-remote` to
+  pin turmeric's `main` for the run). Hardcoded resolves through the redirect
+  whichever owner turmeric sits under, so spices keeps working while turmeric
+  waits.
 
-| Repo | Recommendation | Why it is not obvious |
+So spices can live in the org for days or weeks before turmeric follows, which
+is what makes "supplemental first, turmeric last" workable rather than a
+same-sitting scramble. The three hardcoded refs are a Class B sweep on the
+spices side, not a blocker. Also note that `turmeric-spices` CI re-pins
+turmeric's `main` on every run, so two spices runs hours apart already use
+different compilers.
+
+### 4.2 Decisions, settled 2026-10-02
+
+Everything moves. The owner resolved both open questions in favour of moving;
+what follows is what each one actually costs.
+
+| Repo | Decision | What it cost / costs |
 | --- | --- | --- |
-| `smt-lib-benchmarks` | move | referenced only from `tests/corpus/` docs; purely cosmetic either way |
-| `turmeric-godot` | move | ecosystem repo, 7 refs |
-| `asdf-turmeric` | move | an asdf plugin URL is user-visible and is pasted into user shells; moving it means users' existing `asdf plugin add` lines rely on the redirect |
-| `trowel` | **ask** | a distinct product with its own site section and its own Homebrew cask (`rjungemann/trowel/trowel`); it is "a Turmeric repo" only by association |
-| `mir` | **probably leave** | it is a *fork of `vnmakarov/mir`* carrying 2 merged patches, consumed as a build pin. `cmake/mir.cmake:127` already says to point `TUR_MIR_GIT_REPOSITORY` back at upstream once the patches land there. Moving a temporary fork into the org implies more permanence than it has |
+| `smt-lib-benchmarks` | **moved** | Nothing. It contains **zero** `rjungemann` references of its own; the 11 refs the plan counted are in the *turmeric* tree pointing at it, and they are `tests/corpus/` docs |
+| `turmeric-godot` | **moved** | `build.yml:36,107` hardcode `rjungemann/turmeric`, which still resolves -- turmeric has not moved, and will redirect when it does |
+| `asdf-turmeric` | **moved** | `lib/utils.bash:13` `TURMERIC_REPO` default is already overridable. Users' existing `asdf plugin add turmeric https://github.com/rjungemann/asdf-turmeric` lines now rely on the redirect; verified still cloning 2026-10-02 |
+| `mir` | **moved** | The original "probably leave" reasoning rested on a build pin that no longer exists (see the Class A correction). With the sources vendored, moving the fork costs one default in `update-mir.sh` and some prose, and the "implies permanence" objection is weaker than keeping a Turmeric-specific fork in a personal account |
+| `trowel` | **move, Tier 2** | A distinct product with its own cask, and the only repo besides turmeric holding secrets -- hence its own tier rather than its own answer. See 4.3 and 2.1 |
 
 ### 4.3 The Homebrew tap renames itself
 
@@ -239,6 +366,19 @@ Three places say the old form: `README.md:41`, `web/index.html:333`, and
 cloned should `brew untap rjungemann/turmeric` before tapping the new name;
 brew keys its tap cache by name and will otherwise keep the stale one.
 
+### 4.4 Loose end found while transferring: `mir`'s default branch
+
+`turmeric-lang/mir`'s default branch is **`__probe`**, not `master`. `master`
+exists alongside it and 9 other branches. Nothing currently depends on the
+default -- `tools/update-mir.sh` fetches an explicit commit SHA -- so this is
+cosmetic, but it makes the repo's web landing page show a stray probe branch.
+It also means `mir` is not a GitHub fork of `vnmakarov/mir` at all (the API
+reports no parent); it is a standalone repo carrying MIR's history, so the
+"fork" relationship is social, not structural. Left alone deliberately rather
+than guessed at -- flip it with
+`gh api -X PATCH repos/turmeric-lang/mir -f default_branch=master` if `__probe`
+is the leftover it looks like.
+
 ## 5. Runbook
 
 ### O1 -- consolidate the references (**LANDED**)
@@ -248,48 +388,87 @@ Verified: `tvm` URL derivation byte-identical with overrides still winning;
 all four web modules parse as ESM with identical interpolated values;
 `genguides.py` output byte-identical across 147 files; `ci.yml` valid YAML.
 
-### O2 -- verify what redirects, before committing to the move
+### O2 -- verify what redirects (**RESOLVED 2026-10-02: raw is fine**)
 
-The highest-risk unknown, and it is cheap to settle. **`raw.githubusercontent.com`
-is widely reported not to follow repo-transfer redirects.** Two things depend
-on it:
+This was the plan's highest-risk unknown. **`raw.githubusercontent.com` is
+widely reported not to follow repo-transfer redirects**, and two things depend
+on it: `web/worker.js` `TIMINGS_BASE` (the `/ci` dashboard's whole data source)
+and the installer's `RAW` (how `tvm.sh` is fetched during bootstrap). If raw
+did not redirect, both would break the instant the transfer completed and O4
+would have to deploy in the same window.
 
-- `web/worker.js` `TIMINGS_BASE` -- the entire `/ci` dashboard's data source.
-- the installer's `RAW` -- how `tvm.sh` itself is fetched during bootstrap.
+**It does not break.** Measured twice -- first against a third-party precedent
+(`jest`, transferred `facebook` -> `jestjs`), then against our own
+`smt-lib-benchmarks` immediately after its real transfer. Identical results, so
+no throwaway probe repo was needed:
 
-If raw does not redirect, both break **the instant the transfer completes**,
-and the fix (O4) has to be deployed in the same window rather than at leisure.
+| Old-owner URL | Result |
+| --- | --- |
+| `raw.githubusercontent.com/<old>/<repo>/main/README.md` | **200**, served directly -- not even a 301. Raw resolves the old owner path server-side |
+| `codeload.github.com/<old>/<repo>/tar.gz/refs/heads/main` | **200** |
+| release asset `github.com/<old>/<repo>/releases/download/...` | **200** (301 -> codeload, then serves) |
+| `github.com/<old>/<repo>` (web UI) | 301 -> new owner |
+| `api.github.com/repos/<old>/<repo>` | 301 -> `/repositories/<id>` |
+| `git clone --depth 1` / `git ls-remote` | OK |
 
-Settle it empirically on a throwaway repo rather than on the real one:
+Consequences for the rest of the plan:
+
+- **O4 is no longer time-pressured.** The Class A one-line edits can land at
+  leisure after the transfer instead of in the same window.
+- **O6 item 2** (`/ci` dashboard) drops from "verify the redirect holds" to a
+  routine smoke check.
+- `trowel`'s `CMakeLists.txt:219`, which downloads a *turmeric release asset*
+  by URL, is redirect-safe by the release-asset row above.
+- The one thing still unmeasured is not a GitHub redirect at all: the
+  Cloudflare Workers Builds connection (see 2.1).
+
+### O3 -- create the org and pre-stage settings (**partially done**)
+
+1. ~~Create `turmeric-lang` (Free). Add the personal account as owner.~~
+   **Done** -- created 2026-10-02, owner account is org `admin`.
+2. **Before transferring `turmeric`:** set `SENTRY_DSN` as an org secret (2.1);
+   set the allowed-actions policy to permit the actions `ci.yml` pins; enable
+   Dependabot alerts and security updates org-wide. **Still owed.** None of
+   these blocked Tier 1, since those repos hold no secrets and `mir`'s 9
+   workflows use only first-party actions.
+3. Re-scope any fine-grained PAT from `rjungemann/*` to the org. **Still owed.**
+
+### O3a -- Tier 1: the four zero-coupling repos (**LANDED 2026-10-02**)
 
 ```sh
-gh repo create rjungemann/redirect-probe --public --add-readme
-# transfer it to the org, then:
-curl -sSo /dev/null -w '%{http_code} -> %{redirect_url}\n' \
-  https://raw.githubusercontent.com/rjungemann/redirect-probe/main/README.md
-curl -sSo /dev/null -w '%{http_code}\n' \
-  https://api.github.com/repos/rjungemann/redirect-probe
-gh repo delete rjungemann/redirect-probe --yes   # or the org path
+for r in smt-lib-benchmarks mir asdf-turmeric turmeric-godot; do
+  gh api -X POST "repos/rjungemann/$r/transfer" -f new_owner=turmeric-lang
+done
 ```
 
-Record the answer in this section. Also worth probing on the same repo:
-`codespaces.new/<owner>/<repo>`, and a release asset's `browser_download_url`.
+The API returns **202 Accepted with the pre-transfer body** -- `full_name` still
+reads `rjungemann/...` in the response. That is not a failure; poll
+`gh api repos/turmeric-lang/<repo>` a few seconds later to confirm. All four
+verified moved, old paths still cloning, workflows intact.
 
-### O3 -- create the org and pre-stage settings
+### O3b -- Tier 2: `trowel`
 
-1. Create `turmeric-lang` (Free). Add the personal account as owner.
-2. **Before** transferring: set `SENTRY_DSN` as an org secret; set the
-   allowed-actions policy to permit the actions `ci.yml` pins; enable
-   Dependabot alerts and security updates org-wide.
-3. Re-scope any fine-grained PAT from `rjungemann/*` to the org.
+Transfer is safe immediately; the gate is on *releasing*, not moving (2.1).
 
-### O4 -- transfer, spices first
+1. `gh api -X POST repos/rjungemann/trowel/transfer -f new_owner=turmeric-lang`
+2. Re-add the 7 signing secrets per 2.1 **before the next release cut.**
+3. `Casks/trowel.rb` -- the cask is the repo, as with turmeric's formula (4.3),
+   so the install line becomes
+   `brew install --cask turmeric-lang/trowel/trowel`. Existing users need
+   `brew untap rjungemann/trowel` first; brew keys its tap cache by name.
+4. `CMakeLists.txt:219` pulls a turmeric release asset by URL -- redirect-safe
+   (O2), so this is a Class B edit, not a blocker.
 
-Per 4.1. For each repo: Settings -> Transfer ownership, or
+### O4 -- Tier 3: spices, then turmeric
+
+Per 4.1 -- **spices first, turmeric second, never the reverse.** For each
+repo: Settings -> Transfer ownership, or
 
 ```sh
 gh api -X POST repos/rjungemann/<repo>/transfer -f new_owner=turmeric-lang
 ```
+
+Then for `turmeric`, in one commit on a branch:
 
 Then immediately, in one commit on a branch:
 
@@ -303,8 +482,10 @@ Then immediately, in one commit on a branch:
   (3 files) -- **but read 6.2 first**
 - `.github/workflows/ci.yml`: **nothing**
 
-Re-apply branch protection / rulesets, confirm CI is still gated on `main`,
-and reconnect the web deploy integration.
+Then: re-add `SENTRY_DSN` (or set it org-wide first, per 2.1), confirm CI is
+still gated on `main` (6.1), and reconnect the web deploy integration (2.1).
+There is **no** branch protection or ruleset to re-apply -- measured empty on
+all 7 repos (section 2).
 
 ### O5 -- sweep Class B
 
@@ -329,8 +510,9 @@ CI going green proves almost nothing here. Check by hand:
 
 1. **Installer:** `curl -fsSL https://turmeric-lang.com/install | sh` in a
    container, end to end, including the checksum step.
-2. **`/ci` dashboard:** load it and confirm the NDJSON actually arrives
-   (this is the O2 raw-redirect question, now live).
+2. **`/ci` dashboard:** load it and confirm the NDJSON actually arrives.
+   Downgraded to a routine smoke check by O2 -- raw serves old-owner paths at
+   200, so this is no longer the cliff the plan was written around.
 3. **Homebrew:** `brew untap rjungemann/turmeric` then
    `brew install --HEAD turmeric-lang/turmeric/turmeric`.
 4. **Attestation:** `gh attestation verify <asset> --repo turmeric-lang/turmeric`
