@@ -2553,6 +2553,26 @@ user inline C on its own.
 | [jit-xopen-source-guard-inert-on-glibc](jit-xopen-source-guard-inert-on-glibc.md) | high (cost a release) | The emitted unit defines `_XOPEN_SOURCE 700` for `<ucontext.h>` (`emit_module.c:13251`) six lines *after* the BSD networking headers already pulled in the include-guarded `features.h`, so on glibc it is inert; aarch64's `sys/ucontext.h` then includes `sys/procfs.h` -> `sys/user.h`, which c2mir cannot parse, and `tur jit` falls back to cc on every program. Hoisting the define is ruled out by the macOS constraints at `:13231` (T24) and `:13247` (T21) |
 | [c2mir-rejects-uint128](c2mir-rejects-uint128.md) | medium | c2mir fails to parse `__uint128_t`, so inline C that writes it never reaches the JIT -- `TUR-W0070`, cc takes over, right answer by the slow path. Belongs in the vendored fork; `jit-arm64-uint128-align-struct-layout-skew` suggests layout is already modelled, so the gap may be parser-only |
 
+## Found investigating the three Sentry reports (filed 2026-10-03)
+
+The nightly `Fuzz`/`TSan` jobs report findings to Sentry and nowhere else (see
+the security guide's "Where a fuzz or TSan finding goes"). Three issues stood in
+the `turmeric-ci` project; all three are accounted for:
+
+- the `type` harness finding at seed 20261003 was already triaged by PR #1040 as
+  [generator-thunk-call-site-returns-void-ptr-not-carrier](generator-thunk-call-site-returns-void-ptr-not-carrier.md)
+  (confirmed still live with fnsan **armed** -- a run whose banner says
+  `fnsan: UNAVAILABLE` proves nothing about it);
+- one is a wiring smoke test, not a finding: `kind=connectivity-probe`,
+  `target=wp7-setup-check`, fired 22 s after the `SENTRY_DSN` secret was set,
+  and its payload names `json_decode_array` in `src/compiler/json.c` -- neither
+  the function nor the file exists in the tree;
+- the third is the row below.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[parse-shell-array-spins-on-zero-progress-value](../archive/parse-shell-array-spins-on-zero-progress-value.md)~~ | medium | **RESOLVED 2026-10-03** (archived, found and fixed in one change): `parse_shell_array` advanced its cursor only by what `parse_value` consumed and never checked that it consumed anything, so a `#`, `\n` or `\r` where a value is expected stalled `p` while each turn appended an empty string and doubled the array -- seen both as `out-of-memory (malloc(2147483648))` (2^28 entries, so ~268M turns: unbounded, not slow) and, in CI with less headroom, as `libFuzzer: timeout after 15 seconds`. A DoS on untrusted Justfile input, not memory-unsafe. **The identical defect had already been found by this same fuzzer in the dependency-argument loop and fixed there** -- the guard was never applied to this sibling, because the first fix was written as a fix to one loop rather than to the `parse_value`-returns-nothing contract. Now guarded, with the `realloc`-failure leak beside it fixed and CI's reproducer pinned as `tests/fuzz/seeds/fuzz_justfile/shell-array-comment-hang.bin`. Found 2026-10-01, Sentry `TURMERIC-CI-2`; the triggering line in isolation does **not** reproduce (the logical-line scanner's bracket-depth handling decides whether a `#`/newline lands inside the span), which is why the seed is the unreduced artifact |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
