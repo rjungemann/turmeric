@@ -358,6 +358,23 @@ else
 fi
 rm -f "$_nodump_tmp"
 
+# dump-effects-module-members: a defn inside a (defmodule ...) body is inferred
+# and listed like a top-level one (module-members-skip-effect-row-checking):
+# `report` is unannotated and prints, `ticks` declares #fx{Tick}.
+_mod_tmp=$(mktemp /tmp/tur-dump-mod-XXXXXX)
+"$TUR" --dump-effects check "tests/fixtures/effect-row-module-member-ok/input.tur" \
+    2>/dev/null > "$_mod_tmp"; rc=$?
+if [ $rc -ne 0 ]; then
+    fail "dump-effects-module-members" "non-zero exit ($rc)"
+elif ! grep -qx "defn report : #{IO}" "$_mod_tmp"; then
+    fail "dump-effects-module-members" "expected 'defn report : #{IO}'; got: $(grep '^defn report' "$_mod_tmp")"
+elif ! grep -qx "defn ticks : #{Tick}" "$_mod_tmp"; then
+    fail "dump-effects-module-members" "expected 'defn ticks : #{Tick}'; got: $(grep '^defn ticks' "$_mod_tmp")"
+else
+    pass "dump-effects-module-members"
+fi
+rm -f "$_mod_tmp"
+
 # lint-effects-alias: --lint-effects is a deprecated alias for --strict-effects.
 # It used to carry a byte-identical copy of the TUR-W0030 emitter (see
 # docs/archive/strict-effects-and-lint-effects-are-indistinguishable.md); it

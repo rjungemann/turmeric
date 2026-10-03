@@ -1,5 +1,84 @@
 # The `Arrow [(->)]` instance builds its closure at erased words
 
+**Narrowed 2026-10-02: a direct `.>>>` / `.<<<` at concrete types is fixed
+(fix direction 2), and the corpus has no `known.fnsan` left.  Still open: the
+same call inside an `[^Arrow A]` generic (a SIGSEGV on `main` for float
+arrows, not register luck), and `((>>> f g) 7.1)` through the bare generic
+defn.**
+
+## What was fixed (2026-10-02)
+
+Direction 2, made possible by writing the class over its arrows.
+`stdlib/arrow.tur` declares `(>>> [f : (a b c) g : (a c d)] : (a b d))` (and
+`<<<` flipped), and the `(->)` instance's bodies name the element types,
+`(fn [x : b] : d (g (f x)))`.  Three compiler pieces make that mean
+something:
+
+- **Substitution** (`elab_subst_arrow_app`, `elab_typeclasses.c`): with the
+  class variable bound to the `(->)` head marker, `(a X Y)` is the boxed
+  function type `(fn [X] Y)`.  Before, the application stayed an opaque
+  `TY_APP` and `(g ...)` in the body was "not a function".
+- **Binding at dispatch**: `m7_collect_tyvar_bindings` matches `(a X Y)`
+  against a one-argument function (X its parameter, Y its result), and a
+  `(->)`-headed method call whose class signature grounds every element
+  variable gets them as `abi_bindings` plus the grounded result type -- so
+  the emitter mints `__inst_Arrow__gt_gt_gt_arrow__spec__...` and the closure
+  it returns as `__fn_N__spec__double_void___double`, and the call is typed
+  `(fn [float] float)` instead of the erased `(fn [int] int)` (which is why
+  `((.>>> f g) 7.1)` used to be a type error).  Two element types in one
+  program get two specs (`__h1`).  A call that does not ground keeps the
+  erased path unchanged.
+- **The word slot through a typed carrier** (`emit_expr.c`, phase F): the
+  spec calls `f.fn`, slot 0 of a fat closure, so an untyped `ptr<void>` or
+  function parameter is spelled as the word there -- the slot convention of
+  `type_is_word_closure_slot`.  `fat-shim-void-ptr-arrow-compose` (b :=
+  `ptr<void>`) trapped on exactly that once the instance was specialized.
+
+Measured: `bash tests/run.sh` 3506/0; `tests/run-fnsan.sh` (armed) 3506/0
+with **no** `known.fnsan` exemptions -- `fat-shim-void-ptr-arrow-compose`'s
+marker is deleted.  Four snapshots moved (the instance's unspecialized base
+now takes `tur_poly_fn_t`s, plus renumbering).  Pinned by
+`tests/fixtures/arrow-instance-typed-compose`: `.>>>`/`.<<<` over float
+arrows, a cstr -> cstr -> float composition beside it, int arrows, and both
+called straight off the dispatch with no annotation.
+
+## Still open
+
+1. **Inside an `[^Arrow A]` generic.**
+
+   ```turmeric
+   (load "stdlib/arrow.tur")
+   (defn pipe [^Arrow A] [f : A g : A] : A (.>>> f g))
+   (defn main [] : int
+     (let [^fat f : (fn [float] #fx{} float) (fn [x : float] : float (+ x 1.25))
+           ^fat g : (fn [float] #fx{} float) (fn [x : float] : float (* x 2.0))
+           ^fat h : (fn [float] #fx{} float) (pipe f g)]
+       (println (h 7.1)))
+     0)
+   ```
+
+   `tur run`: SIGSEGV (exit 139), before and after this change.  The
+   receiver in `pipe`'s body is the type variable `A`, so the dispatch has
+   nothing to ground `b c d` from, and `pipe__spec__...` (A := `(fn [float]
+   float)`) still calls the instance's erased base.  Int arrows through the
+   same generic answer correctly.  The fix is to re-derive the instance
+   call's bindings per monomorph -- the emitter already re-resolves element
+   dispatch inside a spec for constrained instances
+   (`emit_find_dispatch_spec_closure`); this needs the analogue keyed on the
+   class method's signature against the spec's resolved argument types.
+2. **`((>>> f g) 7.1)` through the bare generic defn** (unchanged, described
+   under "Found alongside, still open" below): prints
+   `-9223372036854775808`.  The `.>>>` spelling is fixed; the bare call
+   resolves to the free `>>>` defn, whose `ptr<void>` result is typed from
+   the generic lambda.
+3. **`first` / `second` / `arr`** were left untyped in the class: `arr` is
+   the identity, and `first`/`second` route through the heap-pair helpers
+   (`__ac_pair_first`), whose pairs hold words.  Not probed under the trap
+   flags in this change.
+
+---
+
+
 **Severity: medium-high.** Undefined behaviour on every target, a trap under
 `-fsanitize=function` and WASM's `call_indirect`, and a wrong answer waiting
 on any shape that disturbs a register between the calls.  Today every probe

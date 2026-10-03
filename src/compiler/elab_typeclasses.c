@@ -2045,11 +2045,73 @@ static bool tc_type_mentions_tyvar(const Type *t) {
  * abstract tyvars.  Recurses through TY_APP so a parametric param type like
  * `(Dense E)` is rewritten too.  Returns the type unchanged when it mentions no
  * class type parameter. */
+/* The function-arrow instance head: `(->)` in `(definstance C [(->)] ...)` is
+ * recorded as an arity-0 TY_FN of kind * -> * -> * (see the is_arrow_head arm
+ * of the definstance head parse). */
+static bool tc_is_arrow_head_marker(const Type *t) {
+    return t && t->kind == TY_FN && t->as.fn.arity == 0 &&
+           t->hkt_kind == KIND_ARROW2;
+}
+
+static Type elab_subst_class_tyvars(Arena *arena, Type t,
+                                    const Symbol **type_params,
+                                    uint8_t n_type_params,
+                                    const Type *type_args,
+                                    uint8_t n_type_args);
+
+/* arrow-instance-closure-erased-to-words: a class method written over a
+ * binary class variable, `(>>> [f : (a b c) g : (a c d)] : (a b d))`, read at
+ * the `(->)` head.  `(a X Y)` is `app(app(a, X), Y)`; with `a := (->)` it is
+ * the function type `(fn [X] Y)`, carried as a fat closure (boxed) -- the
+ * representation an arrow-head parameter already has.  X and Y keep their full
+ * types, so a method whose element types are class-method type variables is a
+ * generic impl the call site specializes, instead of a body fixed at erased
+ * words.  Returns false when `t` is not that shape. */
+static bool elab_subst_arrow_app(Arena *arena, const Type *t,
+                                 const Symbol **type_params, uint8_t n_type_params,
+                                 const Type *type_args, uint8_t n_type_args,
+                                 Type *out) {
+    if (t->kind != TY_APP || !t->as.app.fn || !t->as.app.arg) return false;
+    const Type *inner = t->as.app.fn;
+    if (inner->kind != TY_APP || !inner->as.app.fn || !inner->as.app.arg) return false;
+    const Type *head = inner->as.app.fn;
+    if (head->kind != TY_TYVAR || !head->as.tyvar_.name) return false;
+    bool arrow = false;
+    for (uint8_t k = 0; k < n_type_params && k < n_type_args; k++) {
+        if (type_params[k] && strcmp(type_params[k]->name, head->as.tyvar_.name) == 0) {
+            arrow = tc_is_arrow_head_marker(&type_args[k]);
+            break;
+        }
+    }
+    if (!arrow) return false;
+    Type *x = (Type *)arena_alloc(arena, sizeof(Type));
+    *x = elab_subst_class_tyvars(arena, *inner->as.app.arg, type_params,
+                                 n_type_params, type_args, n_type_args);
+    Type *y = (Type *)arena_alloc(arena, sizeof(Type));
+    *y = elab_subst_class_tyvars(arena, *t->as.app.arg, type_params,
+                                 n_type_params, type_args, n_type_args);
+    /* A type variable rides as the int64 word at the C level, as `(-> A B)`
+     * spells it; the full type says which variable. */
+    TypeKind xk = x->kind == TY_TYVAR ? TY_INT : x->kind;
+    TypeKind yk = y->kind == TY_TYVAR ? TY_INT : y->kind;
+    Type fn = type_fn(&xk, 1, yk);
+    fn.as.fn.arg_full_types = (Type **)arena_alloc(arena, sizeof(Type *));
+    fn.as.fn.arg_full_types[0] = x;
+    fn.as.fn.result_full_type = y;
+    fn.as.fn.boxed = true;
+    *out = fn;
+    return true;
+}
+
 static Type elab_subst_class_tyvars(Arena *arena, Type t,
                                     const Symbol **type_params,
                                     uint8_t n_type_params,
                                     const Type *type_args,
                                     uint8_t n_type_args) {
+    Type arrow_fn;
+    if (elab_subst_arrow_app(arena, &t, type_params, n_type_params,
+                             type_args, n_type_args, &arrow_fn))
+        return arrow_fn;
     if (t.kind == TY_TYVAR && t.as.tyvar_.name) {
         for (uint8_t k = 0; k < n_type_params && k < n_type_args; k++) {
             if (type_params[k] &&
@@ -2393,6 +2455,27 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
             }
             return;
         case TY_APP:
+            /* arrow-instance-closure-erased-to-words: `(a X Y)` over a binary
+             * class variable, met by a one-argument function -- the `(->)`
+             * head.  X binds to the function's parameter, Y to its result
+             * (the head variable itself is the caller's to bind). */
+            if (act.kind == TY_FN && act.as.fn.arity == 1 &&
+                decl.as.app.fn && decl.as.app.arg &&
+                decl.as.app.fn->kind == TY_APP && decl.as.app.fn->as.app.arg &&
+                decl.as.app.fn->as.app.fn &&
+                decl.as.app.fn->as.app.fn->kind == TY_TYVAR) {
+                Type aa = (act.as.fn.arg_full_types && act.as.fn.arg_full_types[0])
+                          ? *act.as.fn.arg_full_types[0]
+                          : type_from_kind(act.as.fn.arg_kinds[0]);
+                Type ar = act.as.fn.result_full_type
+                          ? *act.as.fn.result_full_type
+                          : type_from_kind(act.as.fn.result_kind);
+                m7_collect_tyvar_bindings(e, *decl.as.app.fn->as.app.arg, aa,
+                                          names, types, n, max);
+                m7_collect_tyvar_bindings(e, *decl.as.app.arg, ar,
+                                          names, types, n, max);
+                return;
+            }
             if (act.kind == TY_APP) {
                 if (decl.as.app.fn && act.as.app.fn)
                     m7_collect_tyvar_bindings(e, *decl.as.app.fn, *act.as.app.fn,
@@ -9966,6 +10049,65 @@ resolved_user_fallback:;
             }
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = bi;
+        }
+    }
+    /* arrow-instance-closure-erased-to-words: a method of a `(->)`-headed
+     * instance whose class signature spells the arrows -- `(>>> [f : (a b c)
+     * g : (a c d)] : (a b d))` -- called with concrete functions.  Bind the
+     * method's element variables from the arguments (`b c d := float`) so the
+     * emitter specializes the instance body, and the closure it returns, at
+     * those types, and give the call its grounded result `(fn [b] d)`.
+     * Without it the body ran once at erased words: the closure it built
+     * called `f` and `g` through `int64_t (*)(void *, int64_t)` and the
+     * caller read it back at `(fn [float] float)` -- three indirect calls
+     * through the wrong function type, right only by register luck.  Only a
+     * fully ground solution is attached; anything else keeps the erased path
+     * (an untyped class method has no variables to bind, and is unchanged). */
+    if (best_inst && best_inst->typeclass && best_inst->n_type_args >= 1 &&
+        tc_is_arrow_head_marker(&best_inst->type_args[0]) && m7_cm &&
+        out->as.call_.fn_binding != NULL &&
+        best_inst->typeclass->n_type_params == 1 &&
+        best_inst->typeclass->type_params[0]) {
+        TypeClass *atc = best_inst->typeclass;
+        const Symbol *an[16];
+        Type at[16];
+        uint8_t ann = 0;
+        if (m7_cm->n_params >= 1)
+            m7_collect_tyvar_bindings(e, m7_cm->param_types[0], obj_orig_type,
+                                      an, at, &ann, 16);
+        for (uint32_t i = 0; i < n_args; i++) {
+            uint8_t pidx = (uint8_t)(1 + i);
+            if (pidx >= m7_cm->n_params) break;
+            m7_collect_tyvar_bindings(e, m7_cm->param_types[pidx],
+                                      args_orig_types[i], an, at, &ann, 16);
+        }
+        bool ground = ann > 0 && ann < ABI_TYPE_BINDINGS_MAX;
+        for (uint8_t k = 0; ground && k < ann; k++)
+            if (!an[k] || !elab_type_is_ground(&at[k])) ground = false;
+        Type res = TYPE_INT;
+        if (ground) {
+            const Symbol *sn[17];
+            Type st[17];
+            sn[0] = atc->type_params[0];
+            st[0] = best_inst->type_args[0];
+            for (uint8_t k = 0; k < ann; k++) { sn[1 + k] = an[k]; st[1 + k] = at[k]; }
+            res = elab_subst_class_tyvars(e->arena, m7_cm->return_type, sn,
+                                          (uint8_t)(1 + ann), st, (uint8_t)(1 + ann));
+            ground = res.kind == TY_FN && res.as.fn.arity >= 1 &&
+                     elab_type_is_ground(&res);
+        }
+        if (ground) {
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, (size_t)(1 + ann) * sizeof(AbiTypeBinding));
+            bindings[0].name = atc->type_params[0]->name;
+            bindings[0].type = best_inst->type_args[0];
+            for (uint8_t k = 0; k < ann; k++) {
+                bindings[1 + k].name = an[k]->name;
+                bindings[1 + k].type = at[k];
+            }
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = (uint8_t)(1 + ann);
+            out->type = res;
         }
     }
     /* method-call-control-operand-evicted: a dict-dispatched method call is

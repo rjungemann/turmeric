@@ -14,7 +14,9 @@ and the detector GATES.**  The `ptr<void>` decision below took the last four
 to one, and that one is a different defect -- an erased producer read by a
 typed caller, not a spelling -- filed as
 [arrow-instance-closure-erased-to-words](../reported/arrow-instance-closure-erased-to-words.md)
-and carried as the gate's single `known.fnsan` fixture.  The suite runs under
+and carried as the gate's single `known.fnsan` fixture -- until its direct
+`.>>>` shape was fixed the same day, which emptied the list: the gate now
+carries no `known.fnsan` at all.  The suite runs under
 the trap flags in the `fnsan` CI job (`tests/run-fnsan.sh`, which proves the
 detector armed with a canary first and requires each `known.fnsan` fixture to
 STILL trap), and a fuzzer trap is the failing `BUG_fnptr_trap` by default now

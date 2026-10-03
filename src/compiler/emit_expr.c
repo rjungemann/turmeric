@@ -9765,6 +9765,27 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             poly_param_ctype[i] = dc;
                         }
                     }
+                    /* arrow-instance-closure-erased-to-words: an untyped
+                     * `ptr<void>` or a function parameter is the WORD in slot 0
+                     * (type_is_word_closure_slot), whatever the definition
+                     * spells -- a closure thunk keeps `void *` and slot 0
+                     * holds its __tur_slot0_ widening entry.  A typed
+                     * carrier's `.fn` is that slot, so call it at the word:
+                     * `(>>> f g)` at `b := ptr<void>` called `f.fn` as
+                     * `void *(void *, void *)` against a slot-0 entry taking
+                     * `int64_t`. */
+                    if (i < MAX_FN_ARITY && phase_f_concrete && typed_carrier &&
+                        !poly_param_ctype[i] &&
+                        type_is_word_closure_slot(
+                            emit_resolve_type(ctx, e->as.call_.args[i]->type))) {
+                        Buf cast; buf_init(&cast);
+                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&cast, '\0');
+                        free(raw);
+                        raw = strdup(cast.data);
+                        buf_free(&cast);
+                        poly_param_ctype[i] = "int64_t";
+                    }
                     /* Phase F concrete path: args used as-is, no int64_t widening. */
                     arg_strs[i] = raw;
                 }
