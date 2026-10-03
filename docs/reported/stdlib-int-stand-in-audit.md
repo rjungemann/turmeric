@@ -449,9 +449,10 @@ before choosing the signature.
 > thunk is `void (*)(void *)` -- a `-fsanitize=function` trap on every call.
 > Both parameters are `^fat (fn [] nil)` now and slot 0 is called at exactly
 > that type (`tests/fixtures/cancel-guard-typed-closures`, clean armed).  A
-> word-returning body is still accepted into the `nil` slot -- a general
+> word-returning body was still accepted into the `nil` slot -- a general
 > checker gap, filed as
-> [word-result-fn-into-nil-slot](word-result-fn-into-nil-slot.md).
+> [word-result-fn-into-nil-slot](../archive/word-result-fn-into-nil-slot.md)
+> and resolved the same day: it is `TUR-E0001` now.
 
 **S3, `either.tur` -- attempted, NOT landed, and why.**  Making the module
 generic in the `option.tur` / `result.tur` idiom (`left? [L R] [e : (Either

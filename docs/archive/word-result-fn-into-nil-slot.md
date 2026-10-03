@@ -1,5 +1,32 @@
 # A word-returning function is accepted into a `(fn [...] nil)` slot and called through a `void` type
 
+**RESOLVED 2026-10-03** by fix direction 1 and then the rule:
+
+- **Cause 2 first.** `elab_defn` now honours a written `: nil` / `: void`.
+  A body whose type is anything else (not `never`, not inline C) is wrapped
+  as `(do body nil)`, so the function is emitted `void` and typed
+  `(fn [...] nil)`. `(defn noop [x : int] : void (let [_ x] 0))` is
+  `static void noop(int64_t)`. A lambda written `: nil` already behaved this
+  way. On its own this changed nothing in the suite (3529/0).
+- **Then cause 1.** `fn_type_structurally_compatible` (`types.c`) refuses an
+  expected `nil` result against an actual non-`nil`, non-`never` one when
+  neither slot is a wildcard. The reverse direction stays accepted, because the
+  `nil_result_word` shim bridges it. The repro is now `TUR-E0001`: "expected a
+  function of type (fn [] : nil), got (fn [] : int)".
+
+Measured: `bash tests/run.sh` 3530/0. `tur check` over all 776
+turmeric-spices files gives identical exit codes (649 clean, 127 failing
+before and after) and identical error sets against the previous commit. That
+includes `spices/tourist-ws/tests/route_test.tur`, which the rule alone broke:
+its `noop-handler` is the `: void`-with-a-value shape that cause 2's fix makes
+void. So no spice change is needed.
+
+Pinned by `tests/fixtures/fn-void-annotation-discards-value` and
+`tests/fixtures/errors/fn-word-result-into-nil-slot`.
+
+The original filing follows.
+
+
 **Severity: low-medium.** An indirect call through the wrong function type:
 undefined behaviour, a trap under `-fsanitize=function` and WASM's
 `call_indirect`, harmless on x86-64 and arm64 only because a `void` caller

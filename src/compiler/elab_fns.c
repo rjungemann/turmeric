@@ -11291,6 +11291,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
     scope_free(&inner);
     if (lt1_param_fail || st1_param_fail) return NULL;
 
+    /* word-result-fn-into-nil-slot: a WRITTEN `: nil` / `: void` means the
+     * function returns nothing, whatever its last form computes -- the body
+     * runs for effect.  Letting the body's value win typed
+     * `(defn noop [x : int] : void (let [_ x] 0))` as `(fn [int] int)`, so a
+     * function the programmer declared void was refused by a `(fn [...] nil)`
+     * slot (or, before that slot was checked, called through the wrong C
+     * type). */
+    if (return_annotated && return_kind == TY_NIL && body &&
+        body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
+        body->kind != EX_INLINE_C) {
+        Expr **items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        items[0] = body;
+        items[1] = e_nil(e, body->span);
+        Expr *d = expr_new(e->arena, EX_DO, TYPE_NIL, body->span);
+        d->as.do_.items = items;
+        d->as.do_.n = 2;
+        body = d;
+    }
+
     /* Infer return type from body if not specified or polymorphic (TY_TYVAR).
      * For TY_TYVAR (named type variable like :a), use the body's concrete type
      * for codegen -- the polymorphic annotation is preserved in the declaration
