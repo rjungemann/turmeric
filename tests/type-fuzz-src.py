@@ -327,10 +327,9 @@ KNOWN_PROBES = [
     # wrong-answer defect, so the 3-tuple form would be wrong -- the program
     # prints the correct `true`.
     #
-    # BEWARE: that also means this row reports FIXED on any box without
-    # -fsanitize=function (stock macOS Apple clang; the banner then says
-    # `fnsan: UNAVAILABLE`).  Trust a FIXED only from a run whose banner says
-    # `fnsan: ARMED`.
+    # Listed in TRAP_ONLY_PROBES above, so on a box without
+    # -fsanitize=function (`fnsan: UNAVAILABLE`) it reports UNKNOWN rather
+    # than a FIXED it could not have observed.
     ("generator-thunk-call-site-returns-void-ptr-not-carrier",
      "(defn mk [x : bool] : (fn [] bool) (fn [] x))\n"
      "(defn thunk [B] [v : B] : (fn [] B) (fn [] v))\n"

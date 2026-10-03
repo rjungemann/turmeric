@@ -18,7 +18,9 @@ description: python-markdown's fenced_code only knows a column-0 fence, so a quo
 > than only when the stray text happens to look like an unclosed tag -- the
 > quiet case this report said nothing could see.  Re-verified against the
 > repro below: the body renders as `<pre><code>`, the `# a comment` line stays
-> a comment, and `<placeholder>` is escaped.
+> a comment, and `<placeholder>` is escaped.  Fix direction 1 landed beside it
+> on `main` (#1043): `tools/check-guide-pairs.py` also rejects a blockquoted
+> fence in a guide, pointing at the indented-block form -- see item 1 below.
 
 
 **Severity: medium.** Content is silently mangled in the rendered guide, and
