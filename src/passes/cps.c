@@ -992,6 +992,43 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
     switch (e->kind) {
         case EX_CALL: {
             int idx = cps_find_node(nodes, n_nodes, e->as.call_.fn_binding);
+            /* cps-evicts-handle-in-operand-positions (fuzz seed 3333 case 121):
+             * a lambda LITERAL applied on the spot -- `((fn [] b))` -- has
+             * exactly one callee, its own lifted FnDef, which is a node like
+             * any top-level fn.  Counting it as an unresolved call colored
+             * every pure function that did this (a generic whose body was
+             * `(let [b x] ((fn [] b)))`), and a colored callee that then
+             * SIG-REJECTs still reads as cps->cps to its callers: their join
+             * over its fat-closure result is not slot-representable, so a
+             * `main` that also held a `handle` was evicted whole ("no lowering
+             * here").  An edge to the lambda's node is exact: a lambda that
+             * does use control still colors its applier through it. */
+            /* The elaborator hoists the head into a compiler temp --
+             * `(let [__call_head_N (fn [] b)] (__call_head_N))` -- which
+             * records its init in closure_head_init and is never assigned;
+             * see through it too.  (A user `let` stores only a CALL there,
+             * which the literal test below never matches.) */
+            const Expr *h = NULL;
+            if (idx < 0 && !e->as.call_.fn_binding)
+                h = e->as.call_.fn_expr;
+            else if (idx < 0)
+                h = e->as.call_.fn_binding->closure_head_init;
+            if (h) {
+                for (;;) {
+                    if (h->kind == EX_ASCRIBE) h = h->as.ascribe_.inner;
+                    else if (h->kind == EX_FN_TO_FAT) h = h->as.fn_to_fat_.inner;
+                    else if (h->kind == EX_POLY_TO_FAT) h = h->as.poly_to_fat_.inner;
+                    else break;
+                    if (!h) break;
+                }
+                const FnDef *lf = NULL;
+                if (h && h->kind == EX_CLOSURE && h->as.closure_.closure)
+                    lf = h->as.closure_.closure->fn;
+                else if (h && h->kind == EX_FN)
+                    lf = h->as.fn_.fn;
+                if (lf && lf->binding)
+                    idx = cps_find_node(nodes, n_nodes, lf->binding);
+            }
             if (idx >= 0) {
                 cps_node_add_edge(self, (uint32_t)idx);
             } else {
