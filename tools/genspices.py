@@ -43,7 +43,7 @@ import packlib
 
 # Single source of truth for this generator's repo links -- a transfer
 # (personal account -> org) is a one-line change here.
-GITHUB_BASE = 'https://github.com/rjungemann/turmeric-spices'
+GITHUB_BASE = 'https://github.com/turmeric-lang/turmeric-spices'
 SPICES_REPO = Path('../turmeric-spices')
 
 # Spice pages are served from spices.turmeric-lang.com, so every site-relative

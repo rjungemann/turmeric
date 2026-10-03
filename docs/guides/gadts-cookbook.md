@@ -107,7 +107,7 @@ namespace, where a type annotation cannot see them.)
 > function annotated with the bare name, still takes every vector. An index
 > that is not known -- a vector a bare-typed function returns, a recursion
 > the checker cannot count -- is not an error: it is simply not checked
-> ([gadt-length-index-not-enforced](https://github.com/rjungemann/turmeric/blob/main/docs/archive/gadt-length-index-not-enforced.md)).
+> ([gadt-length-index-not-enforced](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/gadt-length-index-not-enforced.md)).
 
 ```turmeric
 ; Type-level naturals: phantom-parameter opaques, so (Succ n) is a type.
@@ -462,5 +462,5 @@ defn main [] :int
 - [gadts-guide.md](gadts-guide.md) -- Full language reference for GADTs and union types
 - [tur/gadt-vec API](../api/tur-gadt-vec.html) -- Production-quality length-indexed vector stdlib
 - [tur/equal API](../api/tur-equal.html) -- `Equal` witness, `sym`, `trans`, `subst`
-- [`tests/fixtures/gadt-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- All GADT test fixtures
-- [`tests/fixtures/union-types-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing fixtures
+- [`tests/fixtures/gadt-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- All GADT test fixtures
+- [`tests/fixtures/union-types-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing fixtures

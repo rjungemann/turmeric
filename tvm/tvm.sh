@@ -207,7 +207,7 @@ __tvm_sha256() {
 # the test harness -- which points them at file:// trees -- and anyone running
 # a mirror or a fork need no edit at all.
 __tvm_gh_repo() {
-  printf '%s\n' "${TVM_GH_REPO:-rjungemann/turmeric}"
+  printf '%s\n' "${TVM_GH_REPO:-turmeric-lang/turmeric}"
 }
 
 __tvm_release_base() {

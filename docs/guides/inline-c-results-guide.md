@@ -16,8 +16,8 @@ enforce, and forces every caller to remember the convention.
 You do not have to hand-roll the result struct. Every emitted translation
 unit carries a small set of preamble helpers that build and inspect
 Option/Result values through the **canonical** heap layout -- the same one
-[`stdlib/option.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/option.tur)
-and [`stdlib/result.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/result.tur)
+[`stdlib/option.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/option.tur)
+and [`stdlib/result.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/result.tur)
 use -- so a value built in C flows straight into the stdlib accessors
 (`ok?`, `err?`, `ok-val`, `err-val`, `some?`, `unwrap`) and vice versa.
 
@@ -149,7 +149,7 @@ An `(Option MidiIn)` "open the default port if there is one" variant uses
 
 This is the blessed replacement for two anti-patterns that used to spread
 through spices (see
-[docs/archive/history/no-stdlib-result-builder-for-inline-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/no-stdlib-result-builder-for-inline-c.md)):
+[docs/archive/history/no-stdlib-result-builder-for-inline-c.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/no-stdlib-result-builder-for-inline-c.md)):
 
 - **Re-declaring the struct in raw C** -- `struct { bool is_ok; int64_t
   ok_val; int64_t err_val; } *r = malloc(...)` returned as `:ptr<void>`.
@@ -239,7 +239,7 @@ Fixed 2026-09-02; both the `let` and `do` wrappers are pinned by
 `tests/fixtures/control-form-around-if-carrier-arms/`. Nothing about how you
 write the inline C changes -- this is recorded because the shape it broke is the
 one this guide recommends, so an older compiler will still reject it. See
-[docs/archive/control-form-around-if-double-unboxes-carrier-arms.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md).
+[docs/archive/control-form-around-if-double-unboxes-carrier-arms.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md).
 
 ## See also
 

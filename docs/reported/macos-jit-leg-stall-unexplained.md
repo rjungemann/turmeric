@@ -3,12 +3,12 @@
 **Severity: medium.** It gates: `JIT engine (macos-latest)` is the one JIT leg
 that is not `continue-on-error`, so a stall fails the run. Four occurrences to
 date, the most recent
-[run 36385448273](https://github.com/rjungemann/turmeric/actions/runs/36385448273)
+[run 36385448273](https://github.com/turmeric-lang/turmeric/actions/runs/36385448273)
 on 2026-09-28 (rjungemann/turmeric#953): ~48 minutes in `Run JIT suites`
 against a 13-19 min baseline on the two preceding `main` runs.
 
 Filed 2026-09-28, split out of
-[docs/archive/macos-jit-hang-loses-both-diagnostics.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macos-jit-hang-loses-both-diagnostics.md)
+[docs/archive/macos-jit-hang-loses-both-diagnostics.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macos-jit-hang-loses-both-diagnostics.md)
 when that report's *instrumentation* defect was fixed. This is the half that
 remains, and it is deliberately thin, because the honest state is that **there
 is no evidence to reason from.**
@@ -23,7 +23,7 @@ now fixed -- see the archived report -- but it cannot be applied backwards.
 Two earlier root causes are known and were genuinely fixed, so neither is a
 live lead: a missing `timeout(1)` turning `httpd-async-limit`'s listen-fd
 deadlock into a job kill
-([docs/archive/macos-jit-leg-intermittent-45min-hang.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macos-jit-leg-intermittent-45min-hang.md)),
+([docs/archive/macos-jit-leg-intermittent-45min-hang.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macos-jit-leg-intermittent-45min-hang.md)),
 and the `brew install coreutils` containment that followed it -- verified still
 in place on the hung run, whose `Install dependencies (macOS)` step took 4
 seconds and poured `coreutils`.
@@ -62,7 +62,7 @@ Ranked by what the fixes above cannot bound:
 
 ## 2026-09-29: the first instrumented occurrence was slowness, not a stall
 
-[Run 36608484061](https://github.com/rjungemann/turmeric/actions/runs/36608484061)
+[Run 36608484061](https://github.com/turmeric-lang/turmeric/actions/runs/36608484061)
 (rjungemann/turmeric#970) failed the leg with the instrumentation working as
 designed: `tur_jit_fixture_tests ***Timeout 1500.55 sec`, the step failing
 rather than the job being killed. The console lines the step's filter lets
@@ -88,7 +88,7 @@ looking for a stuck fixture.
 
 ## 2026-10-01: the second instrumented occurrence, same shape -- and a misreport
 
-[Run 36780743533](https://github.com/rjungemann/turmeric/actions/runs/36780743533)
+[Run 36780743533](https://github.com/turmeric-lang/turmeric/actions/runs/36780743533)
 (rjungemann/turmeric#1002, a dependabot `setup-emsdk` v14 -> v16 bump) failed
 the leg with `tur_jit_fixture_tests ***Timeout 1500.38 sec`. The PR is not
 implicated: `setup-emsdk` is used only by the `test` job's `tur_refine_wasm`
@@ -131,7 +131,7 @@ created -- that fixture's own `expected.timeout`. It was killed, not wrong.
 without ever testing it, and `124` appeared nowhere in the file, so EVERY
 per-fixture timeout in this harness reported as a stdout mismatch. `run.sh` and
 `run-turi.sh` each grew that check after
-[docs/archive/ci-cps-tramp-turi-timeouts-under-load.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ci-cps-tramp-turi-timeouts-under-load.md);
+[docs/archive/ci-cps-tramp-turi-timeouts-under-load.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ci-cps-tramp-turi-timeouts-under-load.md);
 this harness was missed. It now reports `timed out (>Ns under the JIT engine)`.
 
 Note the two symptoms had one cause. A slow draw produces both a per-FIXTURE

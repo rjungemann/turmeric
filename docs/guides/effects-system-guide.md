@@ -137,7 +137,7 @@ with-handler
 
 Semantics (precedence, the disjoint-effect rule, answer-type agreement, and
 per-case continuation discipline) are specified in
-[first-class-handlers-semantics.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/first-class-handlers-semantics.md).
+[first-class-handlers-semantics.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/first-class-handlers-semantics.md).
 
 - **Overlap is rejected.** Composing two handlers for the *same* effect is a
   compile error (`TUR-E0251`); composition is defined only for disjoint effect
@@ -355,7 +355,7 @@ A capability effect is a coarse *authority* tag rather than something you
 
 Five capability tags are **compiler-known**, like `Unsafe`: they resolve in
 every program, with nothing loaded, and are used to annotate the I/O-touching
-modules. [`stdlib/effects.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/effects.tur)
+modules. [`stdlib/effects.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/effects.tur)
 re-declares them, which is where their docs live; a declaration of one of these
 names is accepted only when it matches the built-in exactly (`(defeffect FS []
 :nil ^extends IO ^capability)`), and anything else is an error.
@@ -514,7 +514,7 @@ Effects interact with Turmeric's `defer` mechanism:
 
 Delimited control in Turmeric is built on a single **multi-prompt** substrate
 (the Dybvig--Peyton-Jones--Sabry model); see
-[`cps-transform-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md). The operators you
+[`cps-transform-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-transform-plan.md). The operators you
 already use map onto prompts and sub-continuations:
 
 | Operator | Prompt action |
@@ -677,7 +677,7 @@ For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead
 
 ## See Also
 
-- [Whole-Program CPS Transform Plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
+- [Whole-Program CPS Transform Plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- a heap-reified sub-continuation is a flat chain, directly serializable
 - [Async/Await Guide](async-await-guide.md) -- Effects-based async/await syntax
 - [Logic Programming Guide](logic-programming-guide.md) -- Backtracking via cloneable continuations

@@ -424,9 +424,9 @@ Three things follow, and the first two are the traps:
    unguarded walk fails *worse* than a guarded one: `elab_call -> elab_form`
    had no guard, so deep nesting aborted the compiler with no diagnostic
    whatsoever until one was added. See TUR-E0712,
-   [docs/archive/emit-value-dispatch-unbounded-recursion.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md)
+   [docs/archive/emit-value-dispatch-unbounded-recursion.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md)
    and
-   [docs/archive/emit-depth-guard-loses-race-with-asan-stack.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-depth-guard-loses-race-with-asan-stack.md).
+   [docs/archive/emit-depth-guard-loses-race-with-asan-stack.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-depth-guard-loses-race-with-asan-stack.md).
 
 A regression fixture cannot usefully assert the backstop: on the real stack the
 nesting needed to trip it is impractically large, and a fixture tuned to sit
@@ -477,7 +477,7 @@ finding prints one line to stderr and execution continues. This suite compares
 stdout. So a UBSan line was, until 2026-08-25, completely invisible --
 `fat_captures_borrowed` was read out of uninitialized arena memory on 60
 fixtures, on every single run, and nothing ever failed
-([history](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fat-captures-borrowed-read-uninitialized.md)).
+([history](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/fat-captures-borrowed-read-uninitialized.md)).
 
 `tests/run.sh` now scans each phase's captured stderr for `: runtime error:`
 and reports what it finds after the summary:
@@ -570,7 +570,7 @@ bug.
    and the run is CLEAN. Add one trailing statement and the same program
    reports the leak -- with byte-identical emitted C for the leaking block.
    `ref/from-rc` in
-   [rc-ref-conversion-and-weak-upgrade-leak](https://github.com/rjungemann/turmeric/blob/main/docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md)
+   [rc-ref-conversion-and-weak-upgrade-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md)
    behaves exactly this way. When probing a suspected leak, always put work
    after it.
 
@@ -734,7 +734,7 @@ directories, so instead of a `_run_timed` at each of ~100 call sites it points
 bounds cases added later too. It had **no** bound at all until 2026-09-28,
 which is how a stall in its `jit-ffi-*` cases -- dynamic FFI, callbacks,
 threads -- could reach the CI job's `timeout-minutes`
-([docs/archive/macos-jit-hang-loses-both-diagnostics.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macos-jit-hang-loses-both-diagnostics.md)).
+([docs/archive/macos-jit-hang-loses-both-diagnostics.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macos-jit-hang-loses-both-diagnostics.md)).
 
 The CI legs add two outer bounds of their own, because a `timeout-minutes`
 kill **cancels the job** and leaves every remaining `if: always()` step

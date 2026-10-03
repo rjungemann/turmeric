@@ -6,7 +6,7 @@ it is currently hiding may be a real mobile product bug.)
 
 **Status:** RESOLVED 2026-09-02 (see the end; the mobile WebKit reload failure is now its own open report). Filed 2026-09-01 while investigating the red
 `tur_reported_index_lint` on
-[run 33460242737](https://github.com/rjungemann/turmeric/actions/runs/33460242737)
+[run 33460242737](https://github.com/turmeric-lang/turmeric/actions/runs/33460242737)
 (that lint failure is separate and already fixed). Found by reading the job
 log, not by a local repro -- see "How this was verified" below.
 

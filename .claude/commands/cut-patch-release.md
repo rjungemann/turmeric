@@ -187,8 +187,19 @@ decision, not an oversight -- C-4 in
   as of WP7 -- signed through Sigstore with a short-lived certificate minted
   from the release job's OIDC token, binding each asset to the workflow, repo,
   commit and run that built it. `gh attestation verify <asset> --repo
-  rjungemann/turmeric` checks it. That is the signature that protects users,
-  and it needs no key anyone has to hold or rotate.
+  turmeric-lang/turmeric` checks it. That is the signature that protects
+  users, and it needs no key anyone has to hold or rotate.
+  - **The owner is bound into the signature, so verification depends on the
+    asset's vintage -- and the flag changes, not just its value.** Measured
+    on v0.59.0 after the 2026-10-02 org move: `--repo rjungemann/turmeric`
+    and `--repo turmeric-lang/turmeric` both return HTTP 404, because the
+    attestation lives in the owning *account's* index
+    (`users/rjungemann/attestations/...`) and a transfer does not move it,
+    while the repo-scoped endpoint resolves through the current owner. The
+    form that works for a pre-move asset is
+    **`gh attestation verify <asset> --owner rjungemann`** (exit 0).
+    Releases cut from v0.60.0 on use `--repo turmeric-lang/turmeric`. If a
+    user reports a 404 here, it is the wrong flag, not a bad download.
 - A signed **tag** protects something narrower: it proves who cut the release,
   to someone reading the git history. It needs a long-lived GPG or SSH key on
   the release machine, and a key that is lost, leaked, or simply not present

@@ -253,7 +253,7 @@ Notes:
 - Only `Content-Encoding: gzip` is negotiated. Brotli, zstd, and raw
   deflate are out of scope for v0.1.
 
-See also: the [`tur-zlib` README](https://github.com/rjungemann/turmeric-spices/tree/main/spices/zlib).
+See also: the [`tur-zlib` README](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/zlib).
 
 ### mw-recover (MW3)
 
@@ -429,7 +429,7 @@ through any number of middleware wraps.
 ## Not yet shipped
 
 The following items are tracked in
-[`docs/archive/httpd-middleware-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/httpd-middleware-plan.md)
+[`docs/archive/httpd-middleware-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/httpd-middleware-plan.md)
 but not yet in stdlib:
 
 - **`mw-timeout`** -- per-request wall-clock budget. Needs a
