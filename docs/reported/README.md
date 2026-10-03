@@ -2560,9 +2560,9 @@ the security guide's "Where a fuzz or TSan finding goes"). Three issues stood in
 the `turmeric-ci` project; all three are accounted for:
 
 - the `type` harness finding at seed 20261003 was already triaged by PR #1040 as
-  [generator-thunk-call-site-returns-void-ptr-not-carrier](generator-thunk-call-site-returns-void-ptr-not-carrier.md)
+  [generator-thunk-call-site-returns-void-ptr-not-carrier](../archive/generator-thunk-call-site-returns-void-ptr-not-carrier.md)
   (confirmed still live with fnsan **armed** -- a run whose banner says
-  `fnsan: UNAVAILABLE` proves nothing about it);
+  `fnsan: UNAVAILABLE` proves nothing about it; since fixed and archived);
 - one is a wiring smoke test, not a finding: `kind=connectivity-probe`,
   `target=wp7-setup-check`, fired 22 s after the `SENTRY_DSN` secret was set,
   and its payload names `json_decode_array` in `src/compiler/json.c` -- neither
