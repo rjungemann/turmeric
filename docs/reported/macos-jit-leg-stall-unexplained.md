@@ -185,8 +185,11 @@ the `ci-metrics` branch:
 Two things follow. The macOS failures are isolated, never consecutive, which
 is what a resource-variance story predicts and a standing defect does not. And
 the Linux rate is 18x higher with `continue-on-error` absorbing all of it --
-its own finding, filed as
-[jit-linux-leg-failures-absorbed](jit-linux-leg-failures-absorbed.md).
+its own finding, and resolved the same day as
+[jit-linux-leg-failures-absorbed](../archive/jit-linux-leg-failures-absorbed.md):
+18 of 18 sampled Linux failures are two fixtures that each already had a
+report -- `r7rs-threads-lifecycle` (the open ASan fork/allocator-lock
+flake) and `fn-field-carrier-shim-read-typed` (resolved).
 
 `run-jit.sh` now prints the fixtures closest to their own budget in its
 summary, so the next bound to go marginal is visible while it still passes

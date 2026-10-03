@@ -12,6 +12,16 @@ Found 2026-09-29 while validating the JIT prune
 it reproduces identically with `TUR_JIT_NO_PRUNE=1`, so it is not caused by
 that change.
 
+**Measured in CI, 2026-10-03.** This is the single largest contributor to
+`JIT engine (ubuntu-latest)`'s redness. That leg fails on 55 of 306 commits
+(18%) and 46 of those 55 runs report exactly one failing fixture; of the 18
+newest, 9 are this one and the other 9 are a since-fixed fixture. So the
+~1-in-3 local rate above shows up as ~18% of Linux commits, and because the
+leg is `continue-on-error` none of it is visible. That raises the value of the
+fixture-side skip below without changing this report's severity -- it is still
+a CI flake with no product impact. Details and method in
+[jit-linux-leg-failures-absorbed](../archive/jit-linux-leg-failures-absorbed.md).
+
 ## Repro
 
 ```sh
