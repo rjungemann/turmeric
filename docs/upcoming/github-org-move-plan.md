@@ -2,8 +2,9 @@
 
 > **Status: IN PROGRESS. O1 (reference consolidation) landed 2026-10-01.
 > O2 (redirect verification) is RESOLVED 2026-10-02 -- see section 5, O2.
-> Tier 1 (the four zero-coupling supplemental repos) TRANSFERRED 2026-10-02.
-> `trowel`, `turmeric-spices` and `turmeric` have not moved yet.** Written in
+> Tier 1 (the four zero-coupling supplemental repos) and Tier 2 (`trowel`)
+> TRANSFERRED 2026-10-02, five repos in all. Org pre-staging (O3) is done.
+> `turmeric-spices` and `turmeric` have not moved yet.** Written in
 > answer to "what is a good option for moving turmeric repos out of my
 > rjungemann account -- a free-tier GH org?" The short answer is **yes, GitHub
 > Free for organizations is sufficient and costs nothing here**, and section 1
@@ -80,16 +81,25 @@ resolves a URL into it at build or install time.
 | Tier | Repo | Owner now | Transferred | Still owed |
 | --- | --- | --- | --- | --- |
 | 1 | `smt-lib-benchmarks` | `turmeric-lang` | **2026-10-02** | Class B doc sweep |
-| 1 | `mir` | `turmeric-lang` | **2026-10-02** | `tools/update-mir.sh:34` default, `VENDORED.md` prose; default branch is `__probe` (see 4.4) |
+| 1 | `mir` | `turmeric-lang` | **2026-10-02** | `tools/update-mir.sh:34` default, `VENDORED.md` prose |
 | 1 | `asdf-turmeric` | `turmeric-lang` | **2026-10-02** | `lib/utils.bash`, `README.md`, `bin/help.overview` |
 | 1 | `turmeric-godot` | `turmeric-lang` | **2026-10-02** | `build.yml:36,107`, `README.md` |
-| 2 | `trowel` | `rjungemann` | -- | **7 signing secrets (2.1)**; cask name; `CMakeLists.txt:219` |
+| 2 | `trowel` | `turmeric-lang` | **2026-10-02** | cask name (4.3); `CMakeLists.txt:219`. **Its 7 secrets carried over** -- see 2.1 |
 | 3 | `turmeric-spices` | `rjungemann` | -- | must precede `turmeric`; own owner refs |
-| 3 | `turmeric` | `rjungemann` | -- | `SENTRY_DSN`; Class A one-liners (O4); O5 sweep; O6 verification |
+| 3 | `turmeric` | `rjungemann` | -- | Class A one-liners (O4); O5 sweep; O6 verification. `SENTRY_DSN` already set org-wide |
 
-Tier 1 was verified after transfer, not assumed: for all four, an old-path
-`git clone --depth 1` and `git ls-remote` still succeed, and `mir`'s 9
-workflows plus `turmeric-godot`'s 1 survived the move intact.
+Every transfer was verified afterwards, not assumed: for all five, an
+old-path `git clone --depth 1` and `git ls-remote` still succeed, and the
+workflows survived intact (`mir` 9, `turmeric-godot` 1, `trowel` 2). `mir`'s
+only post-transfer oddity -- a `__probe` default branch -- was corrected to
+`master` the same day.
+
+Done at the org level, so not owed by any individual repo any more:
+`SENTRY_DSN` is set as an org secret with *All repositories* visibility;
+Dependabot **alerts** and secret scanning are on as org defaults for new repos
+**and** enabled retroactively on all five moved repos (org defaults are
+`*_for_new_repositories` and are **not** retroactive, so that second step was
+necessary). Automatic Dependabot security *updates* are deliberately still off.
 
 ## 1. Why GitHub Free for organizations is sufficient
 
@@ -148,18 +158,32 @@ existing clones and already-installed `tvm` keep working.
 
 | Thing | Consequence | Where it bites |
 | --- | --- | --- |
-| **Actions secrets** | `SENTRY_DSN` and trowel's 7 signing secrets become empty | full ledger in **2.1** -- `fuzz.yml:144,273`, `tsan.yml:86` stay green while reporting nothing; trowel's release cannot sign |
+| ~~**Actions secrets**~~ | ~~become empty~~ | **WRONG, corrected 2026-10-02 by measurement.** Actions secrets **survive** a transfer. All 7 of trowel's were present under the org immediately afterwards, carrying their original July timestamps -- so they were carried over, not recreated. Ledger and caveat in **2.1** |
 | **Rulesets / branch protection** | base-branch gate may lapse | **measured 2026-10-02: nothing to re-apply.** All 7 repos have 0 rulesets and no branch protection on `main`. Section 6.1 still applies as a thing to *confirm*, not restore |
-| **Dependabot alerts + security updates** | silently off | the tree has active Dependabot PRs today |
+| **Dependabot alerts + security updates** | silently off | Confirmed: `trowel` and the Tier 1 repos all needed alerts re-enabled by hand after moving. Now on for all five, plus org defaults for new repos (0a) |
 | **CodeQL default setup** | `codeql.yml` may need re-enabling | security tab goes quiet |
-| **Allowed-actions policy** | third-party actions blocked | `mymindstorm/setup-emsdk`, and every pinned action in `ci.yml` |
+| **Allowed-actions policy** | third-party actions blocked | **measured 2026-10-02: a no-op here.** The org is `allowed_actions: all`, `enabled_repositories: all`, and Actions is `enabled=true` on every moved repo. Nothing to permit |
 | **Fine-grained PATs scoped to `rjungemann/*`** | 404s, not auth errors | any local tooling, `gh` config, release scripts |
 | **Deploy keys / Git integrations** | ~~web deploy stops~~ | **measured 2026-10-02: does not apply here.** No deploy keys on any of the 7 repos, and the web deploy is a local `wrangler deploy`, not a Git integration -- see 2.1 |
 
-Set `SENTRY_DSN` as an **org-level** secret rather than three repo-level
-copies. That is strictly better than today's arrangement and is the one place
-where the move improves the status quo for free. Do **not** hoist trowel's
-signing material the same way -- 2.1 says why.
+`SENTRY_DSN` is now an **org-level** secret at *All repositories* visibility
+(set 2026-10-02), rather than a repo-level copy per consumer. That is strictly
+better than the previous arrangement and is the one place where the move
+improves the status quo for free.
+
+One interaction to be deliberate about, now that secrets are known to survive a
+transfer (2.1): **a repo-level secret shadows an org-level one of the same
+name.** So `turmeric` will arrive carrying its own `SENTRY_DSN`, and that copy
+-- not the org value -- is what its workflows will read. The values are
+identical, so nothing breaks either way; it only matters for which one you have
+to remember to rotate. To make the org secret actually authoritative, delete the
+repo-level copy after the move:
+
+```sh
+gh secret delete SENTRY_DSN -R turmeric-lang/turmeric
+```
+
+Do **not** hoist trowel's signing material the same way -- 2.1 says why.
 
 ### 2.1 The secrets ledger -- every secret and where it goes
 
@@ -168,10 +192,24 @@ show included. **8 secrets live in 2 repos.** Actions *variables*, Dependabot
 secrets, Codespaces secrets, environments and deploy keys are **empty in all 7
 repos**, so they need no migration at all.
 
-A transfer carries none of these. GitHub never discloses a secret's value back
-to you, so anything not independently recoverable has to come from your own
-records -- the "Recover from" column is the honest answer to "can I rebuild
-this if I never wrote it down?"
+> **Secrets survive a transfer -- the opposite of what this plan assumed.**
+> Measured on `trowel`: immediately after it moved, all 7 secrets were present
+> under `turmeric-lang/trowel`, each still carrying its original 2026-07-10
+> `updated_at`. An unchanged timestamp means the stored value was carried over,
+> not wiped and re-created. Section 2's "Actions secrets become empty" row was
+> wrong, and the "re-add the 7 before the next release" gate does not exist.
+>
+> **The one thing a names-and-timestamps listing cannot prove is that the
+> ciphertext still decrypts under the new owner.** GitHub never discloses a
+> value, so the decisive test is the next `trowel` release actually signing and
+> notarizing. Until that has run once, treat the table below as a restore
+> reference rather than a confirmed no-op -- it is also what you need if a
+> value is ever lost for an unrelated reason.
+
+GitHub never discloses a secret's value back to you, so anything not
+independently recoverable has to come from your own records -- the "Recover
+from" column is the honest answer to "can I rebuild this if I never wrote it
+down?"
 
 | Secret | On | Consumed by | Redefine on | Recover from |
 | --- | --- | --- | --- | --- |
@@ -235,9 +273,10 @@ is enough to catch a missing one, and is all GitHub will tell you.
   glance there, but the documented deploy path does not use it.)
 - **Fine-grained PATs** scoped to `rjungemann/*` 404 rather than failing auth
   (section 2). Re-scope to the org.
-- **Trowel's transfer is safe even with the secrets missing.** Its `ci.yml`
-  uses none of them; only `release.yml` does. So the gate is "do not cut a
-  trowel release until the 7 are back", not "do not transfer trowel".
+- **Trowel's transfer was safe regardless**, which is why it went ahead before
+  this was known: its `ci.yml` uses none of the 7, and only `release.yml` does.
+  So the worst case was a gate on *releasing*, never on transferring. As it
+  turned out there was no gate at all.
 
 ## 3. The three classes of reference
 
@@ -374,16 +413,18 @@ brew keys its tap cache by name and will otherwise keep the stale one.
 
 ### 4.4 Loose end found while transferring: `mir`'s default branch
 
-`turmeric-lang/mir`'s default branch is **`__probe`**, not `master`. `master`
-exists alongside it and 9 other branches. Nothing currently depends on the
-default -- `tools/update-mir.sh` fetches an explicit commit SHA -- so this is
-cosmetic, but it makes the repo's web landing page show a stray probe branch.
-It also means `mir` is not a GitHub fork of `vnmakarov/mir` at all (the API
-reports no parent); it is a standalone repo carrying MIR's history, so the
-"fork" relationship is social, not structural. Left alone deliberately rather
-than guessed at -- flip it with
-`gh api -X PATCH repos/turmeric-lang/mir -f default_branch=master` if `__probe`
-is the leftover it looks like.
+`turmeric-lang/mir`'s default branch was **`__probe`**, not `master`, with
+`master` and 9 other branches alongside it. Nothing depended on the default --
+`tools/update-mir.sh` fetches an explicit commit SHA -- so it was cosmetic, but
+it made the repo's landing page show a stray probe branch. **Corrected to
+`master` on 2026-10-02** (`gh api -X PATCH repos/turmeric-lang/mir -f
+default_branch=master`).
+
+Worth recording while here: `mir` is **not** a GitHub fork of `vnmakarov/mir`
+at all -- the API reports no parent. It is a standalone repo carrying MIR's
+history, so the "fork" relationship is social, not structural, and the
+"moving a temporary fork implies permanence" objection in 4.2 was weighing a
+relationship GitHub does not model.
 
 ## 5. Runbook
 
@@ -433,12 +474,16 @@ Consequences for the rest of the plan:
 
 1. ~~Create `turmeric-lang` (Free). Add the personal account as owner.~~
    **Done** -- created 2026-10-02, owner account is org `admin`.
-2. **Before transferring `turmeric`:** set `SENTRY_DSN` as an org secret (2.1);
-   set the allowed-actions policy to permit the actions `ci.yml` pins; enable
-   Dependabot alerts and security updates org-wide. **Still owed.** None of
-   these blocked Tier 1, since those repos hold no secrets and `mir`'s 9
-   workflows use only first-party actions.
-3. Re-scope any fine-grained PAT from `rjungemann/*` to the org. **Still owed.**
+2. ~~Set `SENTRY_DSN` as an org secret; set the allowed-actions policy; enable
+   Dependabot org-wide.~~ **Done 2026-10-02.** `SENTRY_DSN` is an org secret at
+   *All repositories* visibility. The allowed-actions step was a **no-op** --
+   the org is already `allowed_actions: all`. Dependabot alerts and secret
+   scanning are on as org defaults *and* enabled retroactively on all five
+   moved repos; automatic security updates left off on purpose.
+3. Re-scope any fine-grained PAT from `rjungemann/*` to the org. **Still
+   owed** -- note the `gh` login itself needed
+   `gh auth refresh -h github.com -s admin:org` before an org secret could be
+   set (transfers worked without it).
 
 ### O3a -- Tier 1: the four zero-coupling repos (**LANDED 2026-10-02**)
 
@@ -453,12 +498,12 @@ reads `rjungemann/...` in the response. That is not a failure; poll
 `gh api repos/turmeric-lang/<repo>` a few seconds later to confirm. All four
 verified moved, old paths still cloning, workflows intact.
 
-### O3b -- Tier 2: `trowel`
+### O3b -- Tier 2: `trowel` (**LANDED 2026-10-02**)
 
-Transfer is safe immediately; the gate is on *releasing*, not moving (2.1).
-
-1. `gh api -X POST repos/rjungemann/trowel/transfer -f new_owner=turmeric-lang`
-2. Re-add the 7 signing secrets per 2.1 **before the next release cut.**
+1. ~~`gh api -X POST repos/rjungemann/trowel/transfer -f new_owner=turmeric-lang`~~ **Done.**
+2. ~~Re-add the 7 signing secrets before the next release cut.~~ **Not needed** --
+   they carried over (2.1). The next release run is still the confirmation that
+   their values decrypt under the new owner.
 3. `Casks/trowel.rb` -- the cask is the repo, as with turmeric's formula (4.3),
    so the install line becomes
    `brew install --cask turmeric-lang/trowel/trowel`. Existing users need
