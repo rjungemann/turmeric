@@ -5261,6 +5261,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
         Expr *method_body = e_nil(e, impl_form->span);
         uint32_t n_body = impl_form->as.list.len - impl_body_start;
         Type *body_expected = e->expected_type;
+        /* loop-invariants-plan: the loops this body registers, decided below. */
+        uint32_t li_start = e->n_loop_inv_sites;
         if (n_body > 0) {
             if (n_body == 1) {
                 method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
@@ -5281,6 +5283,13 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
         e->expected_type = saved_body_expected;
 
         e->fn_body_depth--;
+
+        /* loop-invariants-plan: decide this body's `:invariant` loops the way
+         * elab_defn does, before any contract wraps the body. */
+        li_analyze_method_loops(e, li_start, mp->method_params,
+                                mp->n_method_params,
+                                mp->method_fd ? mp->method_fd->binding : NULL,
+                                impl_form, impl_body_start);
 
         /* CT1: inject this instance method's parameter contract checks, while
          * the method scope is still current (the predicate elaborates in it).

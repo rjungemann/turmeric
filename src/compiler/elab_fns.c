@@ -5555,6 +5555,28 @@ static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     if (pres_ok && s->body_check)   *s->body_check  = e_nil(e, s->span);
 }
 
+/* The same loop elaborated again (a retry, a specialization): its verdict is
+ * Form-level, so reuse an earlier site's -- and report it once.  False when no
+ * earlier site holds a verdict for this loop. */
+static bool li_reuse_prior(Elab *e, uint32_t i) {
+    LoopInvSite *s = &e->loop_inv_sites[i];
+    LoopInvSite *prior = NULL;
+    for (uint32_t j = 0; j < i && !prior; j++)
+        if (e->loop_inv_sites[j].analyzed &&
+            e->loop_inv_sites[j].while_form == s->while_form)
+            prior = &e->loop_inv_sites[j];
+    if (!prior) return false;
+    s->entry_proven = prior->entry_proven;
+    s->pres_proven  = prior->pres_proven;
+    s->assigned     = prior->assigned;
+    s->n_assigned   = prior->n_assigned;
+    if (!rt_pred_is_impure(e, s->inv)) {
+        if (s->entry_proven && s->entry_check) *s->entry_check = e_nil(e, s->span);
+        if (s->pres_proven && s->body_check)   *s->body_check  = e_nil(e, s->span);
+    }
+    return true;
+}
+
 void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_params,
                       const Form **ct_param_preds, const char **ct_param_varnames,
                       const uint32_t *ct_param_param_idx, uint32_t n_ct_param_preds,
@@ -5574,29 +5596,62 @@ void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_param
         LoopInvSite *s = &e->loop_inv_sites[i];
         if (s->analyzed) continue;
         s->analyzed = true;
-        /* The same loop elaborated again (a retry, a specialization): its
-         * verdict is Form-level, so reuse it -- and report it once. */
-        LoopInvSite *prior = NULL;
-        for (uint32_t j = 0; j < i && !prior; j++)
-            if (e->loop_inv_sites[j].analyzed &&
-                e->loop_inv_sites[j].while_form == s->while_form)
-                prior = &e->loop_inv_sites[j];
-        if (prior) {
-            s->entry_proven = prior->entry_proven;
-            s->pres_proven  = prior->pres_proven;
-            s->assigned     = prior->assigned;
-            s->n_assigned   = prior->n_assigned;
-            if (!rt_pred_is_impure(e, s->inv)) {
-                if (s->entry_proven && s->entry_check) *s->entry_check = e_nil(e, s->span);
-                if (s->pres_proven && s->body_check)   *s->body_check  = e_nil(e, s->span);
-            }
-            continue;
-        }
+        if (li_reuse_prior(e, i)) continue;
         if (!body) {
             li_report_decline(e, s, fn_name, "the enclosing function has no body");
             continue;
         }
         li_analyze_one(e, s, &F);
+    }
+}
+
+/* A `definstance` method's loops, decided exactly as a `defn`'s are.  The
+ * invariant is written in the instance's body, not inherited from the class,
+ * so the class owning the signature changes nothing about what it can prove.
+ * The method's parameter refinements -- its own, or the class's it inherits --
+ * are the entry facts (indexed by parameter, NULL where there is none). */
+void li_analyze_method_loops(Elab *e, uint32_t from, Binding **params,
+                             uint32_t n_params, const Binding *mb,
+                             const Form *impl_form, uint32_t body_start) {
+    if (!e || from >= e->n_loop_inv_sites || !impl_form) return;
+    const Form *nm = impl_form->as.list.len ? impl_form->as.list.items[0] : NULL;
+    const char *fn = (nm && nm->tag == F_SYM && nm->as.sym) ? nm->as.sym->name : "?";
+    uint32_t idx[MAX_FN_ARITY];
+    uint32_t n_idx = 0;
+    const Form **preds = NULL;
+    const char **vars = NULL;
+    if (mb && mb->refine_param_preds) {
+        n_idx = mb->n_refine_params < MAX_FN_ARITY ? mb->n_refine_params : MAX_FN_ARITY;
+        for (uint32_t i = 0; i < n_idx; i++) idx[i] = i;
+        preds = mb->refine_param_preds;
+        vars  = mb->refine_param_vars;
+    }
+    li_analyze_loops(e, from, params, n_params, preds, vars, idx, n_idx, NULL,
+                     rt_whole_body(e, impl_form, body_start), fn);
+}
+
+/* Every annotated loop no definition analysed: one in a top-level `(def f (fn
+ * ...))` lambda, or in any form elaborated outside a `defn` or `definstance`
+ * method.  Elaboration registered it and gave it both runtime checks; nothing
+ * proved or declined it, so without this sweep the annotation would cost those
+ * checks and verify nothing, with no diagnostic at any strictness level.
+ * Declined explicitly instead -- such a lambda has no definition to anchor its
+ * parameter facts to and may be rebound -- so it is reported, and counted in the
+ * stats line's `declined` column, like any other runtime-only invariant. */
+void li_decline_unanalyzed(Elab *e) {
+    if (!e) return;
+    for (uint32_t i = 0; i < e->n_loop_inv_sites; i++) {
+        LoopInvSite *s = &e->loop_inv_sites[i];
+        if (s->analyzed) continue;
+        s->analyzed = true;
+        if (li_reuse_prior(e, i)) continue;
+        refine_note_invariant_declined();
+        diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING,
+                            s->inv ? s->inv->span : s->span, TUR_W0372_REFINE_UNKNOWN,
+                            "the invariant of this while loop is not analysed "
+                            "statically: it is not inside a `defn` or a "
+                            "`definstance` method (a top-level lambda is not "
+                            "analysed); both runtime checks kept");
     }
 }
 

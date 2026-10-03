@@ -1,5 +1,36 @@
 # `:invariant` is silently unverified outside a `defn`
 
+**RESOLVED 2026-10-03.** Both forms now get a verdict:
+
+- **`definstance` methods are analysed** (direction 2). The instance-method
+  path in `elab_typeclasses.c` records `li_start` before elaborating the body,
+  then calls `li_analyze_method_loops` (`elab_fns.c`) once the body is built,
+  before any contract wraps it. That is `li_analyze_loops` with the method's
+  parameter refinements as entry facts. On the repro the stats line now reads
+  `8 proven, 0 unproven, 1 loop(s) declined`: four from the `defn`, four from
+  the method, and the lambda declined.
+- **A top-level lambda is declined out loud** (directions 1 and 3).
+  `li_decline_unanalyzed`, called from `elab_toplevel.c` before the crossings
+  resolve, sweeps every `LoopInvSite` no definition analysed. It emits the
+  standard `TUR-W0372`: "it is not inside a `defn` or a `definstance` method (a
+  top-level lambda is not analysed)". It also counts the loop in the stats
+  line's `declined` column. A site that is a re-elaboration of an
+  already-decided loop reuses that verdict instead (`li_reuse_prior`, shared
+  with `li_analyze_loops`). Declining is the permanent answer for the lambda,
+  and the plan's scope note now says so.
+
+Pinned by:
+
+- `tests/fixtures/loop-invariant-definstance-method`: proved, both checks
+  elided, and the stats line asserted under `--strict-refine`.
+- `tests/fixtures/errors/loop-invariant-definstance-refuted`: a false method
+  invariant is now `TUR-E0371`. Before the fix it compiled clean.
+- `tests/fixtures/errors/loop-invariant-top-level-lambda-strict`: the lambda's
+  decline, an error under `--strict-refine`.
+
+The original filing follows.
+
+
 **Severity: medium (silent loss of the whole feature, with no diagnostic at
 any strictness level).** A `while` carrying an `:invariant` inside a
 `definstance` method or a top-level lambda keeps both runtime checks and gets

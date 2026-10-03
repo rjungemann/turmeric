@@ -3601,6 +3601,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * where the encoder consumes the verdict -- it unfolds only a TOTAL
      * measure. */
     rf_resolve_reflect_sites(&e);
+    /* loop-invariants-plan: a `:invariant` loop no definition analysed (a
+     * top-level lambda's) is declined out loud rather than left silent. */
+    li_decline_unanalyzed(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);
     /* SX8a: the JSON obligation dump.  Emitted here rather than from the

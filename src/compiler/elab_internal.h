@@ -1138,6 +1138,17 @@ void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_param
                       const struct Form *ct_pre_form, const struct Form *body,
                       const char *fn_name);
 
+/* The same for a `definstance` method: `mb` is the method's binding (its
+ * refinement arrays are the entry facts), `impl_form` the method's form, and
+ * `body_start` the index of its first body form. */
+void li_analyze_method_loops(Elab *e, uint32_t from, Binding **params,
+                             uint32_t n_params, const Binding *mb,
+                             const struct Form *impl_form, uint32_t body_start);
+
+/* After the whole unit: decline (TUR-W0372) every loop site no definition
+ * analysed -- a top-level lambda's -- so none is silently unverified. */
+void li_decline_unanalyzed(Elab *e);
+
 /* CT0: a contract type in ANNOTATION position contributes its BASE type to the
  * signature; the predicate rides separately, as an entry check and (under
  * `refined`) as a hypothesis.  EVERY site that resolves a parameter or return

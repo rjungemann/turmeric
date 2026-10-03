@@ -522,8 +522,12 @@ All six phases, behind `--enable=loop-invariants` (row in
   value given here"); an OPEN counterexample from a walk that dropped a fact is
   TUR-W0372 instead, because it may rest on what was dropped.
 - **Scope of the defn-level pass.** Loops are decided by the enclosing `defn`
-  (so `main` and every ordinary function). A loop in a `definstance` method or
-  a top-level lambda keeps both runtime checks and gets no static verdict.
+  (so `main` and every ordinary function) or `definstance` method, the method's
+  parameter refinements serving as its entry facts. A loop in a top-level
+  `(def f (fn ...))` lambda has no definition to anchor its facts to and may be
+  rebound, so it is **declined**: `TUR-W0372`, both runtime checks kept, and
+  counted in the stats line like any other decline (`li_decline_unanalyzed`).
+  Until 2026-10-03 both forms were silently unanalysed.
 
 ### Pre-existing bugs found and fixed on the way
 
@@ -597,12 +601,12 @@ harness's documented report-only class.
   counter cannot affect the outer invariant; initiation and preservation do
   not depend on how the loop exits) and that the nested-loop decline path has
   no fixture.
-- A loop outside a `defn` -- in a `definstance` method or a top-level lambda --
+- ~~A loop outside a `defn` -- in a `definstance` method or a top-level lambda --
   is registered and given both runtime checks but never analysed, and says
-  nothing at any strictness level. Filed as
-  [loop-invariant-silently-unverified-outside-a-defn](../reported/loop-invariant-silently-unverified-outside-a-defn.md).
-  The "Scope of the defn-level pass" note above records the design; the report
-  is that it is silent rather than declined.
+  nothing at any strictness level.~~ **Resolved 2026-10-03**
+  ([archived report](../archive/loop-invariant-silently-unverified-outside-a-defn.md)):
+  methods are analysed, and a top-level lambda is declined out loud. See the
+  "Scope of the defn-level pass" note above.
 - The ECS `for-each` lowering (RE2) is **no longer waiting on this plan, and
   will not be the consumer that fires the trigger above.** C3 landed, and RE2
   was re-measured 2026-10-02 (see its probe update in
