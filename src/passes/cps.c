@@ -886,8 +886,83 @@ static const char *cps_binding_c_symbol(const Binding *b) {
  * seed still colors it if it uses control, and the fixpoint still propagates
  * that to callers.  See
  * docs/archive/history/cps-colored-noncapture-named-let-recurses-through-entry.md. */
+/* r7rs-conformance-program-emits-megabytes-of-c: cps_color_program asks this
+ * once per call edge, and each answer scanned every node (twice on a miss) --
+ * quadratic in the number of functions.  While cps_color_program runs, its node
+ * array is indexed by binding and by C symbol, each slot holding the FIRST node
+ * the scans below would have found. */
+static struct {
+    const CpsNode  *nodes;
+    uint32_t        n, cap;
+    const Binding **bkey;  int *bval;     /* binding -> first node */
+    const char    **skey;  int *sval;     /* C symbol -> first node */
+} g_cps_nidx;
+
+static uint32_t cps_nidx_ptr_hash(const void *p) {
+    uintptr_t x = (uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x;
+}
+static uint32_t cps_nidx_str_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    for (; *s; s++) { h ^= (uint8_t)*s; h *= 16777619u; }
+    return h;
+}
+
+static void cps_nidx_free(void) {
+    free((void *)g_cps_nidx.bkey); free(g_cps_nidx.bval);
+    free((void *)g_cps_nidx.skey); free(g_cps_nidx.sval);
+    memset(&g_cps_nidx, 0, sizeof g_cps_nidx);
+}
+
+static const char *cps_binding_c_symbol(const Binding *b);
+
+static void cps_nidx_build(const CpsNode *nodes, uint32_t n) {
+    cps_nidx_free();
+    uint32_t cap = 16;
+    while (cap < 2 * n + 2) cap <<= 1;
+    g_cps_nidx.bkey = (const Binding **)calloc(cap, sizeof *g_cps_nidx.bkey);
+    g_cps_nidx.bval = (int *)calloc(cap, sizeof *g_cps_nidx.bval);
+    g_cps_nidx.skey = (const char **)calloc(cap, sizeof *g_cps_nidx.skey);
+    g_cps_nidx.sval = (int *)calloc(cap, sizeof *g_cps_nidx.sval);
+    if (!g_cps_nidx.bkey || !g_cps_nidx.bval || !g_cps_nidx.skey || !g_cps_nidx.sval) {
+        cps_nidx_free();   /* OOM: cps_find_node scans */
+        return;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        const Binding *b = nodes[i].fd->binding;
+        if (!b) continue;
+        uint32_t h = cps_nidx_ptr_hash(b) & (cap - 1);
+        while (g_cps_nidx.bkey[h] && g_cps_nidx.bkey[h] != b) h = (h + 1) & (cap - 1);
+        if (!g_cps_nidx.bkey[h]) { g_cps_nidx.bkey[h] = b; g_cps_nidx.bval[h] = (int)i; }
+        const char *sym = cps_binding_c_symbol(b);
+        if (!sym) continue;
+        h = cps_nidx_str_hash(sym) & (cap - 1);
+        while (g_cps_nidx.skey[h] && strcmp(g_cps_nidx.skey[h], sym) != 0) h = (h + 1) & (cap - 1);
+        if (!g_cps_nidx.skey[h]) { g_cps_nidx.skey[h] = sym; g_cps_nidx.sval[h] = (int)i; }
+    }
+    g_cps_nidx.nodes = nodes;
+    g_cps_nidx.n = n;
+    g_cps_nidx.cap = cap;
+}
+
 static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
     if (!b) return -1;
+    if (g_cps_nidx.cap && g_cps_nidx.nodes == nodes && g_cps_nidx.n == n) {
+        uint32_t m = g_cps_nidx.cap - 1, h = cps_nidx_ptr_hash(b) & m;
+        while (g_cps_nidx.bkey[h]) {
+            if (g_cps_nidx.bkey[h] == b) return g_cps_nidx.bval[h];
+            h = (h + 1) & m;
+        }
+        const char *bsym = cps_binding_c_symbol(b);
+        if (!bsym || !*bsym) return -1;
+        h = cps_nidx_str_hash(bsym) & m;
+        while (g_cps_nidx.skey[h]) {
+            if (strcmp(g_cps_nidx.skey[h], bsym) == 0) return g_cps_nidx.sval[h];
+            h = (h + 1) & m;
+        }
+        return -1;
+    }
     for (uint32_t i = 0; i < n; i++)
         if (nodes[i].fd->binding == b) return (int)i;
     const char *bsym = cps_binding_c_symbol(b);
@@ -1355,6 +1430,7 @@ void cps_color_program(Arena *a, Expr *program) {
         }
     }
     #undef CPS_ADD_FN_NODE
+    cps_nidx_build(nodes, n);
 
     /* Seed + build edges. */
     for (uint32_t i = 0; i < n; i++) {
@@ -1413,6 +1489,7 @@ void cps_color_program(Arena *a, Expr *program) {
         nodes[i].fd->cps_colored = nodes[i].colored;
         free(nodes[i].edges);
     }
+    cps_nidx_free();
     free(nodes);
 }
 
