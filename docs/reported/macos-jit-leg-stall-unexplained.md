@@ -138,6 +138,60 @@ Note the two symptoms had one cause. A slow draw produces both a per-FIXTURE
 timeout and the per-TEST one, so on the next occurrence expect stray fixture
 FAILs alongside the `***Timeout` and do not triage them as separate bugs.
 
+## 2026-10-03: the third instrumented occurrence -- the bound moved down
+
+[Run 37107254052](https://github.com/turmeric-lang/turmeric/actions/runs/37107254052)
+failed the leg in the shape the section above predicted -- "expect stray
+fixture FAILs alongside the `***Timeout`" -- with one part conspicuously
+missing: **there was no `***Timeout`.**
+
+| | this run | macOS p50 / p90 / max |
+| --- | --- | --- |
+| `tur_jit_fixture_tests` | `***Failed 1054.57 sec` | 850 / 1125 / 1648 s |
+
+1055 s is *below* the p90. The suite ran at an entirely ordinary pace, 3407
+fixtures passed, 61 skipped, and the only failure was
+
+```
+121: FAIL r7rs-tail-calls -- timed out (>60s under the JIT engine)
+```
+
+-- so the per-fixture timeout reporting added on 2026-10-01 worked and named
+the target immediately, with no log archaeology.
+
+**What this adds: the 2026-10-01 fix raised the per-TEST bound and left the
+per-FIXTURE one alone, so the failure migrated down into it.** `TIMEOUT` went
+1500 -> 2400 to absorb the 1.9x slow draw; `r7rs-tail-calls`'s own
+`expected.timeout` stayed at 60. That fixture is four 1e7-iteration tail-call
+loops at -O0 (self, mutual `ev?`/`od?`, indirect through a value, and a named
+`let` -- roughly 40M trampolined calls), so on a slow draw it is the suite's
+longest single fixture. Being killed at 60 s implies ~32 s on a fast draw:
+60 was almost exactly the slow-draw time, leaving no margin at all. It is 150
+here -- ~4.7x the fast-draw estimate, still far inside the 2400 s suite bound,
+so a genuine hang is still caught by the per-fixture bound first and still
+named.
+
+This is the second time this fixture has been killed by a slow draw; the
+2026-10-01 occurrence is the other, where it reported as a stdout mismatch.
+
+Measured frequency, one entry per commit from `suite-timings-2026.jsonl` on
+the `ci-metrics` branch:
+
+| env | commits | fail rate | episodes |
+| --- | --- | --- | --- |
+| macOS AppleClang-21, 3 cores (**gates**) | 289 | 2 = **1%** | 2, both isolated |
+| Linux GNU-13.3.0, 4 cores (non-gating) | 302 | 55 = **18%** | 37 (29 isolated, longest 10) |
+
+Two things follow. The macOS failures are isolated, never consecutive, which
+is what a resource-variance story predicts and a standing defect does not. And
+the Linux rate is 18x higher with `continue-on-error` absorbing all of it --
+its own finding, filed as
+[jit-linux-leg-failures-absorbed](jit-linux-leg-failures-absorbed.md).
+
+`run-jit.sh` now prints the fixtures closest to their own budget in its
+summary, so the next bound to go marginal is visible while it still passes
+rather than when a slow draw kills it.
+
 ## What would close this
 
 A named stall with a cause, or a long enough quiet period on a leg that now
