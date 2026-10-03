@@ -3413,6 +3413,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     tl_deferred = NULL;
     fwd_gen_order_free(&fgo);
 
+    /* class-and-generic-in-an-instance-less-module: a defn an imported module
+     * parked for want of an instance gets one last attempt now that every
+     * unit is in -- for real, so a genuinely instance-less program still
+     * reports TUR-E0015 against the defn that needs one. */
+    if (!elab_noinst_retry(&e, true)) rc = -1;
+
     /* class-superclasses SC2/SC4: every defclass and definstance in the unit is
      * registered now, so resolve the superclass preambles (a superclass may be
      * declared below its subclass), reject cycles, and enforce the instance

@@ -8264,7 +8264,14 @@ found_method:;
                      * its unit, so declaration order no longer matters -- and
                      * the advice would now send the reader to move a form that
                      * is already fine.  Reaching here means there is no
-                     * instance ANYWHERE, which is a different problem. */
+                     * instance ANYWHERE, which is a different problem.
+                     *
+                     * Inside an imported module "anywhere" means "anywhere
+                     * yet": the importer's instances register after the import
+                     * is elaborated.  The counter lets the module driver tell
+                     * this failure apart and park the defn until one does
+                     * (elab_noinst_retry, elab_module.c). */
+                    e->noinst_failures++;
                     diag_emit_with_code(DIAG_ERROR, call->span,
                         TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
                         "'%.*s' is a method of typeclass '%s', but this program "
