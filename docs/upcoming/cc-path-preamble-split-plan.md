@@ -105,14 +105,8 @@ would have quietly kept the whole preamble.
 
 ### Left
 
-- **macOS.** No CI leg has ever run the suite under the split there. Run
-  `TUR_PREAMBLE_SPLIT=1 bash tests/run.sh` once on a Mac. If it comes back
-  `0 failed`, widen the `#if` in `preamble_split_auto_applies` and the `test`
-  probe's `runner.os` condition. The preamble defines no constructors, so the
-  Mach-O initializer-order trap that held the r7rs prelude split back
-  (`docs/archive/r7rs-prelude-split-gc-seam-on-macos.md`) has nothing to bite
-  here. That is a reason to expect green, not a substitute for the run.
-  `-Wl,-dead_strip` is the macOS counterpart of `--gc-sections`.
+- **macOS. The run has now happened -- see "macOS, measured" below.** What is
+  left is three edits and a comment.
 - **`--gc-sections` on MinGW**, to give Windows the size fix too.
 - **Version skew between `tur` and the archive.** The hash guard checks `tur`'s
   own preamble against the artifact `tur` was built with. It does not check the
@@ -121,6 +115,137 @@ would have quietly kept the whole preamble.
   exposure today. A symbol named after `tur_rt_split_hash`, defined in the
   archive and referenced from the decls region, would turn that into a link
   error.
+
+### macOS, measured (2026-10-02)
+
+Box: macOS 27.0 / Command Line Tools 27.0 / Apple clang 21.0.0, arm64 (M-series),
+8 cores. Debug + ASan `tur`, all CMake targets, `libturt_preamble.a` present.
+
+**It is green.** The whole corpus under the split, twice:
+
+| run | summary |
+| --- | --- |
+| `TUR_PREAMBLE_SPLIT=1 bash tests/run.sh` | `3489 passed, 0 failed` |
+| the same plus `-Wl,-dead_strip` on split links | `3489 passed, 0 failed` |
+
+Plus the PR's eleven ctest targets under `TUR_PREAMBLE_SPLIT=1` --
+`tur_leak_check`, `tur_leak_gate`, `tur_closure_env_leak`, `tur_fat_shim_leak`,
+`tur_r7rs_prelude_split`, `tur_r7rs_eval_link`, `tur_build_project`,
+`tur_build_shared`, `tur_install_tests`, `tur_repl_spice_linklibs`,
+`tur_gc_runtime_copy_parity` -- 11/11 pass.
+
+Both suite runs happened to share the box with another checkout's full suite
+(load average ~140). That contaminates every *timing* number below, but it
+makes the green *stronger*, not weaker: contention produces spurious timeouts,
+not spurious passes.
+
+Engagement and the decline paths behave exactly as on Linux. 204 of a
+225-fixture sample (every 12th) took the split, against Linux's 205 of 227, and
+the 21 that declined are the same set: `#lang r7rs`, saffron, the two r7rs-gc
+embedders, `jit-ffi-call-ptr`. Checked by hand and all correct:
+`TUR_PREAMBLE_SPLIT=0`, no env at all, `-fsanitize` in `TUR_CC_FLAGS`,
+`--debug`, `--runtime=source`, and an r7rs program each keep the whole preamble.
+
+**The constructor argument holds, and it is now checked rather than reasoned.**
+`otool -l build/src/libturt_preamble.a` has no `__mod_init_func` section and the
+generated `tur_rt_split.c` carries zero `__attribute__((constructor))`, so the
+Mach-O initializer-order trap from
+[r7rs-prelude-split-gc-seam-on-macos](../archive/r7rs-prelude-split-gc-seam-on-macos.md)
+genuinely has nothing to bite. `nm -m` also shows no weak definitions in the
+Mach-O archive.
+
+**`-Wl,-dead_strip` is not optional on macOS.** The binary-size regression
+reproduces at the same magnitude the ELF arm had, and the macOS flag fixes it
+the same way:
+
+| one-line program | file | `__text` |
+| --- | --- | --- |
+| whole preamble | 58,800 B | 10,380 B |
+| split, no dead-strip | 171,896 B | 55,296 B |
+| split + `-Wl,-dead_strip` | 53,312 B | 1,776 B |
+
+As on ELF, the stripped split build ends up a little *under* the inline one.
+Mach-O strips at atom granularity, so the archive's existing
+`-ffunction-sections -fdata-sections` is enough; nothing in CMake has to change.
+
+**The timing is NOT established on macOS.** The mechanism does measure: 12
+interleaved, randomly ordered `cc` invocations per arm, same emitted-TU
+snapshots, the suite's own `TUR_CC_FLAGS`, gave a median of **0.122s inline vs
+0.085s split (-30%)**, with the inline arm's whole range above the split arm's.
+Interleaving is why that ratio survives a loaded box, and a separate
+non-interleaved end-to-end `tur build` pass agreed (0.186s -> 0.140s). What
+could not be measured here is the number that matters for CI -- suite wall clock
+-- because the only box available was running another checkout's suite
+throughout. Two attempts produced 112s/216s for one arm and 142s/147s for the
+other on the same shard, which is noise, not a result. Take the suite number
+from the macOS `test` leg once the flip lands; do not quote a local A/B for it.
+
+**Watch out for the stamp cache when repeating any of this.**
+`tests/run.sh`'s `stamp_key` does not include `TUR_PREAMBLE_SPLIT`, so running
+one mode and then the other PASS-skips the entire corpus and reports a full
+green for a run that never happened -- 7:06 for the real run, 1:14 for the
+no-op, both `3489 passed, 0 failed`. Use `TUR_FORCE=1`, or a per-mode
+`TUR_STAMP_CACHE`.
+[run-sh-stamp-cache-ignores-the-preamble-split-mode](https://github.com/rjungemann/turmeric/blob/main/docs/reported/run-sh-stamp-cache-ignores-the-preamble-split-mode.md).
+
+### What the macOS flip still needs
+
+Three edits, a comment, and nothing else:
+
+1. `preamble_split_auto_applies` (`src/main.c:977`): add `__APPLE__` to the
+   `#if`, and correct the "macOS never has" prose above it (`src/main.c:963`).
+2. **Done** (`src/main.c:3706`): `-Wl,-dead_strip` for `__APPLE__`, beside the
+   ELF `--gc-sections`. Landed ahead of the flip because the split is still
+   opt-in on macOS, so it only improves the path `TUR_PREAMBLE_SPLIT=1` and
+   `--runtime=split` already take.
+3. `.github/workflows/ci.yml:337`: the engage probe is
+   `runner.os == 'Linux' && matrix.part == 'fixtures'`. The split fails closed,
+   so a macOS flip without widening this has no check that it engaged.
+4. `tvm/tvm.sh:407`: `__tvm_build_from_source` copies `libturi.a` and
+   `libturt_runtime.a` and not `libturt_preamble.a`, so a `tvm install --build`
+   toolchain silently never takes the split -- the same miss `cmake --install`
+   and the release archives already had fixed. Platform-independent, but it is
+   the install path macOS users reach for. (Downloaded releases are fine:
+   `macos-arm64` ships the archive and `__tvm_normalize_layout` globs `*.a`.)
+
+The comment: whether macOS also wants a `whole-preamble` counterpart leg.
+`ci.yml:947` says "Linux only: macOS still defaults to the whole preamble, so
+its `test` legs cover it there", and a flip retires that sentence. **Measured:
+nothing is lost, so this is a note to write rather than a leg to add.** Three
+checks, because the plausible-sounding version of this concern is wrong:
+
+- **The preamble body stays fully covered.** The split removes 1,679 distinct
+  lines from what `cc` receives (8,434 -> 6,618 for a one-line program). ALL
+  1,679 are still compiled, under the suite's own
+  `-Wall -Wfloat-conversion -Werror=implicit-function-declaration`, by
+  `saffron-cons-list` alone -- 100%, not the ~3% an earlier pass here claimed.
+  That number came from diffing whole emissions, which counts a one-line
+  program's own `main` as preamble; diff the inline TU against the split TU
+  instead and the figure is exact.
+- **`-w` on the archive does not hide the dangerous class.** `-w` suppresses
+  warnings, not errors, and AppleClang 21 makes `-Wint-conversion` and
+  `-Wimplicit-function-declaration` errors by DEFAULT -- verified, both still
+  fail a `cc -std=c99 -w -c`, exit 1. So the `libturt_preamble.a` build itself
+  still catches them. Of `run.sh`'s four ratchet patterns, only
+  `-Wincompatible-pointer-types` and `-Wfloat-conversion` are warnings `-w`
+  silences, and those are the two the declining fixtures still cover.
+- **`tur emit-c` is byte-identical in both modes** (9,738 lines either way), so
+  `check-emitted-float-conversions.py` / `tur_emitted_float_conversions` reads
+  the whole preamble no matter what `tur build` links. That corpus is at zero
+  and stays load-bearing.
+
+There is also a structural reason not to expect trouble: the preamble is FIXED
+and byte-identical across every fixture, so it cannot be the source of a *new*
+per-fixture warning. What the ratchet actually hunts -- warnings in
+program-specific emitted code -- the split does not touch.
+
+The one thing worth recording: that coverage is **incidental, not designed.**
+It rests on r7rs and saffron continuing to decline the split. The plan already
+contemplates winning declining programs back (forcing `jit-ffi-call-ptr`'s
+`<dlfcn.h>` gate in `emit_rt_split_source`); doing the same for saffron would
+silently remove the last macOS job that compiles the preamble with warnings on.
+Note the dependency at `ci.yml:947` when the flip retires that comment, so a
+later change has to notice.
 
 ## The waste
 

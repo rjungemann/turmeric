@@ -3689,8 +3689,14 @@ static int cmd_build_once(const char *input, const char *out_path,
      * called.  A one-line program went from 23 KB to 93 KB stripped.  The
      * archive is built with -ffunction-sections/-fdata-sections, so the linker
      * can drop the same functions the compiler used to (19 KB stripped -- a
-     * little under the inline build).  ELF only for now: MinGW's ld has the
-     * flag, but no Windows run has checked a PE link with it. */
+     * little under the inline build).
+     *
+     * -dead_strip is the Mach-O spelling, and it is needed there for the same
+     * reason: a one-line program measured 58,800 -> 171,896 bytes without it,
+     * and 53,312 with (macOS 27 / Apple clang 21, arm64).  Mach-O strips at
+     * atom granularity, so the archive's section flags are already enough.
+     * Windows is the one arm still linking without it: MinGW's ld has
+     * --gc-sections, but no Windows run has checked a PE link with it. */
     Buf split_flags;
     buf_init(&split_flags);
     if (used_split) {
@@ -3699,7 +3705,9 @@ static int cmd_build_once(const char *input, const char *out_path,
             Buf inj;
             buf_init(&inj);
             buf_printf(&inj, "-lturt_preamble -L%s", libdir);
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if defined(__APPLE__)
+            buf_puts(&inj, " -Wl,-dead_strip");
+#elif !defined(_WIN32)
             buf_puts(&inj, " -Wl,--gc-sections");
 #endif
             if (autolink.len > 1) {
