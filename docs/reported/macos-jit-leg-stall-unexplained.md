@@ -166,10 +166,10 @@ per-FIXTURE one alone, so the failure migrated down into it.** `TIMEOUT` went
 loops at -O0 (self, mutual `ev?`/`od?`, indirect through a value, and a named
 `let` -- roughly 40M trampolined calls), so on a slow draw it is the suite's
 longest single fixture. Being killed at 60 s implies ~32 s on a fast draw:
-60 was almost exactly the slow-draw time, leaving no margin at all. It is 150
-here -- ~4.7x the fast-draw estimate, still far inside the 2400 s suite bound,
-so a genuine hang is still caught by the per-fixture bound first and still
-named.
+60 was almost exactly the slow-draw time, leaving no margin at all. It is
+**120** as of #1044 -- ~3.75x the fast-draw estimate and ~2x the observed
+kill, still far inside the 2400 s suite bound, so a genuine hang is still
+caught by the per-fixture bound first and still named.
 
 This is the second time this fixture has been killed by a slow draw; the
 2026-10-01 occurrence is the other, where it reported as a stdout mismatch.
